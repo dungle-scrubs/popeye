@@ -3,3 +3,6 @@
  * It exists to keep journal schema versions and migrations behind one durable boundary.
  */
 export const journalPackage = "@peye/journal";
+
+export { JournalError } from "./errors.js";
+export { createLineCodec } from "./line-codec.js";
