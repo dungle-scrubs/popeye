@@ -19,8 +19,11 @@ export type TurnPhase = Schema.Schema.Type<typeof TurnPhaseSchema>;
 export const ProgressSchema = Schema.Union(
   Schema.TaggedStruct("assistantText", { text: Schema.String }),
   Schema.TaggedStruct("assistantThinking", { text: Schema.String }),
+  Schema.TaggedStruct("followUpQueued", { content: Schema.String }),
   Schema.TaggedStruct("phaseChanged", { phase: TurnPhaseSchema }),
   Schema.TaggedStruct("progressDropped", { count: Schema.Number }),
+  Schema.TaggedStruct("steeringApplied", { content: Schema.String }),
+  Schema.TaggedStruct("steeringQueued", { content: Schema.String }),
   Schema.TaggedStruct("toolCompleted", {
     isError: Schema.Boolean,
     toolCallId: Schema.String,

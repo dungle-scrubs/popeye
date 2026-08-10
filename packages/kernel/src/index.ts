@@ -13,6 +13,7 @@ export {
   MailboxSessionNotFound,
   ProviderError,
   ToolError,
+  TurnQueueFull,
 } from "./errors.js";
 export {
   MAILBOX_CAPACITY,
@@ -71,6 +72,7 @@ export {
   type ToolCall,
 } from "./tool-batch.js";
 export {
+  TURN_INPUT_QUEUE_CAPACITY,
   type TurnFailure,
   type TurnOptions,
   type TurnResult,

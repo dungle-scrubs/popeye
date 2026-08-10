@@ -46,3 +46,9 @@ export class MailboxSessionNotFound extends Data.TaggedError("MailboxSessionNotF
 export class MailboxClosed extends Data.TaggedError("MailboxClosed")<{
   readonly sessionId: SessionId;
 }> {}
+
+export class TurnQueueFull extends Data.TaggedError("TurnQueueFull")<{
+  readonly capacity: number;
+  readonly queue: "followUp" | "steering";
+  readonly sessionId: SessionId;
+}> {}

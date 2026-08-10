@@ -240,6 +240,256 @@ test("assistant text and thinking deltas stream only during STREAMING and persis
   });
 });
 
+test("steer during a tool-free turn drains at SETTLING and loops before settlement", async () => {
+  const enteredSettling = await Effect.runPromise(Deferred.make<void>());
+  const releaseSettling = await Effect.runPromise(Deferred.make<void>());
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      return Stream.fromIterable([
+        { _tag: "textDelta" as const, text: requests === 1 ? "First reply." : "Second reply." },
+        { _tag: "done" as const, stopReason: "done" as const },
+      ]);
+    },
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const running = yield* Effect.fork(turns.runTurn(session.id, "Initial prompt"));
+      yield* Deferred.await(enteredSettling);
+      yield* turns.steer(session.id, "Steer at settle");
+      yield* Deferred.succeed(releaseSettling, undefined);
+      const settled = yield* Fiber.join(running);
+      return { branch: yield* journal.readBranch(session.id), settled };
+    }).pipe(
+      Effect.provide(testLayer(provider, pauseAssistantAppend(enteredSettling, releaseSettling))),
+    ),
+  );
+
+  expect(requests).toBe(2);
+  expect(result.settled).toEqual({ stopReason: "done" });
+  expect(result.branch.map((entry) => entry.payload)).toMatchObject([
+    {},
+    { content: "Initial prompt", role: "user" },
+    { content: "First reply.", role: "assistant", stopReason: "done" },
+    { content: "Steer at settle", role: "user" },
+    { content: "Second reply.", role: "assistant", stopReason: "done" },
+  ]);
+});
+
+test("prompt during a running turn routes steer mode to steering and defaults to follow-up", async () => {
+  const providerEntered = await Effect.runPromise(Deferred.make<void>());
+  const releaseProvider = await Effect.runPromise(Deferred.make<void>());
+  const observed: Array<Progress> = [];
+  const ordinals: Array<number> = [];
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: (_context, options) => {
+      ordinals.push(options.turnOrdinal);
+      requests += 1;
+      if (requests === 1) {
+        return Stream.fromEffect(
+          Deferred.succeed(providerEntered, undefined).pipe(
+            Effect.zipRight(Deferred.await(releaseProvider)),
+            Effect.as({ _tag: "done" as const, stopReason: "done" as const }),
+          ),
+        );
+      }
+      return Stream.fromIterable([
+        {
+          _tag: "textDelta" as const,
+          text: requests === 2 ? "Steered reply." : "Follow-up reply.",
+        },
+        { _tag: "done" as const, stopReason: "done" as const },
+      ]);
+    },
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const progress = yield* Effect.fork(
+        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+          Effect.sync(() => observed.push(item)),
+        ),
+      );
+      yield* Effect.yieldNow();
+      const initial = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      yield* Deferred.await(providerEntered);
+      const steered = yield* Effect.fork(
+        turns.runTurn(session.id, "Steer mode", { deliveryMode: "steer" }),
+      );
+      yield* Effect.yieldNow();
+      const followed = yield* Effect.fork(turns.runTurn(session.id, "Default follow-up"));
+      yield* Effect.yieldNow();
+      yield* Deferred.succeed(releaseProvider, undefined);
+      const results = yield* Effect.all(
+        [Fiber.join(initial), Fiber.join(steered), Fiber.join(followed)],
+        { concurrency: "unbounded" },
+      );
+      yield* Fiber.interrupt(progress);
+      return { branch: yield* journal.readBranch(session.id), results };
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+
+  expect(result.results).toEqual([
+    { stopReason: "done" },
+    { stopReason: "done" },
+    { stopReason: "done" },
+  ]);
+  expect(ordinals).toEqual([1, 1, 2]);
+  expect(observed).toContainEqual({ _tag: "steeringQueued", content: "Steer mode" });
+  expect(observed).toContainEqual({ _tag: "followUpQueued", content: "Default follow-up" });
+  expect(result.branch.map((entry) => entry.payload)).toMatchObject([
+    {},
+    { content: "Initial", role: "user" },
+    { role: "assistant", stopReason: "done" },
+    { content: "Steer mode", role: "user" },
+    { content: "Steered reply.", role: "assistant", stopReason: "done" },
+    { content: "Default follow-up", role: "user" },
+    { content: "Follow-up reply.", role: "assistant", stopReason: "done" },
+  ]);
+});
+
+test("follow-up opens the next turn automatically after the running turn settles", async () => {
+  const providerEntered = await Effect.runPromise(Deferred.make<void>());
+  const releaseProvider = await Effect.runPromise(Deferred.make<void>());
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      if (requests === 1) {
+        return Stream.fromEffect(
+          Deferred.succeed(providerEntered, undefined).pipe(
+            Effect.zipRight(Deferred.await(releaseProvider)),
+            Effect.as({ _tag: "done" as const, stopReason: "done" as const }),
+          ),
+        );
+      }
+      return Stream.fromIterable([
+        { _tag: "textDelta" as const, text: "Second turn." },
+        { _tag: "done" as const, stopReason: "done" as const },
+      ]);
+    },
+  };
+
+  const branch = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const initial = yield* Effect.fork(turns.runTurn(session.id, "First turn"));
+      yield* Deferred.await(providerEntered);
+      const followUp = yield* Effect.fork(turns.runTurn(session.id, "Second turn"));
+      yield* Effect.yieldNow();
+      yield* Deferred.succeed(releaseProvider, undefined);
+      yield* Fiber.join(initial);
+      yield* Fiber.join(followUp);
+      return yield* journal.readBranch(session.id);
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+
+  expect(branch.map((entry) => entry.payload)).toMatchObject([
+    {},
+    { content: "First turn", role: "user" },
+    { role: "assistant", stopReason: "done" },
+    { content: "Second turn", role: "user" },
+    { content: "Second turn.", role: "assistant", stopReason: "done" },
+  ]);
+});
+
+test("abort discards queued steering and retains follow-ups for the next turn", async () => {
+  const followUpQueued = await Effect.runPromise(Deferred.make<void>());
+  const providerEntered = await Effect.runPromise(Deferred.make<void>());
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      return requests === 1
+        ? Stream.fromEffect(
+            Deferred.succeed(providerEntered, undefined).pipe(Effect.zipRight(Effect.never)),
+          )
+        : Stream.fromIterable([
+            { _tag: "textDelta" as const, text: "Follow-up survived." },
+            { _tag: "done" as const, stopReason: "done" as const },
+          ]);
+    },
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const progress = yield* Effect.fork(
+        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+          item._tag === "followUpQueued"
+            ? Deferred.succeed(followUpQueued, undefined)
+            : Effect.void,
+        ),
+      );
+      const initial = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      yield* Deferred.await(providerEntered);
+      yield* turns.steer(session.id, "Discard this steering");
+      const followUp = yield* Effect.fork(turns.runTurn(session.id, "Keep this follow-up"));
+      yield* Deferred.await(followUpQueued);
+      const aborted = yield* turns.abortTurn(session.id);
+      const initialResult = yield* Fiber.join(initial);
+      const followUpResult = yield* Fiber.join(followUp);
+      yield* Fiber.interrupt(progress);
+      return {
+        aborted,
+        branch: yield* journal.readBranch(session.id),
+        followUpResult,
+        initialResult,
+      };
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+
+  expect(result.aborted).toEqual({ aborted: true, turnOrdinal: 1 });
+  expect(result.initialResult).toEqual({ stopReason: "aborted" });
+  expect(result.followUpResult).toEqual({ stopReason: "done" });
+  expect(result.branch.map((entry) => entry.payload)).toMatchObject([
+    {},
+    { content: "Initial", role: "user" },
+    { role: "assistant", stopReason: "aborted" },
+    { content: "Keep this follow-up", role: "user" },
+    { content: "Follow-up survived.", role: "assistant", stopReason: "done" },
+  ]);
+  expect(result.branch).not.toContainEqual(
+    expect.objectContaining({
+      payload: expect.objectContaining({ content: "Discard this steering" }),
+    }),
+  );
+});
+
+test("steering while IDLE rejects typed as phase-invalid", async () => {
+  const error = await Effect.runPromise(
+    Effect.gen(function* () {
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      return yield* Effect.flip(turns.steer(session.id, "Cannot steer while idle"));
+    }).pipe(Effect.provide(testLayer(scriptedProvider([])))),
+  );
+
+  expect(error).toMatchObject({
+    _tag: "ProtocolError",
+    message: "Steering requires a running turn.",
+    reason: "phase_invalid_command",
+  });
+});
+
 test("tool calls append results in call order while completion order appears only in progress", async () => {
   const contexts: Array<ReadonlyArray<ContextItem>> = [];
   const fastCompleted = await Effect.runPromise(Deferred.make<void>());
@@ -340,6 +590,76 @@ test("tool calls append results in call order while completion order appears onl
       role: "toolResult",
       toolCallId: "fast-call",
     },
+  ]);
+});
+
+test("steer during EXECUTING drains after the tool batch before the next provider request", async () => {
+  const toolStarted = await Effect.runPromise(Deferred.make<void>());
+  const releaseTool = await Effect.runPromise(Deferred.make<void>());
+  const contexts: Array<ReadonlyArray<ContextItem>> = [];
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: (context) => {
+      contexts.push(context);
+      requests += 1;
+      return requests === 1
+        ? Stream.fromIterable([
+            { _tag: "toolCall" as const, argumentsJson: "{}", id: "wait-call", name: "wait" },
+            { _tag: "done" as const, stopReason: "toolCalls" as const },
+          ])
+        : Stream.fromIterable([
+            { _tag: "textDelta" as const, text: "Steering applied." },
+            { _tag: "done" as const, stopReason: "done" as const },
+          ]);
+    },
+  };
+  const wait: Tool<Readonly<Record<string, never>>> = {
+    description: "Waits for steering before completing.",
+    execute: () =>
+      Deferred.succeed(toolStarted, undefined).pipe(
+        Effect.zipRight(Deferred.await(releaseTool)),
+        Effect.as({ content: "tool result" }),
+      ),
+    name: "wait",
+    parameters: Schema.Struct({}),
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const running = yield* Effect.fork(turns.runTurn(session.id, "Start tools"));
+      yield* Deferred.await(toolStarted);
+      yield* turns.steer(session.id, "Use this constraint");
+      yield* Deferred.succeed(releaseTool, undefined);
+      const settled = yield* Fiber.join(running);
+      return {
+        branch: yield* journal.readBranch(session.id),
+        settled,
+      };
+    }).pipe(Effect.provide(testLayer(provider, undefined, ToolRegistryLive([defineTool(wait)])))),
+  );
+
+  expect(result.settled).toEqual({ stopReason: "done" });
+  expect(contexts[1]).toEqual([
+    { content: "Start tools", role: "user" },
+    {
+      content: "",
+      role: "assistant",
+      toolCalls: [{ argumentsJson: "{}", id: "wait-call", name: "wait" }],
+    },
+    { content: "tool result", isError: false, role: "toolResult", toolCallId: "wait-call" },
+    { content: "Use this constraint", role: "user" },
+  ]);
+  expect(result.branch.map((entry) => entry.payload)).toMatchObject([
+    {},
+    { content: "Start tools", role: "user" },
+    { role: "assistant", stopReason: "toolCalls" },
+    { content: "tool result", role: "toolResult", toolCallId: "wait-call" },
+    { content: "Use this constraint", role: "user" },
+    { content: "Steering applied.", role: "assistant", stopReason: "done" },
   ]);
 });
 
