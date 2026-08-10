@@ -3,7 +3,7 @@
  * It exists to prevent provider, tool, gate, and budget concerns from leaking into heads.
  */
 
-import type { SessionId } from "@peye/journal";
+import type { EntryId, SessionId } from "@peye/journal";
 import { Data } from "effect";
 
 export class ProviderError extends Data.TaggedError("ProviderError")<{
@@ -30,6 +30,7 @@ export class GateRejected extends Data.TaggedError("GateRejected")<{
 
 export class BudgetExceeded extends Data.TaggedError("BudgetExceeded")<{
   readonly budget: number;
+  readonly compactionApplied?: EntryId;
   readonly optionsDiagnostic: string;
   readonly required: number;
 }> {}

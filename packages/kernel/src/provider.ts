@@ -84,6 +84,7 @@ export type AssistantItem =
 
 export interface ProviderStreamOptions {
   readonly attempt: number;
+  readonly purpose?: "compaction" | "turn";
   readonly turnOrdinal: number;
 }
 

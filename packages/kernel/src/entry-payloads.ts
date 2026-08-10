@@ -9,8 +9,13 @@ import { ASSISTANT_STOP_REASONS } from "./provider.js";
 
 export const AssistantDiagnosticSchema = Schema.Union(
   Schema.Struct({
+    compactionApplied: Schema.optional(Schema.String),
     detail: Schema.String,
-    reason: Schema.Literal("budget_exceeded", "journal_failure", "turn_failure"),
+    reason: Schema.Literal("budget_exceeded"),
+  }),
+  Schema.Struct({
+    detail: Schema.String,
+    reason: Schema.Literal("journal_failure", "turn_failure"),
   }),
   Schema.Struct({
     attempts: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),

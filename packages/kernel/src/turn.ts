@@ -15,6 +15,7 @@ import {
   Cause,
   Context,
   Deferred,
+  Duration,
   Effect,
   Exit,
   Fiber,
@@ -23,18 +24,20 @@ import {
   Option,
   Ref,
   Schedule,
+  ScheduleDecision,
   Stream,
 } from "effect";
+import {
+  type CompactionPolicyOptions,
+  compactBranch,
+  entryToContextItem,
+  resolveCompactionPolicyOptions,
+} from "./compaction-policy.js";
 import type { AssistantDiagnostic } from "./entry-payloads.js";
 import { BudgetExceeded, type ProviderError, TurnQueueFull } from "./errors.js";
 import { Mailbox, type MailboxFailure } from "./mailbox.js";
 import { type Progress, ProgressHub, type TurnPhase } from "./progress.js";
-import {
-  type AssistantStopReason,
-  asContextToolCalls,
-  type ContextItem,
-  Provider,
-} from "./provider.js";
+import { type AssistantStopReason, type ContextItem, Provider } from "./provider.js";
 import {
   appendOperationFinished,
   appendOperationStarted,
@@ -46,6 +49,7 @@ import { executeToolBatch, type ToolBatchResult, type ToolCall } from "./tool-ba
 
 export interface TurnOptions {
   readonly abortGraceMs?: number;
+  readonly compaction?: CompactionPolicyOptions;
   readonly contextBudget?: number;
   readonly deliveryMode?: "followUp" | "steer";
   readonly expectedRevision?: number;
@@ -54,6 +58,10 @@ export interface TurnOptions {
   /** @deprecated Use maxProviderRounds. */
   readonly maxToolRounds?: number;
   readonly toolConcurrency?: number;
+}
+
+export interface TurnsLayerOptions {
+  readonly compaction?: CompactionPolicyOptions;
 }
 
 export interface TurnResult {
@@ -140,6 +148,7 @@ const DEFAULT_CONTEXT_BUDGET = 32_000;
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_MAX_PROVIDER_ROUNDS = 32;
 const DEFAULT_ABORT_GRACE_MS = 5_000;
+export const DEFAULT_RETRY_BASE_DELAY_MS = 100;
 
 /** Maximum steering or follow-up items retained per session. Excess input fails typed. */
 export const TURN_INPUT_QUEUE_CAPACITY = 64;
@@ -153,55 +162,16 @@ interface ToolAbortState {
   readonly finalized: boolean;
 }
 
-const asContextItem = (entry: {
-  readonly kind: string;
-  readonly payload: unknown;
-}): ContextItem | undefined => {
-  if (entry.kind !== "message" || typeof entry.payload !== "object" || entry.payload === null) {
-    return undefined;
-  }
-  const payload = entry.payload as {
-    readonly content?: unknown;
-    readonly isError?: unknown;
-    readonly role?: unknown;
-    readonly toolCallId?: unknown;
-    readonly toolCalls?: unknown;
-    readonly toolName?: unknown;
-  };
-  if (typeof payload.content !== "string" || typeof payload.role !== "string") {
-    return undefined;
-  }
-  if (payload.role === "assistant") {
-    const calls = asContextToolCalls(payload.toolCalls);
-    return calls === undefined
-      ? { content: payload.content, role: payload.role }
-      : { content: payload.content, role: payload.role, toolCalls: calls };
-  }
-  if (
-    payload.role === "toolResult" &&
-    typeof payload.toolCallId === "string" &&
-    typeof payload.toolName === "string"
-  ) {
-    return {
-      content: payload.content,
-      isError: payload.isError === true,
-      role: payload.role,
-      toolCallId: payload.toolCallId,
-      toolName: payload.toolName,
-    };
-  }
-  return payload.role === "system" || payload.role === "user"
-    ? { content: payload.content, role: payload.role }
-    : undefined;
-};
-
 const validatePositiveInteger = (name: string, value: number): void => {
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new RangeError(`${name} must be a positive safe integer.`);
   }
 };
 
-const validateTurnOptions = (options: TurnOptions): void => {
+const validateTurnOptions = (
+  options: TurnOptions,
+  layerCompactionOptions: CompactionPolicyOptions,
+): void => {
   if (options.abortGraceMs !== undefined) {
     validatePositiveInteger("Abort grace milliseconds", options.abortGraceMs);
   }
@@ -217,6 +187,7 @@ const validateTurnOptions = (options: TurnOptions): void => {
   if (options.toolConcurrency !== undefined) {
     validatePositiveInteger("Tool concurrency", options.toolConcurrency);
   }
+  resolveCompactionPolicyOptions(layerCompactionOptions, options.compaction);
 };
 
 const providerRoundBound = (options: TurnOptions): number =>
@@ -238,12 +209,11 @@ const journalFailureDetail = (failure: JournalFailure, cause: Cause.Cause<unknow
     ? failure.message
     : causeDetail(cause);
 
-export const TurnsLive = (): Layer.Layer<
-  Turns,
-  never,
-  Journal | Mailbox | ProgressHub | Provider | ToolRegistry
-> =>
-  Layer.effect(
+export const TurnsLive = (
+  layerOptions: TurnsLayerOptions = {},
+): Layer.Layer<Turns, never, Journal | Mailbox | ProgressHub | Provider | ToolRegistry> => {
+  const layerCompactionOptions = resolveCompactionPolicyOptions(layerOptions.compaction);
+  return Layer.effect(
     Turns,
     Effect.gen(function* () {
       const journal = yield* Journal;
@@ -415,7 +385,7 @@ export const TurnsLive = (): Layer.Layer<
           const priorBranch = yield* journal.readBranch(sessionId);
           const turnOrdinal =
             priorBranch.filter((entry) => {
-              const item = asContextItem(entry);
+              const item = entryToContextItem(entry);
               if (item?.role !== "user") {
                 return false;
               }
@@ -445,6 +415,7 @@ export const TurnsLive = (): Layer.Layer<
           const operationId = yield* createOperationId();
           const operationFinished = yield* Ref.make(false);
           const operationRecorded = yield* Ref.make(false);
+          const compactionAttempted = yield* Ref.make(false);
 
           const takeSteering = (
             closeWhenEmpty: boolean,
@@ -769,7 +740,7 @@ export const TurnsLive = (): Layer.Layer<
                 const attemptProgress = yield* Ref.make<ReadonlyArray<Progress>>([]);
                 yield* Effect.annotateCurrentSpan({ attempt });
                 yield* Stream.runForEach(
-                  provider.streamAssistant(context, { attempt, turnOrdinal }),
+                  provider.streamAssistant(context, { attempt, purpose: "turn", turnOrdinal }),
                   (item) => {
                     if (item._tag === "textDelta") {
                       const next: Progress = { _tag: "assistantText", text: item.text };
@@ -831,19 +802,47 @@ export const TurnsLive = (): Layer.Layer<
               Effect.gen(function* () {
                 yield* resetProviderBuffers();
                 yield* phaseChanged(progress, sessionId, "ASSEMBLING");
-                const branch = yield* journal.readBranch(sessionId);
-                const context = yield* foldContext(branch, {
-                  budget: options.contextBudget ?? DEFAULT_CONTEXT_BUDGET,
-                  summaryItem: (payload): ContextItem => ({
-                    content: payload.summary,
-                    role: "system",
+                const fold = () =>
+                  journal.readBranch(sessionId).pipe(
+                    Effect.flatMap((branch) =>
+                      foldContext(branch, {
+                        budget: options.contextBudget ?? DEFAULT_CONTEXT_BUDGET,
+                        summaryItem: (payload): ContextItem => ({
+                          content: payload.summary,
+                          role: "system",
+                        }),
+                        visibility: entryToContextItem,
+                      }),
+                    ),
+                  );
+                const context = yield* fold().pipe(
+                  Effect.catchTag("ContextBudgetExceeded", (error) => {
+                    const compactionOptions = resolveCompactionPolicyOptions(
+                      layerCompactionOptions,
+                      options.compaction,
+                    );
+                    return Ref.getAndSet(compactionAttempted, true).pipe(
+                      Effect.flatMap((alreadyAttempted) =>
+                        compactionOptions.enabled && !alreadyAttempted
+                          ? compactBranch({
+                              journal,
+                              options: compactionOptions,
+                              progress,
+                              provider,
+                              sessionId,
+                              turnOrdinal,
+                            }).pipe(Effect.zipRight(fold()))
+                          : Effect.fail(error),
+                      ),
+                    );
                   }),
-                  visibility: asContextItem,
-                }).pipe(
                   Effect.mapError((error) =>
                     error._tag === "ContextBudgetExceeded"
                       ? new BudgetExceeded({
                           budget: error.budget,
+                          ...(error.compactionApplied === undefined
+                            ? {}
+                            : { compactionApplied: error.compactionApplied }),
                           optionsDiagnostic: error.optionsDiagnostic,
                           required: error.required,
                         })
@@ -853,8 +852,24 @@ export const TurnsLive = (): Layer.Layer<
                 yield* phaseChanged(progress, sessionId, "STREAMING");
                 yield* consume(context.items).pipe(
                   Effect.retry(
-                    Schedule.recurs((options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS) - 1).pipe(
+                    Schedule.exponential(`${DEFAULT_RETRY_BASE_DELAY_MS} millis`).pipe(
+                      Schedule.intersect(
+                        Schedule.recurs((options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS) - 1),
+                      ),
                       Schedule.whileInput((error: ProviderError) => error.transient),
+                      Schedule.onDecision(([delay], decision) =>
+                        ScheduleDecision.isContinue(decision)
+                          ? Ref.get(attempts).pipe(
+                              Effect.flatMap((attempt) =>
+                                progress.publish(sessionId, {
+                                  _tag: "providerRetryScheduled",
+                                  attempt: attempt + 1,
+                                  delayMs: Duration.toMillis(delay),
+                                }),
+                              ),
+                            )
+                          : Effect.void,
+                      ),
                     ),
                   ),
                 );
@@ -1032,6 +1047,9 @@ export const TurnsLive = (): Layer.Layer<
                     return settle(
                       "error",
                       {
+                        ...(failure.compactionApplied === undefined
+                          ? {}
+                          : { compactionApplied: failure.compactionApplied }),
                         detail: failure.optionsDiagnostic,
                         reason: "budget_exceeded",
                       },
@@ -1259,7 +1277,7 @@ export const TurnsLive = (): Layer.Layer<
           content: string,
           options: TurnOptions = {},
         ): Effect.Effect<TurnResult, TurnFailure> => {
-          validateTurnOptions(options);
+          validateTurnOptions(options, layerCompactionOptions);
           return Effect.suspend(() =>
             Ref.get(active).pipe(
               Effect.flatMap((current) => {
@@ -1308,3 +1326,4 @@ export const TurnsLive = (): Layer.Layer<
       } satisfies TurnsService;
     }),
   );
+};

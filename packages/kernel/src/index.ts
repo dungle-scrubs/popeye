@@ -6,6 +6,18 @@ export const kernelPackage = "@peye/kernel";
 
 export { type PiAiProviderLayerOptions, PiAiProviderLive } from "./ai/seam.js";
 export {
+  Compaction,
+  type CompactionFailure,
+  CompactionLive,
+  type CompactionPolicyOptions,
+  type CompactionResult,
+  type CompactionService,
+  compactBranch,
+  DEFAULT_COMPACTION_POLICY,
+  type ResolvedCompactionPolicyOptions,
+  resolveCompactionPolicyOptions,
+} from "./compaction-policy.js";
+export {
   BudgetExceeded,
   DuplicateToolName,
   GateRejected,
@@ -105,11 +117,13 @@ export {
   type ToolCall,
 } from "./tool-batch.js";
 export {
+  DEFAULT_RETRY_BASE_DELAY_MS,
   TURN_INPUT_QUEUE_CAPACITY,
   type TurnFailure,
   type TurnOptions,
   type TurnResult,
   Turns,
+  type TurnsLayerOptions,
   TurnsLive,
   type TurnsService,
 } from "./turn.js";
