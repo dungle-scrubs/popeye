@@ -4,6 +4,8 @@
  */
 import { Data } from "effect";
 
+import type { ContributionKey } from "./contribution.js";
+
 export type PluginLoadCause =
   | "manifest_invalid"
   | "capability_ungranted"
@@ -14,4 +16,13 @@ export class PluginLoadError extends Data.TaggedError("PluginLoadError")<{
   readonly cause: PluginLoadCause;
   readonly message: string;
   readonly plugin: string;
+}> {}
+
+export type ContributionRegistryErrorReason = "priority_tie" | "unknown_kind";
+
+export class ContributionRegistryError extends Data.TaggedError("ContributionRegistryError")<{
+  readonly key: ContributionKey;
+  readonly kind: string;
+  readonly message: string;
+  readonly reason: ContributionRegistryErrorReason;
 }> {}
