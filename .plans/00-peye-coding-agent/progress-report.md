@@ -139,17 +139,17 @@ Source: `implementation.md` (M11); D-022
 ### M12: ai seam
 Source: `implementation.md` (M12); D-001, D-014, D-026; spike A-001
 
-- [ ] Recorded pi-ai stream fixtures (text/thinking/toolcall interleavings) pass through the wrap order-faithfully
-- [ ] Terminal error fixture converts to typed `ProviderError`, never a throw
-- [ ] `ProviderError.transient` assigned via pi-ai's `isRetryableAssistantError`
-- [ ] Terminal aborted fixture settles with stop reason `aborted`
-- [ ] Fiber interruption fires the per-request `AbortController` and pi-ai receives the signal
-- [ ] Interrupted request persists stop reason `aborted`
-- [ ] Idle timeout on a stalled stream yields a transient `ProviderError`
-- [ ] Provider request spans include attempt number and classifier verdict on failure
-- [ ] No pi-ai type appears in any seam-external signature (lint-checked)
-- [ ] `@earendil-works/pi-ai` is exact-pinned; the contract suite fails on a mutated fixture (drift detection proven)
-- [ ] Live smoke: one real provider call completes a turn (gate 2→3 evidence)
+- [x] Recorded pi-ai stream fixtures (text/thinking/toolcall interleavings) pass through the wrap order-faithfully
+- [x] Terminal error fixture converts to typed `ProviderError`, never a throw
+- [x] `ProviderError.transient` assigned via pi-ai's `isRetryableAssistantError`
+- [x] Terminal aborted fixture settles with stop reason `aborted`
+- [x] Fiber interruption fires the per-request `AbortController` and pi-ai receives the signal
+- [x] Interrupted request persists stop reason `aborted`
+- [x] Idle timeout on a stalled stream yields a transient `ProviderError`
+- [x] Provider request spans include attempt number and classifier verdict on failure
+- [x] No pi-ai type appears in any seam-external signature (lint-checked)
+- [x] `@earendil-works/pi-ai` is exact-pinned; the contract suite fails on a mutated fixture (drift detection proven)
+- [x] Live smoke: one real provider call completes a turn (gate 2→3 evidence)
 
 ### M13: Retry and overflow policies
 Source: `implementation.md` (M13); Normative Contracts
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 75
-- Remaining: 102
-- Current cutoff blockers: 102
+- Completed: 86
+- Remaining: 91
+- Current cutoff blockers: 91
 - Accepted/deferred follow-up: 5
 - Superseded/obsolete checklist debt: 0
