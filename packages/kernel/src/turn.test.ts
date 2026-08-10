@@ -1,6 +1,7 @@
 import {
   createMemoryJournalBacking,
   type EntryDraft,
+  EntryDraftSchema,
   Journal,
   JournalError,
   JournalMemory,
@@ -28,6 +29,7 @@ import {
   Provider,
   type ProviderService,
 } from "./provider.js";
+import { appendOperationStarted, createOperationId } from "./records.js";
 import { Sessions, SessionsLive } from "./sessions.js";
 import { defineTool, type Tool, ToolRegistryLive } from "./tool.js";
 import { TURN_INPUT_QUEUE_CAPACITY, Turns, TurnsLive } from "./turn.js";
@@ -41,7 +43,9 @@ const testLayer = (
   toolLayer = ToolRegistryLive([]),
 ) => {
   const mailboxLayer = MailboxLive().pipe(Layer.provide(journalLayer));
-  const sessionsLayer = SessionsLive.pipe(Layer.provide(Layer.merge(journalLayer, mailboxLayer)));
+  const sessionsLayer = SessionsLive().pipe(
+    Layer.provide(Layer.mergeAll(journalLayer, mailboxLayer, toolLayer)),
+  );
   const dependencies = Layer.mergeAll(
     journalLayer,
     mailboxLayer,
@@ -79,6 +83,28 @@ const failSecondBranchRead = () => {
                 : journal.readBranch(sessionId),
             ),
           ),
+      };
+    }),
+  ).pipe(Layer.provide(base));
+};
+
+const failToolStartedRecord = () => {
+  const base = JournalMemory(createMemoryJournalBacking());
+  return Layer.effect(
+    Journal,
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      return {
+        ...journal,
+        appendRecord: (sessionId, record) =>
+          record.kind === "tool_started"
+            ? Effect.fail(
+                new JournalError({
+                  corruptionClass: "io_failure",
+                  message: "Injected tool_started Record failure.",
+                }),
+              )
+            : journal.appendRecord(sessionId, record),
       };
     }),
   ).pipe(Layer.provide(base));
@@ -1026,6 +1052,174 @@ test("tool calls append results in call order while completion order appears onl
   ]);
 });
 
+test("a Tool-using turn persists its crash-recovery Record sequence", async () => {
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      return requests === 1
+        ? Stream.fromIterable([
+            { _tag: "toolCall", argumentsJson: "{}", id: "recorded-call", name: "recorded" },
+            { _tag: "done", stopReason: "toolCalls" },
+          ])
+        : Stream.fromIterable([{ _tag: "done", stopReason: "done" }]);
+    },
+  };
+  const tool: Tool<Record<string, never>> = {
+    description: "Returns a durable result.",
+    execute: () => Effect.succeed({ content: "recorded result" }),
+    name: "recorded",
+    parameters: Schema.Struct({}),
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      yield* turns.runTurn(session.id, "Record this turn");
+      return {
+        branch: yield* journal.readBranch(session.id),
+        records: yield* journal.readRecords(session.id),
+      };
+    }).pipe(Effect.provide(testLayer(provider, undefined, ToolRegistryLive([defineTool(tool)])))),
+  );
+
+  const started = result.records[0];
+  const toolStarted = result.records[1];
+  const finished = result.records[2];
+  const startedPayload = started?.payload as {
+    readonly operationId?: unknown;
+    readonly promptEntryId?: unknown;
+  };
+  const toolPayload = toolStarted?.payload as {
+    readonly operationId?: unknown;
+    readonly replay?: unknown;
+  };
+  const finishedPayload = finished?.payload as {
+    readonly operationId?: unknown;
+    readonly outcome?: unknown;
+  };
+
+  expect(result.records.map((record) => record.kind)).toEqual([
+    "operation_started",
+    "tool_started",
+    "operation_finished",
+  ]);
+  expect(startedPayload.promptEntryId).toBe(result.branch[1]?.id);
+  expect(toolPayload).toMatchObject({ operationId: startedPayload.operationId, replay: "never" });
+  expect(finishedPayload).toMatchObject({
+    operationId: startedPayload.operationId,
+    outcome: "done",
+  });
+});
+
+test("a tool_started Record failure closes every assistant Tool call with a result before settlement", async () => {
+  let executions = 0;
+  const tool = defineTool({
+    description: "Must not execute without its durable start Record.",
+    execute: () =>
+      Effect.sync(() => {
+        executions += 1;
+        return { content: "executed" };
+      }),
+    name: "write_file",
+    parameters: Schema.Struct({}),
+  });
+  const provider = scriptedProvider([
+    { _tag: "toolCall", argumentsJson: "{}", id: "failed-start-call", name: "write_file" },
+    { _tag: "done", stopReason: "toolCalls" },
+  ]);
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const error = yield* Effect.flip(turns.runTurn(session.id, "write"));
+      return {
+        branch: yield* journal.readBranch(session.id),
+        error,
+        records: yield* journal.readRecords(session.id),
+      };
+    }).pipe(Effect.provide(testLayer(provider, failToolStartedRecord(), ToolRegistryLive([tool])))),
+  );
+
+  expect(executions).toBe(0);
+  expect(result.error).toMatchObject({
+    _tag: "JournalError",
+    message: "Injected tool_started Record failure.",
+  });
+  expect(result.branch.slice(-2).map((entry) => entry.payload)).toMatchObject([
+    {
+      content: "Tool execution interrupted.",
+      isError: true,
+      role: "toolResult",
+      toolCallId: "failed-start-call",
+    },
+    { role: "assistant", stopReason: "error" },
+  ]);
+  expect(result.records.map((record) => record.kind)).toEqual([
+    "operation_started",
+    "operation_finished",
+  ]);
+});
+
+test("a recovered session accepts and settles a new prompt normally", async () => {
+  const contexts: Array<ReadonlyArray<ContextItem>> = [];
+  const provider: ProviderService = {
+    streamAssistant: (context) => {
+      contexts.push(context);
+      return Stream.fromIterable([
+        { _tag: "textDelta" as const, text: "Recovered response." },
+        { _tag: "done" as const, stopReason: "done" as const },
+      ]);
+    },
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const interruptedPrompt = yield* journal.appendEntry(
+        session.id,
+        EntryDraftSchema.make({
+          kind: "message",
+          payload: { content: "Interrupted prompt", role: "user" },
+        }),
+      );
+      yield* appendOperationStarted(journal, session.id, {
+        intent: "turn",
+        operationId: createOperationId(),
+        promptEntryId: interruptedPrompt.id,
+        turnOrdinal: 1,
+      });
+      const resumed = yield* sessions.resume(session.id);
+      const settled = yield* turns.runTurn(session.id, "Continue after recovery");
+      return { branch: yield* journal.readBranch(session.id), resumed, settled };
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+
+  expect(result.resumed.recovery).toMatchObject({
+    entriesAppended: [expect.any(String)],
+    operationIdFound: expect.any(String),
+  });
+  expect(result.settled).toEqual({ stopReason: "done" });
+  expect(contexts[0]).toMatchObject([
+    { content: "Interrupted prompt", role: "user" },
+    { content: "Turn interrupted by crash.", role: "assistant" },
+    { content: "Continue after recovery", role: "user" },
+  ]);
+  expect(result.branch.slice(-2).map((entry) => entry.payload)).toMatchObject([
+    { content: "Continue after recovery", role: "user" },
+    { content: "Recovered response.", role: "assistant", stopReason: "done" },
+  ]);
+});
+
 test("steer during EXECUTING drains after the tool batch before the next provider request", async () => {
   const toolStarted = await Effect.runPromise(Deferred.make<void>());
   const releaseTool = await Effect.runPromise(Deferred.make<void>());
@@ -1441,7 +1635,7 @@ test("budget exhaustion persists the fold diagnostic and publishes an error sett
     readonly diagnostic: { readonly detail: string };
   };
   expect(payload.content).toBe(payload.diagnostic.detail);
-  expect(observed.at(-2)).toEqual({ _tag: "turnSettled", revision: 3, stopReason: "error" });
+  expect(observed.at(-2)).toEqual({ _tag: "turnSettled", revision: 5, stopReason: "error" });
   expect(observed.at(-1)).toEqual({ _tag: "phaseChanged", phase: "IDLE" });
 });
 
@@ -1475,7 +1669,7 @@ test("a journal failure settles progress to IDLE, notifies subscribers, and leav
     { _tag: "phaseChanged", phase: "SETTLING" },
     { _tag: "phaseChanged", phase: "IDLE" },
   ]);
-  expect(observed).toContainEqual({ _tag: "turnSettled", revision: 3, stopReason: "error" });
+  expect(observed).toContainEqual({ _tag: "turnSettled", revision: 5, stopReason: "error" });
   expect(Option.getOrUndefined(result.nextSubscriber)).toEqual({
     _tag: "phaseChanged",
     phase: "IDLE",

@@ -18,10 +18,10 @@ export interface ToolCall {
   readonly name: string;
 }
 
-export interface ToolBatchOptions {
+export interface ToolBatchOptions<E = never> {
   readonly concurrency?: number;
-  readonly onToolCompleted?: (result: ToolBatchResult) => Effect.Effect<void>;
-  readonly onToolStarted?: (call: ToolCall) => Effect.Effect<void>;
+  readonly onToolCompleted?: (result: ToolBatchResult) => Effect.Effect<void, E>;
+  readonly onToolStarted?: (call: ToolCall) => Effect.Effect<void, E>;
 }
 
 export interface ToolBatchResult extends ToolResult {
@@ -80,11 +80,11 @@ const decodeArguments = (
     ),
   );
 
-const executeCall = (
+const executeCall = <E>(
   call: ToolCall,
   context: ToolExecutionContext,
-  onToolCompleted: ((result: ToolBatchResult) => Effect.Effect<void>) | undefined,
-  onToolStarted: ((call: ToolCall) => Effect.Effect<void>) | undefined,
+  onToolCompleted: ((result: ToolBatchResult) => Effect.Effect<void, E>) | undefined,
+  onToolStarted: ((call: ToolCall) => Effect.Effect<void, E>) | undefined,
 ) =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
@@ -126,11 +126,11 @@ const executeCall = (
     }),
   );
 
-export const executeToolBatch = (
+export const executeToolBatch = <E = never>(
   calls: ReadonlyArray<ToolCall>,
   context: ToolExecutionContext,
-  options: ToolBatchOptions = {},
-): Effect.Effect<ToolBatchResults, never, ToolRegistry> => {
+  options: ToolBatchOptions<E> = {},
+): Effect.Effect<ToolBatchResults, E, ToolRegistry> => {
   const configuredConcurrency = options.concurrency ?? DEFAULT_TOOL_CONCURRENCY;
   if (!Number.isSafeInteger(configuredConcurrency) || configuredConcurrency < 1) {
     throw new RangeError("Tool concurrency must be a positive safe integer.");

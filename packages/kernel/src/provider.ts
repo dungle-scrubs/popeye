@@ -7,13 +7,41 @@ import { Context, type Stream } from "effect";
 
 import type { ProviderError } from "./errors.js";
 
-export type AssistantStopReason = "aborted" | "done" | "error" | "toolCalls";
+export const ASSISTANT_STOP_REASONS = ["aborted", "done", "error", "toolCalls"] as const;
+
+export type AssistantStopReason = (typeof ASSISTANT_STOP_REASONS)[number];
 
 export interface ContextToolCall {
   readonly argumentsJson: string;
   readonly id: string;
   readonly name: string;
 }
+
+export const asContextToolCalls = (value: unknown): ReadonlyArray<ContextToolCall> | undefined => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const calls: Array<ContextToolCall> = [];
+  for (const candidate of value) {
+    if (typeof candidate !== "object" || candidate === null) {
+      return undefined;
+    }
+    const call = candidate as {
+      readonly argumentsJson?: unknown;
+      readonly id?: unknown;
+      readonly name?: unknown;
+    };
+    if (
+      typeof call.argumentsJson !== "string" ||
+      typeof call.id !== "string" ||
+      typeof call.name !== "string"
+    ) {
+      return undefined;
+    }
+    calls.push({ argumentsJson: call.argumentsJson, id: call.id, name: call.name });
+  }
+  return calls;
+};
 
 export interface ContextItem {
   readonly content: string;

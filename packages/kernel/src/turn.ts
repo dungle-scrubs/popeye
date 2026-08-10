@@ -31,10 +31,16 @@ import { Mailbox, type MailboxFailure } from "./mailbox.js";
 import { type Progress, ProgressHub, type TurnPhase } from "./progress.js";
 import {
   type AssistantStopReason,
+  asContextToolCalls,
   type ContextItem,
-  type ContextToolCall,
   Provider,
 } from "./provider.js";
+import {
+  appendOperationFinished,
+  appendOperationStarted,
+  appendToolStarted,
+  createOperationId,
+} from "./records.js";
 import { ToolRegistry } from "./tool.js";
 import { executeToolBatch, type ToolBatchResult, type ToolCall } from "./tool-batch.js";
 
@@ -153,32 +159,6 @@ interface ToolAbortState {
   readonly completed: ReadonlyMap<string, ToolBatchResult>;
   readonly finalized: boolean;
 }
-
-const asContextToolCalls = (value: unknown): ReadonlyArray<ContextToolCall> | undefined => {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const calls: Array<ContextToolCall> = [];
-  for (const candidate of value) {
-    if (typeof candidate !== "object" || candidate === null) {
-      return undefined;
-    }
-    const call = candidate as {
-      readonly argumentsJson?: unknown;
-      readonly id?: unknown;
-      readonly name?: unknown;
-    };
-    if (
-      typeof call.argumentsJson !== "string" ||
-      typeof call.id !== "string" ||
-      typeof call.name !== "string"
-    ) {
-      return undefined;
-    }
-    calls.push({ argumentsJson: call.argumentsJson, id: call.id, name: call.name });
-  }
-  return calls;
-};
 
 const asContextItem = (entry: {
   readonly kind: string;
@@ -461,6 +441,9 @@ export const TurnsLive = (): Layer.Layer<
           const executingCalls = yield* Ref.make<ReadonlyArray<ToolCall> | undefined>(undefined);
           const persistedToolCallIds = yield* Ref.make<Set<string>>(new Set());
           const persistenceMutex = yield* Effect.makeSemaphore(1);
+          const operationId = createOperationId();
+          const operationFinished = yield* Ref.make(false);
+          const operationRecorded = yield* Ref.make(false);
 
           const takeSteering = (
             closeWhenEmpty: boolean,
@@ -649,6 +632,15 @@ export const TurnsLive = (): Layer.Layer<
                 if (steeringDecision._tag === "convert") {
                   yield* queueConvertedSteering(steeringDecision.items);
                 }
+                const shouldFinish =
+                  (yield* Ref.get(operationRecorded)) &&
+                  !(yield* Ref.getAndSet(operationFinished, true));
+                if (shouldFinish) {
+                  yield* appendOperationFinished(journal, sessionId, {
+                    operationId,
+                    outcome: reason,
+                  });
+                }
                 yield* finishSettlement(reason);
                 return false;
               }).pipe(Effect.onError(() => finishSettlement(reason))),
@@ -684,7 +676,7 @@ export const TurnsLive = (): Layer.Layer<
               ),
             );
 
-          const settleAbort = (): Effect.Effect<void> =>
+          const finalizeExecutingToolResults = (): Effect.Effect<boolean, JournalFailure> =>
             Ref.modify(abortState, (current) => [
               current.finalized ? undefined : current.completed,
               { ...current, finalized: true },
@@ -720,13 +712,20 @@ export const TurnsLive = (): Layer.Layer<
                           { concurrency: 1 },
                         );
                         yield* Effect.annotateCurrentSpan({ interrupted: true });
-                        yield* settle("aborted", undefined, "", true, "discard");
-                        return;
+                        return true;
                       }
-                      yield* settle("aborted", undefined, undefined, true, "discard");
-                    }).pipe(Effect.uninterruptible)
-                  : Effect.void,
+                      return false;
+                    })
+                  : Effect.succeed(false),
               ),
+            );
+
+          const settleAbort = (): Effect.Effect<void> =>
+            finalizeExecutingToolResults().pipe(
+              Effect.flatMap((hadExecutingCalls) =>
+                settle("aborted", undefined, hadExecutingCalls ? "" : undefined, true, "discard"),
+              ),
+              Effect.uninterruptible,
               Effect.exit,
               Effect.flatMap((exit) =>
                 Exit.isFailure(exit) ? Ref.set(abortSettleFailure, exit.cause) : Effect.void,
@@ -916,12 +915,21 @@ export const TurnsLive = (): Layer.Layer<
                         : Effect.void,
                     ),
                   );
-                const onToolStarted = (call: ToolCall): Effect.Effect<void> =>
-                  progress.publish(sessionId, {
-                    _tag: "toolStarted",
-                    name: call.name,
+                const onToolStarted = (call: ToolCall): Effect.Effect<void, JournalFailure> =>
+                  appendToolStarted(journal, sessionId, {
+                    operationId,
+                    replay: toolRegistry.get(call.name)?.replay ?? "never",
                     toolCallId: call.id,
-                  });
+                    toolName: call.name,
+                  }).pipe(
+                    Effect.zipRight(
+                      progress.publish(sessionId, {
+                        _tag: "toolStarted",
+                        name: call.name,
+                        toolCallId: call.id,
+                      }),
+                    ),
+                  );
                 const batchOptions =
                   options.toolConcurrency === undefined
                     ? {
@@ -949,6 +957,13 @@ export const TurnsLive = (): Layer.Layer<
               sessionId,
               EntryDraftSchema.make({ kind: "message", payload: { content, role: "user" } }),
             );
+            yield* appendOperationStarted(journal, sessionId, {
+              intent: "turn",
+              operationId,
+              promptEntryId: user.id,
+              turnOrdinal,
+            });
+            yield* Ref.set(operationRecorded, true);
             yield* Effect.annotateCurrentSpan({ sessionId, turnOrdinal, userEntryId: user.id });
             let reason = yield* request();
             while (
@@ -1013,6 +1028,7 @@ export const TurnsLive = (): Layer.Layer<
                     failure?._tag === "JournalNotFound"
                   ) {
                     return Effect.logError("Turn journal operation failed", cause).pipe(
+                      Effect.zipRight(finalizeExecutingToolResults()),
                       Effect.zipRight(
                         settle("error", {
                           detail: journalFailureDetail(failure, cause),

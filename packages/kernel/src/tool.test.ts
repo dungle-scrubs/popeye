@@ -54,3 +54,32 @@ test("duplicate tool names fail layer construction with a typed diagnostic", asy
     name: "duplicate",
   });
 });
+
+test("defineTool preserves safe replay and the registry defaults omitted replay to never", async () => {
+  const safe = defineTool({
+    description: "Safe to repeat.",
+    execute: () => Effect.succeed({ content: "safe" }),
+    name: "safe",
+    parameters: Schema.Struct({}),
+    replay: "safe" as const,
+  });
+  const defaulted = defineTool({
+    description: "Must not repeat.",
+    execute: () => Effect.succeed({ content: "never" }),
+    name: "defaulted",
+    parameters: Schema.Struct({}),
+  });
+
+  const listed = await Effect.runPromise(
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry;
+      return registry.list();
+    }).pipe(Effect.provide(ToolRegistryLive([safe, defaulted]))),
+  );
+
+  expect(safe.replay).toBe("safe");
+  expect(listed.map((tool) => ({ name: tool.name, replay: tool.replay }))).toEqual([
+    { name: "safe", replay: "safe" },
+    { name: "defaulted", replay: "never" },
+  ]);
+});

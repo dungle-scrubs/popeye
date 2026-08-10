@@ -9,6 +9,7 @@ import type { Scope } from "effect";
 import { Context, Effect, Layer, type Schema } from "effect";
 
 import { DuplicateToolName, type ToolError } from "./errors.js";
+import type { ToolReplay } from "./records.js";
 
 export type ToolExecutionMode = "parallel" | "sequential";
 
@@ -32,6 +33,7 @@ export interface Tool<TArguments, R extends Scope.Scope = never> {
   readonly executionMode?: ToolExecutionMode;
   readonly name: string;
   readonly parameters: Schema.Schema<TArguments>;
+  readonly replay?: ToolReplay;
   readonly requiredCapabilities?: ReadonlyArray<string>;
 }
 
@@ -46,6 +48,7 @@ export namespace Tool {
     readonly executionMode?: ToolExecutionMode;
     readonly name: string;
     readonly parameters: Schema.Schema<unknown>;
+    readonly replay?: ToolReplay;
     readonly requiredCapabilities?: ReadonlyArray<string>;
   }
 }
@@ -63,6 +66,7 @@ export interface RegisteredTool {
   readonly executionMode: ToolExecutionMode;
   readonly name: string;
   readonly parameters: Schema.Schema<unknown>;
+  readonly replay: ToolReplay;
   readonly requiredCapabilities: ReadonlyArray<string>;
 }
 
@@ -82,6 +86,7 @@ const registerTool = (tool: Tool.Any): RegisteredTool => ({
   executionMode: tool.executionMode ?? "parallel",
   name: tool.name,
   parameters: tool.parameters as Schema.Schema<unknown>,
+  replay: tool.replay ?? "never",
   requiredCapabilities: tool.requiredCapabilities ?? [],
 });
 

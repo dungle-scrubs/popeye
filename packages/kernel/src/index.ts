@@ -36,8 +36,10 @@ export {
   TurnPhaseSchema,
 } from "./progress.js";
 export {
+  ASSISTANT_STOP_REASONS,
   type AssistantItem,
   type AssistantStopReason,
+  asContextToolCalls,
   type ContextItem,
   type ContextToolCall,
   Provider,
@@ -45,11 +47,41 @@ export {
   type ProviderStreamOptions,
 } from "./provider.js";
 export {
+  appendOperationFinished,
+  appendOperationStarted,
+  appendToolStarted,
+  createOperationId,
+  type OperationFinishedPayload,
+  OperationFinishedPayloadSchema,
+  type OperationId,
+  OperationIdSchema,
+  type OperationOutcome,
+  OperationOutcomeSchema,
+  type OperationStartedPayload,
+  OperationStartedPayloadSchema,
+  type ToolReplay,
+  ToolReplaySchema,
+  type ToolStartedPayload,
+  ToolStartedPayloadSchema,
+} from "./records.js";
+export {
+  applyRecoveryPlan,
+  boundedRecoveryRecords,
+  type RecoveryAction,
+  type RecoveryApplicationOptions,
+  type RecoveryPlan,
+  type RecoveryReport,
+  recoverSession,
+  type SafeReplayCall,
+} from "./recovery.js";
+export {
+  type ResumedSessionInfo,
   type SessionInfo,
   type SessionSummary,
   Sessions,
   type SessionsFailure,
   SessionsLive,
+  type SessionsOptions,
   type SessionsService,
 } from "./sessions.js";
 export {

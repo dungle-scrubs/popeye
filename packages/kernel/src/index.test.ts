@@ -16,3 +16,16 @@ test("exports every public kernel failure", () => {
   expect(kernel.ProviderError).toBeDefined();
   expect(kernel.ToolError).toBeDefined();
 });
+
+test("exports the record and recovery seams", () => {
+  expect(kernel.OperationIdSchema).toBeDefined();
+  expect(kernel.OperationStartedPayloadSchema).toBeDefined();
+  expect(kernel.ToolStartedPayloadSchema).toBeDefined();
+  expect(kernel.OperationFinishedPayloadSchema).toBeDefined();
+  expect(kernel.appendOperationStarted).toBeTypeOf("function");
+  expect(kernel.appendToolStarted).toBeTypeOf("function");
+  expect(kernel.appendOperationFinished).toBeTypeOf("function");
+  expect(kernel.boundedRecoveryRecords).toBeTypeOf("function");
+  expect(kernel.recoverSession).toBeTypeOf("function");
+  expect(kernel.applyRecoveryPlan).toBeTypeOf("function");
+});
