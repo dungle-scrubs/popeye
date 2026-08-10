@@ -35,15 +35,15 @@ Source: `implementation.md` (M2); Normative Contracts (failure taxonomy)
 ### M3: Journal service and in-memory layer
 Source: `implementation.md` (M3); Normative Contracts (journal rules)
 
-- [ ] Creating a session appends a root entry and reports it as the leaf
-- [ ] Appending an entry parents it to the current leaf and moves the leaf
-- [ ] Appending a record does not move the entry leaf
-- [ ] Moving the leaf to an earlier entry appends a leaf-moved record (no rewrite)
-- [ ] Branch read returns the root-to-leaf entry path for the current leaf
-- [ ] Records never appear in branch-entry reads
-- [ ] Leaf position reconstructs from records alone after close/reopen
-- [ ] Two sessions in one journal directory stay isolated
-- [ ] Entry ids are unique and stable across reopen
+- [x] Creating a session appends a root entry and reports it as the leaf
+- [x] Appending an entry parents it to the current leaf and moves the leaf
+- [x] Appending a record does not move the entry leaf
+- [x] Moving the leaf to an earlier entry appends a leaf-moved record (no rewrite)
+- [x] Branch read returns the root-to-leaf entry path for the current leaf
+- [x] Records never appear in branch-entry reads
+- [x] Leaf position reconstructs from records alone after close/reopen
+- [x] Two sessions in one journal directory stay isolated
+- [x] Entry ids are unique and stable across reopen
 
 ### M4: JSONL journal layer
 Source: `implementation.md` (M4); Normative Contracts (journal rules)
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 15
-- Remaining: 162
-- Current cutoff blockers: 162
+- Completed: 24
+- Remaining: 153
+- Current cutoff blockers: 153
 - Accepted/deferred follow-up: 11
 - Superseded/obsolete checklist debt: 0
