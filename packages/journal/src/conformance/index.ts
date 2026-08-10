@@ -97,6 +97,33 @@ export const describeJournalContract = async (makeLayer: MakeJournalLayer): Prom
       expect(result.leaf).toEqual(result.session.rootEntry);
     });
 
+    test("countDurableLines includes roots, entries, and records after reopening", async () => {
+      const harness = makeLayer();
+      const initial = await Effect.runPromise(
+        Effect.gen(function* () {
+          const journal = yield* Journal;
+          const session = yield* journal.createSession();
+          yield* journal.appendEntry(session.id, entryDraft("user_input", { text: "First." }));
+          yield* journal.appendEntry(
+            session.id,
+            entryDraft("assistant_output", { text: "Second." }),
+          );
+          yield* journal.appendRecord(session.id, recordDraft("operation_note", { attempt: 1 }));
+          return { count: yield* journal.countDurableLines(session.id), session };
+        }).pipe(Effect.provide(harness.layer)),
+      );
+
+      const reopened = await Effect.runPromise(
+        Effect.gen(function* () {
+          const journal = yield* Journal;
+          return yield* journal.countDurableLines(initial.session.id);
+        }).pipe(Effect.provide(harness.reopen())),
+      );
+
+      expect(initial.count).toBe(4);
+      expect(reopened).toBe(4);
+    });
+
     test("appendEntry parents to the current leaf and moves it", async () => {
       const { layer } = makeLayer();
       const result = await Effect.runPromise(

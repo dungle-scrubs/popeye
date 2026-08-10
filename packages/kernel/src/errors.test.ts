@@ -1,7 +1,15 @@
+import { SessionIdSchema } from "@peye/journal";
 import { Effect } from "effect";
 import { expect, test } from "vitest";
 
-import { BudgetExceeded, GateRejected, ProviderError, ToolError } from "./errors.js";
+import {
+  BudgetExceeded,
+  CompactionDisabled,
+  GateRejected,
+  NothingToCompact,
+  ProviderError,
+  ToolError,
+} from "./errors.js";
 
 test("ProviderError is recoverable by tag and preserves its transient field", async () => {
   const result = await Effect.runPromise(
@@ -53,4 +61,18 @@ test("BudgetExceeded is recoverable by tag and preserves its required budget", a
   );
 
   expect(result).toBe(1_200);
+});
+
+test("Compaction precondition failures are recoverable by their tags", async () => {
+  const nothing = new NothingToCompact({
+    message: "Nothing to compact.",
+    sessionId: SessionIdSchema.make("session"),
+  });
+  const disabled = new CompactionDisabled({
+    message: "Compaction disabled.",
+    sessionId: SessionIdSchema.make("session"),
+  });
+
+  expect(nothing._tag).toBe("NothingToCompact");
+  expect(disabled._tag).toBe("CompactionDisabled");
 });

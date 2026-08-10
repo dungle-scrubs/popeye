@@ -309,6 +309,10 @@ export const createJournalAdapter = (
           }));
           return { id, rootEntry } satisfies CreatedSession;
         }),
+      countDurableLines: (sessionId) =>
+        withSession(persistence, stateRef, sessionId, (session) =>
+          Effect.succeed(session.entries.size + session.records.length),
+        ),
       getLeaf: (sessionId) =>
         withSession(persistence, stateRef, sessionId, (session) => Effect.succeed(session.leaf)),
       listSessions: () =>

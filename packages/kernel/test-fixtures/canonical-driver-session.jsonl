@@ -1,0 +1,24 @@
+{"payload":{"format":"peye_journal","sessionId":"<session-1>","type":"journal_header","version":1},"v":1}
+{"payload":{"item":{"id":"<entry-1>","kind":"session_root","parentId":null,"payload":{}},"sessionId":"<session-1>","type":"entry"},"v":1}
+{"payload":{"item":{"id":"<entry-2>","kind":"message","parentId":"<entry-1>","payload":{"content":"Inspect the file.","role":"user"}},"sessionId":"<session-1>","type":"entry"},"v":1}
+{"payload":{"item":{"id":"<record-1>","kind":"operation_started","payload":{"intent":"turn","operationId":"<operation-1>","promptEntryId":"<entry-2>","turnOrdinal":1}},"sessionId":"<session-1>","type":"record"},"v":1}
+{"payload":{"item":{"id":"<entry-3>","kind":"message","parentId":"<entry-2>","payload":{"content":"","role":"assistant","stopReason":"toolCalls","toolCalls":[{"argumentsJson":"{\"path\":\"src/main.ts\"}","id":"read-call","name":"read-file"}]}},"sessionId":"<session-1>","type":"entry"},"v":1}
+{"payload":{"item":{"id":"<record-2>","kind":"tool_started","payload":{"operationId":"<operation-1>","replay":"never","toolCallId":"read-call","toolName":"read-file"}},"sessionId":"<session-1>","type":"record"},"v":1}
+{"payload":{"item":{"id":"<entry-4>","kind":"message","parentId":"<entry-3>","payload":{"content":"contents:src/main.ts","isError":false,"role":"toolResult","toolCallId":"read-call","toolName":"read-file"}},"sessionId":"<session-1>","type":"entry"},"v":1}
+{"payload":{"item":{"id":"<entry-5>","kind":"message","parentId":"<entry-4>","payload":{"content":"Also report the exported name.","deliveryMode":"steer","role":"user"}},"sessionId":"<session-1>","type":"entry"},"v":1}
+{"payload":{"item":{"id":"<entry-6>","kind":"message","parentId":"<entry-5>","payload":{"content":"Tool turn complete with steering.","role":"assistant","stopReason":"done"}},"sessionId":"<session-1>","type":"entry"},"v":1}
+{"payload":{"item":{"id":"<record-3>","kind":"operation_finished","payload":{"operationId":"<operation-1>","outcome":"done"}},"sessionId":"<session-1>","type":"record"},"v":1}
+{"payload":{"item":{"id":"<entry-7>","kind":"message","parentId":"<entry-6>","payload":{"content":"Give the short follow-up.","role":"user"}},"sessionId":"<session-1>","type":"entry"},"v":1}
+{"payload":{"item":{"id":"<record-4>","kind":"operation_started","payload":{"intent":"turn","operationId":"<operation-2>","promptEntryId":"<entry-7>","turnOrdinal":2}},"sessionId":"<session-1>","type":"record"},"v":1}
+{"payload":{"item":{"id":"<entry-8>","kind":"message","parentId":"<entry-7>","payload":{"content":"Follow-up complete.","role":"assistant","stopReason":"done"}},"sessionId":"<session-1>","type":"entry"},"v":1}
+{"payload":{"item":{"id":"<record-5>","kind":"operation_finished","payload":{"operationId":"<operation-2>","outcome":"done"}},"sessionId":"<session-1>","type":"record"},"v":1}
+{"payload":{"item":{"id":"<entry-9>","kind":"message","parentId":"<entry-8>","payload":{"content":"This request will be aborted.","role":"user"}},"sessionId":"<session-1>","type":"entry"},"v":1}
+{"payload":{"item":{"id":"<record-6>","kind":"operation_started","payload":{"intent":"turn","operationId":"<operation-3>","promptEntryId":"<entry-9>","turnOrdinal":3}},"sessionId":"<session-1>","type":"record"},"v":1}
+{"payload":{"item":{"id":"<entry-10>","kind":"message","parentId":"<entry-9>","payload":{"content":"Partial answer.","role":"assistant","stopReason":"aborted"}},"sessionId":"<session-1>","type":"entry"},"v":1}
+{"payload":{"item":{"id":"<record-7>","kind":"operation_finished","payload":{"operationId":"<operation-3>","outcome":"aborted"}},"sessionId":"<session-1>","type":"record"},"v":1}
+{"payload":{"item":{"id":"<record-8>","kind":"leaf_moved","payload":{"toEntryId":"<entry-6>"}},"sessionId":"<session-1>","type":"record"},"v":1}
+{"payload":{"item":{"id":"<entry-11>","kind":"message","parentId":"<entry-6>","payload":{"content":"Answer from the earlier branch.","role":"user"}},"sessionId":"<session-1>","type":"entry"},"v":1}
+{"payload":{"item":{"id":"<record-9>","kind":"operation_started","payload":{"intent":"turn","operationId":"<operation-4>","promptEntryId":"<entry-11>","turnOrdinal":2}},"sessionId":"<session-1>","type":"record"},"v":1}
+{"payload":{"item":{"id":"<entry-12>","kind":"message","parentId":"<entry-11>","payload":{"content":"Branched answer.","role":"assistant","stopReason":"done"}},"sessionId":"<session-1>","type":"entry"},"v":1}
+{"payload":{"item":{"id":"<record-10>","kind":"operation_finished","payload":{"operationId":"<operation-4>","outcome":"done"}},"sessionId":"<session-1>","type":"record"},"v":1}
+{"payload":{"item":{"id":"<entry-13>","kind":"compaction","parentId":"<entry-12>","payload":{"firstSummarizedId":"<entry-2>","lastSummarizedId":"<entry-12>","retainedTailIds":["<entry-11>","<entry-12>"],"summary":"Canonical compacted transcript."}},"sessionId":"<session-1>","type":"entry"},"v":1}

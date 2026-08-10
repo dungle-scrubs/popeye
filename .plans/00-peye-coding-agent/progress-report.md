@@ -5,7 +5,7 @@
 > file as features are implemented - never mark a milestone complete
 > until every current-cutoff checkbox under it is checked.
 
-> Current focus: Phase 2 - Kernel, ai seam, driver head
+> Current focus: Phase 3 - Plugin system
 
 ## Phase 1: Foundations
 
@@ -82,94 +82,94 @@ Source: `implementation.md` (M6); Normative Contracts (journal rules)
 ### M7: Single-writer mailbox and session lifecycle
 Source: `implementation.md` (M7); D-016
 
-- [ ] All mutating commands for a session execute on one fiber in dequeue order
-- [ ] Concurrent commands from two callers serialize with no interleaving anomalies (stress test)
-- [ ] `expectedRevision` mismatch rejects with typed `StaleRevision` and does not queue
-- [ ] Matching `expectedRevision` proceeds; omitted `expectedRevision` proceeds
-- [ ] create/resume/list session commands work against the journal
-- [ ] Resuming a session restores leaf position and revision from the journal
-- [ ] Protocol command spans include sessionId and revision
+- [x] All mutating commands for a session execute on one fiber in dequeue order
+- [x] Concurrent commands from two callers serialize with no interleaving anomalies (stress test)
+- [x] `expectedRevision` mismatch rejects with typed `StaleRevision` and does not queue
+- [x] Matching `expectedRevision` proceeds; omitted `expectedRevision` proceeds
+- [x] create/resume/list session commands work against the journal
+- [x] Resuming a session restores leaf position and revision from the journal
+- [x] Protocol command spans include sessionId and revision
 
 ### M8: Turn execution against fake provider
 Source: `implementation.md` (M8); Normative Contracts (state machine)
 
-- [ ] Tool-free turn walks IDLE→ASSEMBLING→STREAMING→SETTLING→IDLE with well-formed entries
-- [ ] Phase transitions surface as structured progress
-- [ ] Assistant text/thinking deltas stream as progress during STREAMING
-- [ ] Final assistant entry persists with stop reason `done`
-- [ ] Provider failure after retries exhausted persists an error entry with stop reason `error` and settles (no throw)
-- [ ] Abort mid-stream persists the partial assistant entry with stop reason `aborted`
-- [ ] Every terminal path (done/failed/aborted) leaves a well-formed entry sequence (fixture-verified)
-- [ ] Turn spans carry sessionId + turn ordinal + entry ids
+- [x] Tool-free turn walks IDLE→ASSEMBLING→STREAMING→SETTLING→IDLE with well-formed entries
+- [x] Phase transitions surface as structured progress
+- [x] Assistant text/thinking deltas stream as progress during STREAMING
+- [x] Final assistant entry persists with stop reason `done`
+- [x] Provider failure after retries exhausted persists an error entry with stop reason `error` and settles (no throw)
+- [x] Abort mid-stream persists the partial assistant entry with stop reason `aborted`
+- [x] Every terminal path (done/failed/aborted) leaves a well-formed entry sequence (fixture-verified)
+- [x] Turn spans carry sessionId + turn ordinal + entry ids
 
 ### M9: Tool execution
 Source: `implementation.md` (M9); D-016
 
-- [ ] Tool batch runs with bounded concurrency (default 4, configurable)
-- [ ] A tool declaring sequential execution forces its whole batch sequential
-- [ ] Result entries append in call order under adversarial completion order
-- [ ] Completion order is visible only as progress
-- [ ] A failed tool yields an error result entry in its call-order position without blocking others
-- [ ] Tool arguments are Schema-validated before execution; invalid arguments become an error result the model sees
-- [ ] Interrupting a tool runs its Scope finalizers
-- [ ] Abort during a batch interrupts running tools and persists a coherent entry sequence
+- [x] Tool batch runs with bounded concurrency (default 4, configurable)
+- [x] A tool declaring sequential execution forces its whole batch sequential
+- [x] Result entries append in call order under adversarial completion order
+- [x] Completion order is visible only as progress
+- [x] A failed tool yields an error result entry in its call-order position without blocking others
+- [x] Tool arguments are Schema-validated before execution; invalid arguments become an error result the model sees
+- [x] Interrupting a tool runs its Scope finalizers
+- [x] Abort during a batch interrupts running tools and persists a coherent entry sequence
 
 ### M10: Steering, follow-up, abort semantics
 Source: `implementation.md` (M10); Normative Contracts (state machine)
 
-- [ ] `steer` during EXECUTING drains after the tool batch, before the next provider request
-- [ ] `steer` during a tool-free turn drains at SETTLING (never lost)
-- [ ] `prompt` during a running turn never throws; delivery mode `steer` steers, default queues as follow-up
-- [ ] Follow-up opens the next turn after settle
-- [ ] Abort discards queued steering and retains follow-ups
-- [ ] Steering while IDLE is rejected as phase-invalid (steering requires a running turn)
+- [x] `steer` during EXECUTING drains after the tool batch, before the next provider request
+- [x] `steer` during a tool-free turn drains at SETTLING (never lost)
+- [x] `prompt` during a running turn never throws; delivery mode `steer` steers, default queues as follow-up
+- [x] Follow-up opens the next turn after settle
+- [x] Abort discards queued steering and retains follow-ups
+- [x] Steering while IDLE is rejected as phase-invalid (steering requires a running turn)
 
 ### M11: Records and crash recovery
 Source: `implementation.md` (M11); D-022
 
-- [ ] Operation-started records carry intent and pre-provisioned result entry ids
-- [ ] Recovery is a pure function of a bounded record slice (no journal scan beyond it)
-- [ ] Kill after tool start with `replay: never` recovers to a synthesized interrupted-error result entry using the pre-provisioned id
-- [ ] Kill after tool start with `replay: safe` re-executes the tool on recovery
-- [ ] Recovery is idempotent: running it twice produces no duplicate entries
-- [ ] Impossible record sequences reject with a named corruption class
-- [ ] Recovery reports state what was found and what action was taken
-- [ ] A recovered session accepts new prompts normally
+- [x] Operation records carry intent and recovery identity; idempotency keyed by (operationId, toolCallId) since the journal owns entry ids (D-032)
+- [x] Recovery is a pure function of a bounded record slice (no journal scan beyond it)
+- [x] Kill after tool start with `replay: never` recovers to a synthesized interrupted-error result entry using the pre-provisioned id
+- [x] Kill after tool start with `replay: safe` closes the operation with synthesized results and reports the call as advisory for driver re-execution (D-033)
+- [x] Recovery is idempotent: running it twice produces no duplicate entries
+- [x] Impossible record sequences reject with a named corruption class
+- [x] Recovery reports state what was found and what action was taken
+- [x] A recovered session accepts new prompts normally
 
 ### M12: ai seam
 Source: `implementation.md` (M12); D-001, D-014, D-026; spike A-001
 
-- [ ] Recorded pi-ai stream fixtures (text/thinking/toolcall interleavings) pass through the wrap order-faithfully
-- [ ] Terminal error fixture converts to typed `ProviderError`, never a throw
-- [ ] `ProviderError.transient` assigned via pi-ai's `isRetryableAssistantError`
-- [ ] Terminal aborted fixture settles with stop reason `aborted`
-- [ ] Fiber interruption fires the per-request `AbortController` and pi-ai receives the signal
-- [ ] Interrupted request persists stop reason `aborted`
-- [ ] Idle timeout on a stalled stream yields a transient `ProviderError`
-- [ ] Provider request spans include attempt number and classifier verdict on failure
-- [ ] No pi-ai type appears in any seam-external signature (lint-checked)
-- [ ] `@earendil-works/pi-ai` is exact-pinned; the contract suite fails on a mutated fixture (drift detection proven)
-- [ ] Live smoke: one real provider call completes a turn (gate 2→3 evidence)
+- [x] Recorded pi-ai stream fixtures (text/thinking/toolcall interleavings) pass through the wrap order-faithfully
+- [x] Terminal error fixture converts to typed `ProviderError`, never a throw
+- [x] `ProviderError.transient` assigned via pi-ai's `isRetryableAssistantError`
+- [x] Terminal aborted fixture settles with stop reason `aborted`
+- [x] Fiber interruption fires the per-request `AbortController` and pi-ai receives the signal
+- [x] Interrupted request persists stop reason `aborted`
+- [x] Idle timeout on a stalled stream yields a transient `ProviderError`
+- [x] Provider request spans include attempt number and classifier verdict on failure
+- [x] No pi-ai type appears in any seam-external signature (lint-checked)
+- [x] `@earendil-works/pi-ai` is exact-pinned; the contract suite fails on a mutated fixture (drift detection proven)
+- [x] Live smoke: one real provider call completes a turn (gate 2→3 evidence)
 
 ### M13: Retry and overflow policies
 Source: `implementation.md` (M13); Normative Contracts
 
-- [ ] Transient `ProviderError` retries on exponential backoff up to the configured cap
-- [ ] Permanent `ProviderError` never retries
-- [ ] Retry exhaustion persists an error entry and settles the turn
-- [ ] Context overflow triggers compact-then-retry exactly once per turn
-- [ ] Compaction summarization requests are bounded slices (never the full overflowing context)
-- [ ] Unsummarizable overflow yields `BudgetExceeded` with the options diagnostic
-- [ ] Retry and compaction-trigger diagnostics surface as structured progress
+- [x] Transient `ProviderError` retries on exponential backoff up to the configured cap
+- [x] Permanent `ProviderError` never retries
+- [x] Retry exhaustion persists an error entry and settles the turn
+- [x] Context overflow triggers compact-then-retry exactly once per turn
+- [x] Compaction summarization requests are bounded slices (never the full overflowing context)
+- [x] Unsummarizable overflow yields `BudgetExceeded` with the options diagnostic
+- [x] Retry and compaction-trigger diagnostics surface as structured progress
 
 ### M14: Driver head
 Source: `implementation.md` (M14); D-021
 
-- [ ] Driver exposes every kernel primitive in-process (create/resume/list, attach/detach, prompt, steer, abort, snapshot, subscribe, branch/fork, set model, set thinking level)
-- [ ] Scripted session (prompt → tool turn → steer → abort → branch) passes asserting snapshots and journal content
-- [ ] Snapshot revision increments monotonically across the script
-- [ ] Progress subscription delivers deltas during the script
-- [ ] The scripted session is captured as the canonical recorded-journal fixture
+- [x] Driver exposes every kernel primitive in-process (create/resume/list, attach/detach, prompt, steer, abort, snapshot, subscribe, branch/fork, set model, set thinking level)
+- [x] Scripted session (prompt → tool turn → steer → abort → branch) passes asserting snapshots and journal content
+- [x] Snapshot revision increments monotonically across the script
+- [x] Progress subscription delivers deltas during the script
+- [x] The scripted session is captured as the canonical recorded-journal fixture
 
 ## Phase 3: Plugin system
 
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 44
-- Remaining: 133
-- Current cutoff blockers: 133
-- Accepted/deferred follow-up: 11
+- Completed: 98
+- Remaining: 79
+- Current cutoff blockers: 79
+- Accepted/deferred follow-up: 5
 - Superseded/obsolete checklist debt: 0
