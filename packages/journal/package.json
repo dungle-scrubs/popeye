@@ -12,7 +12,10 @@
       "default": "./dist/index.js"
     }
   },
-  "dependencies": {
+  "peerDependencies": {
+    "effect": "^3.22.1"
+  },
+  "devDependencies": {
     "effect": "3.22.1"
   }
 }

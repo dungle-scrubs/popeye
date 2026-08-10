@@ -4,4 +4,4 @@
  */
 export const pluginsPackage = "@peye/plugins";
 
-export { PluginLoadError } from "./errors.js";
+export { type PluginLoadCause, PluginLoadError } from "./errors.js";

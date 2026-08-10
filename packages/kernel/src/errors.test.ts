@@ -1,61 +1,56 @@
+import { Effect } from "effect";
 import { expect, test } from "vitest";
 
 import { BudgetExceeded, GateRejected, ProviderError, ToolError } from "./errors.js";
 
-test("ProviderError constructs with its declared fields and round-trips them", () => {
-  const error = new ProviderError({
-    message: "The provider returned an unavailable response.",
-    status: 503,
-    transient: true,
-  });
+test("ProviderError is recoverable by tag and preserves its transient field", async () => {
+  const result = await Effect.runPromise(
+    Effect.fail(
+      new ProviderError({
+        message: "The provider returned an unavailable response.",
+        status: 503,
+        transient: true,
+      }),
+    ).pipe(Effect.catchTag("ProviderError", (error) => Effect.succeed(error.transient))),
+  );
 
-  expect(error).toMatchObject({
-    _tag: "ProviderError",
-    message: "The provider returned an unavailable response.",
-    status: 503,
-    transient: true,
-  });
+  expect(result).toBe(true);
 });
 
-test("ToolError constructs with its declared fields and round-trips them", () => {
-  const error = new ToolError({
-    message: "The tool could not read the requested file.",
-    toolCallId: "call-4",
-    toolName: "read_file",
-  });
+test("ToolError is recoverable by tag and preserves its tool name", async () => {
+  const result = await Effect.runPromise(
+    Effect.fail(
+      new ToolError({
+        message: "The tool could not read the requested file.",
+        toolCallId: "call-4",
+        toolName: "read_file",
+      }),
+    ).pipe(Effect.catchTag("ToolError", (error) => Effect.succeed(error.toolName))),
+  );
 
-  expect(error).toMatchObject({
-    _tag: "ToolError",
-    message: "The tool could not read the requested file.",
-    toolCallId: "call-4",
-    toolName: "read_file",
-  });
+  expect(result).toBe("read_file");
 });
 
-test("GateRejected constructs with its declared fields and round-trips them", () => {
-  const error = new GateRejected({
-    plugin: "workspace-guard",
-    reason: "filesystem write is denied",
-  });
+test("GateRejected is recoverable by tag and preserves its reason", async () => {
+  const result = await Effect.runPromise(
+    Effect.fail(
+      new GateRejected({ plugin: "workspace-guard", reason: "filesystem write is denied" }),
+    ).pipe(Effect.catchTag("GateRejected", (error) => Effect.succeed(error.reason))),
+  );
 
-  expect(error).toMatchObject({
-    _tag: "GateRejected",
-    plugin: "workspace-guard",
-    reason: "filesystem write is denied",
-  });
+  expect(result).toBe("filesystem write is denied");
 });
 
-test("BudgetExceeded constructs with its declared fields and round-trips them", () => {
-  const error = new BudgetExceeded({
-    budget: 1_000,
-    optionsDiagnostic: "minimum retained context is 1,200 tokens",
-    required: 1_200,
-  });
+test("BudgetExceeded is recoverable by tag and preserves its required budget", async () => {
+  const result = await Effect.runPromise(
+    Effect.fail(
+      new BudgetExceeded({
+        budget: 1_000,
+        optionsDiagnostic: "minimum retained context is 1,200 tokens",
+        required: 1_200,
+      }),
+    ).pipe(Effect.catchTag("BudgetExceeded", (error) => Effect.succeed(error.required))),
+  );
 
-  expect(error).toMatchObject({
-    _tag: "BudgetExceeded",
-    budget: 1_000,
-    optionsDiagnostic: "minimum retained context is 1,200 tokens",
-    required: 1_200,
-  });
+  expect(result).toBe(1_200);
 });

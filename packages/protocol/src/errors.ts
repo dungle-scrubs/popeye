@@ -4,9 +4,11 @@
  */
 import { Data } from "effect";
 
+export type ProtocolErrorReason = "malformed_frame" | "phase_invalid_command";
+
 export class ProtocolError extends Data.TaggedError("ProtocolError")<{
   readonly message: string;
-  readonly reason: string;
+  readonly reason: ProtocolErrorReason;
 }> {}
 
 export class StaleRevision extends Data.TaggedError("StaleRevision")<{

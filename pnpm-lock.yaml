@@ -34,7 +34,7 @@ importers:
         version: link:../protocol
 
   packages/journal:
-    dependencies:
+    devDependencies:
       effect:
         specifier: 3.22.1
         version: 3.22.1
@@ -47,6 +47,7 @@ importers:
       '@peye/protocol':
         specifier: workspace:*
         version: link:../protocol
+    devDependencies:
       effect:
         specifier: 3.22.1
         version: 3.22.1
@@ -59,12 +60,13 @@ importers:
       '@peye/protocol':
         specifier: workspace:*
         version: link:../protocol
+    devDependencies:
       effect:
         specifier: 3.22.1
         version: 3.22.1
 
   packages/protocol:
-    dependencies:
+    devDependencies:
       effect:
         specifier: 3.22.1
         version: 3.22.1

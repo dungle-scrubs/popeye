@@ -4,131 +4,257 @@
  */
 import { Effect, Schema } from "effect";
 
-import { JournalError } from "./errors.js";
+import { type JournalCorruptionClass, JournalError } from "./errors.js";
 
-export interface LineVersion {
-  readonly migrate?: (previous: unknown) => unknown;
-  readonly payloadSchema: Schema.Schema.AnyNoContext;
+export interface LineVersion<A, I> {
+  /**
+   * Converts the preceding version's encoded payload into this version's encoded payload.
+   * The durable format migrates in its own representation, so migrations do not depend on
+   * a previous domain model that may no longer exist.
+   */
+  readonly migrate?: (previous: unknown) => I;
+  readonly payloadSchema: Schema.Schema<A, I>;
   readonly version: number;
 }
 
 export interface LineCodecConfig {
   readonly currentVersion: number;
-  readonly versions: ReadonlyArray<LineVersion>;
+  readonly versions: ReadonlyArray<{
+    readonly migrate?: (previous: unknown) => unknown;
+    readonly payloadSchema: Schema.Schema.AnyNoContext;
+    readonly version: number;
+  }>;
+}
+
+export interface LineLocator {
+  readonly file?: string;
+  readonly line?: number;
 }
 
 export interface LineCodec<TCurrent> {
-  readonly decodeLine: (text: string) => Effect.Effect<TCurrent, JournalError>;
-  readonly encodeLine: (payload: TCurrent) => Effect.Effect<string, JournalError>;
+  readonly decodeLine: (
+    text: string,
+    locator?: LineLocator,
+  ) => Effect.Effect<TCurrent, JournalError>;
+  readonly encodeLine: (
+    payload: TCurrent,
+    locator?: LineLocator,
+  ) => Effect.Effect<string, JournalError>;
 }
 
-const VersionHeader = Schema.Struct({ v: Schema.Number });
+type CurrentPayload<TConfig extends LineCodecConfig> =
+  Extract<TConfig["versions"][number], { readonly version: TConfig["currentVersion"] }> extends {
+    readonly payloadSchema: Schema.Schema<infer TCurrent, infer _TEncoded>;
+  }
+    ? TCurrent
+    : never;
 
-const schemaMismatch = (detail: unknown): JournalError =>
+interface CompiledVersion {
+  readonly decodeEnvelope: (
+    input: unknown,
+  ) => Effect.Effect<{ readonly payload: unknown; readonly v: number }, unknown>;
+  readonly decodePayload: (input: unknown) => Effect.Effect<unknown, unknown>;
+  readonly encodePayload: (input: unknown) => Effect.Effect<unknown, unknown>;
+  readonly migrate?: (previous: unknown) => unknown;
+  readonly version: number;
+}
+
+const HeaderSchema = Schema.Struct({ payload: Schema.Unknown, v: Schema.Number });
+const decodeHeader = Schema.decodeUnknown(HeaderSchema, { onExcessProperty: "error" });
+const strict: { readonly onExcessProperty: "error" } = { onExcessProperty: "error" };
+
+const formatLocation = (locator: LineLocator | undefined): string => {
+  if (locator?.file !== undefined && locator.line !== undefined) {
+    return ` at ${locator.file}:${locator.line}`;
+  }
+
+  if (locator?.file !== undefined) {
+    return ` at ${locator.file}`;
+  }
+
+  return locator?.line === undefined ? "" : ` at line ${locator.line}`;
+};
+
+const journalError = (
+  corruptionClass: JournalCorruptionClass,
+  detail: string,
+  locator: LineLocator | undefined,
+  cause: unknown,
+): JournalError =>
   new JournalError({
-    corruptionClass: "schema_mismatch",
-    message: String(detail),
+    ...(cause === undefined ? {} : { cause }),
+    ...(locator?.file === undefined ? {} : { file: locator.file }),
+    corruptionClass,
+    message: `${detail}${formatLocation(locator)}`,
   });
 
-const envelopeSchema = (registration: LineVersion) =>
-  Schema.Struct({
-    payload: registration.payloadSchema,
+const schemaMismatch = (cause: unknown, locator: LineLocator | undefined): JournalError =>
+  journalError("schema_mismatch", String(cause), locator, cause);
+
+const compileVersion = <TCurrent, TEncoded>(
+  registration: LineVersion<TCurrent, TEncoded>,
+): CompiledVersion => {
+  // An append-only store must reject unknown fields: dropping them on read is data loss
+  // disguised as success. Newer writers use a version bump and therefore fail as unsupported.
+  const envelope = Schema.Struct({
+    payload: Schema.Unknown,
     v: Schema.Literal(registration.version),
   });
 
-const currentRegistration = (config: LineCodecConfig): Effect.Effect<LineVersion, JournalError> => {
-  const registration = config.versions.find(
-    (candidate) => candidate.version === config.currentVersion,
-  );
-
-  return registration === undefined
-    ? Effect.fail(
-        new JournalError({
-          corruptionClass: "schema_mismatch",
-          message: `No schema is registered for current version ${config.currentVersion}.`,
-        }),
-      )
-    : Effect.succeed(registration);
+  return {
+    decodeEnvelope: Schema.decodeUnknown(envelope, strict),
+    decodePayload: Schema.decodeUnknown(registration.payloadSchema, strict),
+    encodePayload: Schema.encodeUnknown(registration.payloadSchema, strict),
+    ...(registration.migrate === undefined ? {} : { migrate: registration.migrate }),
+    version: registration.version,
+  };
 };
 
-export const createLineCodec = <TCurrent = unknown>(
-  config: LineCodecConfig,
-): LineCodec<TCurrent> => ({
-  decodeLine: (text) =>
-    Effect.gen(function* () {
-      const parsed = yield* Effect.try({
-        catch: (cause) =>
-          new JournalError({
-            corruptionClass: "malformed_json",
-            message: String(cause),
-          }),
-        try: () => JSON.parse(text) as unknown,
-      });
-      const header = yield* Schema.decodeUnknown(VersionHeader)(parsed).pipe(
-        Effect.mapError(schemaMismatch),
-      );
-      const initial = config.versions.find((registration) => registration.version === header.v);
+const configError = (detail: string): JournalError =>
+  journalError("schema_mismatch", `Invalid line codec config: ${detail}`, undefined, undefined);
 
-      if (initial === undefined || header.v > config.currentVersion) {
+const compileRegistry = (
+  config: LineCodecConfig,
+): Effect.Effect<Map<number, CompiledVersion>, JournalError> =>
+  Effect.gen(function* () {
+    const registry = new Map<number, CompiledVersion>();
+    let lowestVersion = Number.POSITIVE_INFINITY;
+
+    for (const registration of config.versions) {
+      if (!Number.isInteger(registration.version) || registration.version <= 0) {
         return yield* Effect.fail(
-          new JournalError({
-            corruptionClass: "schema_mismatch",
-            message: `No schema is registered for line version ${header.v}.`,
-          }),
+          configError(`version ${registration.version} is not a positive integer.`),
         );
       }
 
-      const decoded = yield* Schema.decodeUnknown(envelopeSchema(initial))(parsed).pipe(
-        Effect.mapError(schemaMismatch),
-      );
-      let payload: unknown = decoded.payload;
+      if (registry.has(registration.version)) {
+        return yield* Effect.fail(
+          configError(`version ${registration.version} is registered more than once.`),
+        );
+      }
 
-      for (let nextVersion = header.v + 1; nextVersion <= config.currentVersion; nextVersion += 1) {
-        const next = config.versions.find((registration) => registration.version === nextVersion);
+      lowestVersion = Math.min(lowestVersion, registration.version);
+      registry.set(registration.version, compileVersion(registration));
+    }
+
+    if (!registry.has(config.currentVersion)) {
+      return yield* Effect.fail(
+        configError(`current version ${config.currentVersion} has no registered schema.`),
+      );
+    }
+
+    for (const registration of registry.values()) {
+      if (registration.version > lowestVersion && registration.migrate === undefined) {
+        return yield* Effect.fail(
+          configError(`version ${registration.version} has no migration from its predecessor.`),
+        );
+      }
+    }
+
+    return registry;
+  });
+
+const createCompiledCodec = (current: CompiledVersion, registry: Map<number, CompiledVersion>) => ({
+  decodeLine: (text: string, locator?: LineLocator) =>
+    Effect.gen(function* () {
+      const parsed = yield* Effect.try({
+        catch: (cause) => journalError("malformed_json", String(cause), locator, cause),
+        try: () => JSON.parse(text),
+      });
+      const header = yield* decodeHeader(parsed).pipe(
+        Effect.mapError((cause) => schemaMismatch(cause, locator)),
+      );
+
+      if (header.v > current.version) {
+        return yield* Effect.fail(
+          journalError(
+            "unsupported_version",
+            `Journal line version ${header.v} is newer than current version ${current.version}.`,
+            locator,
+            undefined,
+          ),
+        );
+      }
+
+      const initial = registry.get(header.v);
+      if (initial === undefined) {
+        return yield* Effect.fail(
+          journalError(
+            "missing_migration",
+            `No schema is registered for journal line version ${header.v}.`,
+            locator,
+            undefined,
+          ),
+        );
+      }
+
+      const decodedEnvelope = yield* initial
+        .decodeEnvelope(parsed)
+        .pipe(Effect.mapError((cause) => schemaMismatch(cause, locator)));
+      let encodedPayload = decodedEnvelope.payload;
+
+      for (
+        let nextVersion = initial.version + 1;
+        nextVersion <= current.version;
+        nextVersion += 1
+      ) {
+        const next = registry.get(nextVersion);
         const migrate = next?.migrate;
         if (next === undefined || migrate === undefined) {
           return yield* Effect.fail(
-            new JournalError({
-              corruptionClass: "missing_migration",
-              message: `Migration chain from version ${header.v} to version ${config.currentVersion} is missing version ${nextVersion}.`,
-            }),
+            journalError(
+              "missing_migration",
+              `Migration chain from version ${initial.version} to version ${current.version} is missing version ${nextVersion}.`,
+              locator,
+              undefined,
+            ),
           );
         }
 
-        const migrated = yield* Effect.try({
-          catch: schemaMismatch,
-          try: () => migrate(payload),
+        encodedPayload = yield* Effect.try({
+          catch: (cause) =>
+            journalError(
+              "migration_failed",
+              `Migration to version ${nextVersion} failed: ${String(cause)}`,
+              locator,
+              cause,
+            ),
+          try: () => migrate(encodedPayload),
         });
-        payload = yield* Schema.decodeUnknown(next.payloadSchema)(migrated).pipe(
-          Effect.mapError(schemaMismatch),
-        );
+        yield* next
+          .decodePayload(encodedPayload)
+          .pipe(Effect.mapError((cause) => schemaMismatch(cause, locator)));
       }
 
-      return payload as TCurrent;
+      return yield* current
+        .decodePayload(encodedPayload)
+        .pipe(Effect.mapError((cause) => schemaMismatch(cause, locator)));
     }),
-  encodeLine: (payload) =>
+  encodeLine: (payload: unknown, locator?: LineLocator) =>
     Effect.gen(function* () {
-      const registration = yield* currentRegistration(config);
-      const envelope = yield* Schema.decodeUnknown(envelopeSchema(registration))({
-        payload,
-        v: config.currentVersion,
-      }).pipe(Effect.mapError(schemaMismatch));
-      const line = yield* Effect.try({
-        catch: (cause) =>
-          new JournalError({
-            corruptionClass: "schema_mismatch",
-            message: String(cause),
-          }),
-        try: () => JSON.stringify(envelope),
-      });
-
-      return yield* line === undefined
-        ? Effect.fail(
-            new JournalError({
-              corruptionClass: "schema_mismatch",
-              message: "The validated line could not be encoded as JSON.",
-            }),
-          )
-        : Effect.succeed(line);
+      const encodedPayload = yield* current
+        .encodePayload(payload)
+        .pipe(Effect.mapError((cause) => schemaMismatch(cause, locator)));
+      return JSON.stringify({ payload: encodedPayload, v: current.version });
     }),
 });
+
+export function createLineCodec<const TConfig extends LineCodecConfig>(
+  config: TConfig,
+): Effect.Effect<LineCodec<CurrentPayload<TConfig>>, JournalError>;
+export function createLineCodec(
+  config: LineCodecConfig,
+): Effect.Effect<LineCodec<unknown>, JournalError> {
+  return Effect.gen(function* () {
+    const registry = yield* compileRegistry(config);
+    const current = registry.get(config.currentVersion);
+
+    if (current === undefined) {
+      return yield* Effect.fail(
+        configError(`current version ${config.currentVersion} has no registered schema.`),
+      );
+    }
+
+    return createCompiledCodec(current, registry);
+  });
+}

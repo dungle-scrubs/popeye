@@ -4,4 +4,9 @@
  */
 export const protocolPackage = "@peye/protocol";
 
-export { InteractionTimeout, ProtocolError, StaleRevision } from "./errors.js";
+export {
+  InteractionTimeout,
+  ProtocolError,
+  type ProtocolErrorReason,
+  StaleRevision,
+} from "./errors.js";

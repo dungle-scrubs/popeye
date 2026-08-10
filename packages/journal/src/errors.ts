@@ -6,11 +6,13 @@ import { Data } from "effect";
 
 export type JournalCorruptionClass =
   | "malformed_json"
-  | "missing_migration"
   | "schema_mismatch"
-  | (string & {});
+  | "missing_migration"
+  | "migration_failed"
+  | "unsupported_version";
 
 export class JournalError extends Data.TaggedError("JournalError")<{
+  readonly cause?: unknown;
   readonly corruptionClass: JournalCorruptionClass;
   readonly file?: string;
   readonly message: string;

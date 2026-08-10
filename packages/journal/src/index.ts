@@ -4,5 +4,10 @@
  */
 export const journalPackage = "@peye/journal";
 
-export { JournalError } from "./errors.js";
-export { createLineCodec } from "./line-codec.js";
+export { type JournalCorruptionClass, JournalError } from "./errors.js";
+export {
+  createLineCodec,
+  type LineCodec,
+  type LineCodecConfig,
+  type LineVersion,
+} from "./line-codec.js";
