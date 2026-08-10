@@ -48,13 +48,13 @@ Source: `implementation.md` (M3); Normative Contracts (journal rules)
 ### M4: JSONL journal layer
 Source: `implementation.md` (M4); Normative Contracts (journal rules)
 
-- [ ] Appends are acknowledged only after durable write
-- [ ] A torn (partial) unacknowledged tail line is truncated on open and the journal opens clean
-- [ ] Acknowledged lines are byte-identical after any recovery
-- [ ] An acknowledged record sequence violating single-writer invariants opens as `JournalError` with a named corruption class
-- [ ] Corruption is never repaired silently (assert no file mutation on reject)
-- [ ] Open/recovery emits structured diagnostics (file, action taken, corruption class if any)
-- [ ] JSONL layer passes every M3 behavior via the shared interface
+- [x] Appends are acknowledged only after durable write
+- [x] A torn (partial) unacknowledged tail line is truncated on open and the journal opens clean
+- [x] Acknowledged lines are byte-identical after any recovery
+- [x] An acknowledged record sequence violating single-writer invariants opens as `JournalError` with a named corruption class
+- [x] Corruption is never repaired silently (assert no file mutation on reject)
+- [x] Open/recovery emits structured diagnostics (file, action taken, corruption class if any)
+- [x] JSONL layer passes every M3 behavior via the shared interface
 
 ### M5: Journal conformance suite
 Source: `implementation.md` (M5)
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 24
-- Remaining: 153
-- Current cutoff blockers: 153
+- Completed: 31
+- Remaining: 146
+- Current cutoff blockers: 146
 - Accepted/deferred follow-up: 11
 - Superseded/obsolete checklist debt: 0
