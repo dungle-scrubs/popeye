@@ -105,14 +105,14 @@ Source: `implementation.md` (M8); Normative Contracts (state machine)
 ### M9: Tool execution
 Source: `implementation.md` (M9); D-016
 
-- [ ] Tool batch runs with bounded concurrency (default 4, configurable)
-- [ ] A tool declaring sequential execution forces its whole batch sequential
-- [ ] Result entries append in call order under adversarial completion order
-- [ ] Completion order is visible only as progress
-- [ ] A failed tool yields an error result entry in its call-order position without blocking others
-- [ ] Tool arguments are Schema-validated before execution; invalid arguments become an error result the model sees
-- [ ] Interrupting a tool runs its Scope finalizers
-- [ ] Abort during a batch interrupts running tools and persists a coherent entry sequence
+- [x] Tool batch runs with bounded concurrency (default 4, configurable)
+- [x] A tool declaring sequential execution forces its whole batch sequential
+- [x] Result entries append in call order under adversarial completion order
+- [x] Completion order is visible only as progress
+- [x] A failed tool yields an error result entry in its call-order position without blocking others
+- [x] Tool arguments are Schema-validated before execution; invalid arguments become an error result the model sees
+- [x] Interrupting a tool runs its Scope finalizers
+- [x] Abort during a batch interrupts running tools and persists a coherent entry sequence
 
 ### M10: Steering, follow-up, abort semantics
 Source: `implementation.md` (M10); Normative Contracts (state machine)
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 59
-- Remaining: 118
-- Current cutoff blockers: 118
+- Completed: 67
+- Remaining: 110
+- Current cutoff blockers: 110
 - Accepted/deferred follow-up: 11
 - Superseded/obsolete checklist debt: 0
