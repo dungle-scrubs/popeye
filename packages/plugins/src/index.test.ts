@@ -29,3 +29,20 @@ test("exports the M15 interface from the public Plugin seam", () => {
     ]),
   );
 });
+
+test("exports the M16 Hook emitter and point table from the public Plugin seam", () => {
+  expect(Object.keys(plugins)).toEqual(
+    expect.arrayContaining([
+      "ContextHookInputSchema",
+      "DEFAULT_GATE_TIMEOUT_MILLIS",
+      "DEFAULT_TAP_QUEUE_CAPACITY",
+      "GateRejected",
+      "HOOK_POINTS",
+      "HOOK_POINT_NAMES",
+      "HookEmitter",
+      "HookEmitterLive",
+      "ToolCallGateHookOutputSchema",
+      "defineHookPoint",
+    ]),
+  );
+});

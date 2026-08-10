@@ -12,7 +12,6 @@ import type {
   CommandDeclaration,
   Contribution,
   ContributionKey,
-  HookDeclaration,
   HookMergeClass,
   RegisteredContribution,
 } from "./contribution.js";
@@ -75,7 +74,12 @@ export const defineContributionKind = <const TKind extends string, TPayload, TEn
 });
 
 type AnyCommandDeclaration = CommandDeclaration<never, unknown, unknown, unknown, unknown>;
-type AnyHookDeclaration = HookDeclaration<HookMergeClass, never, unknown, unknown, unknown>;
+interface AnyHookDeclaration {
+  readonly mergeClass: HookMergeClass;
+  readonly name: string;
+  readonly point: string;
+  readonly run: (input: unknown) => Effect.Effect<unknown, unknown>;
+}
 
 const isRecord = (input: unknown): input is Readonly<Record<string, unknown>> =>
   typeof input === "object" && input !== null;

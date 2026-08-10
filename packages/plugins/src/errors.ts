@@ -6,6 +6,13 @@ import { Data } from "effect";
 
 import type { ContributionKey } from "./contribution.js";
 
+export class GateRejected extends Data.TaggedError("GateRejected")<{
+  readonly plugin: string;
+  readonly point: string;
+  readonly reason: string;
+  readonly timedOut: boolean;
+}> {}
+
 export type PluginLoadCause = "manifest_invalid" | "build_failed" | "unsupported_syntax";
 
 export class PluginLoadError extends Data.TaggedError("PluginLoadError")<{
