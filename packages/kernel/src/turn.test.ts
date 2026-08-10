@@ -30,7 +30,7 @@ import {
 } from "./provider.js";
 import { Sessions, SessionsLive } from "./sessions.js";
 import { defineTool, type Tool, ToolRegistryLive } from "./tool.js";
-import { Turns, TurnsLive } from "./turn.js";
+import { TURN_INPUT_QUEUE_CAPACITY, Turns, TurnsLive } from "./turn.js";
 
 const providerLayer = (service: ProviderService): Layer.Layer<Provider> =>
   Layer.succeed(Provider, service);
@@ -84,7 +84,8 @@ const failSecondBranchRead = () => {
   ).pipe(Layer.provide(base));
 };
 
-const pauseSecondBranchRead = (
+const pauseBranchRead = (
+  readNumber: number,
   entered: Deferred.Deferred<void>,
   release: Deferred.Deferred<void>,
 ) => {
@@ -100,7 +101,7 @@ const pauseSecondBranchRead = (
         readBranch: (sessionId) =>
           Ref.updateAndGet(reads, (count) => count + 1).pipe(
             Effect.flatMap((count) =>
-              count === 2
+              count === readNumber
                 ? Deferred.succeed(entered, undefined).pipe(
                     Effect.zipRight(Deferred.await(release)),
                     Effect.zipRight(journal.readBranch(sessionId)),
@@ -112,6 +113,11 @@ const pauseSecondBranchRead = (
     }),
   ).pipe(Layer.provide(base));
 };
+
+const pauseSecondBranchRead = (
+  entered: Deferred.Deferred<void>,
+  release: Deferred.Deferred<void>,
+) => pauseBranchRead(2, entered, release);
 
 const pauseAssistantAppend = (
   entered: Deferred.Deferred<void>,
@@ -137,6 +143,87 @@ const pauseAssistantAppend = (
       };
     }),
   ).pipe(Layer.provide(base));
+};
+
+const pauseSettlementCount = (
+  entered: Deferred.Deferred<void>,
+  release: Deferred.Deferred<void>,
+) => {
+  const backing = createMemoryJournalBacking();
+  const base = JournalMemory(backing);
+  return Layer.effect(
+    Journal,
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const assistantAppended = yield* Ref.make(false);
+      const paused = yield* Ref.make(false);
+      return {
+        ...journal,
+        appendEntry: (sessionId, entry: EntryDraft) => {
+          const payload = entry.payload as { readonly role?: unknown };
+          return journal
+            .appendEntry(sessionId, entry)
+            .pipe(
+              Effect.tap(() =>
+                payload.role === "assistant" ? Ref.set(assistantAppended, true) : Effect.void,
+              ),
+            );
+        },
+        countDurableLines: (sessionId) =>
+          Effect.all([Ref.get(assistantAppended), Ref.get(paused)]).pipe(
+            Effect.flatMap(([hasAssistant, alreadyPaused]) =>
+              hasAssistant && !alreadyPaused
+                ? Ref.set(paused, true).pipe(
+                    Effect.zipRight(Deferred.succeed(entered, undefined)),
+                    Effect.zipRight(Deferred.await(release)),
+                    Effect.zipRight(journal.countDurableLines(sessionId)),
+                  )
+                : journal.countDurableLines(sessionId),
+            ),
+          ),
+      };
+    }),
+  ).pipe(Layer.provide(base));
+};
+
+interface CapturedSpan {
+  readonly attributes: Map<string, unknown>;
+  exit: Exit.Exit<unknown, unknown> | undefined;
+  readonly name: string;
+}
+
+const tracerLayer = (spans: Array<CapturedSpan>): Layer.Layer<never> => {
+  const tracer = Tracer.make({
+    context: (evaluate) => evaluate(),
+    span: (name, parent, context, links, startTime, kind, options) => {
+      const captured: CapturedSpan = {
+        attributes: new Map(Object.entries(options?.attributes ?? {})),
+        exit: undefined,
+        name,
+      };
+      spans.push(captured);
+      return {
+        _tag: "Span",
+        addLinks: () => undefined,
+        attribute: (key, value) => captured.attributes.set(key, value),
+        attributes: captured.attributes,
+        context,
+        end: (_endTime, exit) => {
+          captured.exit = exit;
+        },
+        event: () => undefined,
+        kind,
+        links,
+        name,
+        parent,
+        sampled: true,
+        spanId: `${spans.length}`,
+        status: { _tag: "Started", startTime },
+        traceId: "captured",
+      } satisfies Tracer.Span;
+    },
+  });
+  return Layer.merge(Layer.setTracer(tracer), Layer.setTracerEnabled(true));
 };
 
 test("tool-free turn walks IDLE through SETTLING to IDLE and persists final stop reason done", async () => {
@@ -243,9 +330,12 @@ test("assistant text and thinking deltas stream only during STREAMING and persis
 test("steer during a tool-free turn drains at SETTLING and loops before settlement", async () => {
   const enteredSettling = await Effect.runPromise(Deferred.make<void>());
   const releaseSettling = await Effect.runPromise(Deferred.make<void>());
+  const contexts: Array<ReadonlyArray<ContextItem>> = [];
+  const observed: Array<Progress> = [];
   let requests = 0;
   const provider: ProviderService = {
-    streamAssistant: () => {
+    streamAssistant: (context) => {
+      contexts.push(context);
       requests += 1;
       return Stream.fromIterable([
         { _tag: "textDelta" as const, text: requests === 1 ? "First reply." : "Second reply." },
@@ -260,11 +350,18 @@ test("steer during a tool-free turn drains at SETTLING and loops before settleme
       const sessions = yield* Sessions;
       const turns = yield* Turns;
       const session = yield* sessions.create();
+      const progress = yield* Effect.fork(
+        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+          Effect.sync(() => observed.push(item)),
+        ),
+      );
+      yield* Effect.yieldNow();
       const running = yield* Effect.fork(turns.runTurn(session.id, "Initial prompt"));
       yield* Deferred.await(enteredSettling);
       yield* turns.steer(session.id, "Steer at settle");
       yield* Deferred.succeed(releaseSettling, undefined);
       const settled = yield* Fiber.join(running);
+      yield* Fiber.interrupt(progress);
       return { branch: yield* journal.readBranch(session.id), settled };
     }).pipe(
       Effect.provide(testLayer(provider, pauseAssistantAppend(enteredSettling, releaseSettling))),
@@ -272,6 +369,14 @@ test("steer during a tool-free turn drains at SETTLING and loops before settleme
   );
 
   expect(requests).toBe(2);
+  expect(contexts[1]).toEqual([
+    { content: "Initial prompt", role: "user" },
+    { content: "First reply.", role: "assistant" },
+    { content: "Steer at settle", role: "user" },
+  ]);
+  expect(observed.findIndex((item) => item._tag === "steeringQueued")).toBeLessThan(
+    observed.findIndex((item) => item._tag === "steeringApplied"),
+  );
   expect(result.settled).toEqual({ stopReason: "done" });
   expect(result.branch.map((entry) => entry.payload)).toMatchObject([
     {},
@@ -280,6 +385,190 @@ test("steer during a tool-free turn drains at SETTLING and loops before settleme
     { content: "Steer at settle", role: "user" },
     { content: "Second reply.", role: "assistant", stopReason: "done" },
   ]);
+});
+
+test("non-transient provider error converts queued steering to FIFO follow-up turns", async () => {
+  const firstProviderEntered = await Effect.runPromise(Deferred.make<void>());
+  const releaseFirstProvider = await Effect.runPromise(Deferred.make<void>());
+  const convertedTurnsSettled = await Effect.runPromise(Deferred.make<void>());
+  const contexts: Array<ReadonlyArray<ContextItem>> = [];
+  const observed: Array<Progress> = [];
+  let settlements = 0;
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: (context) => {
+      contexts.push(context);
+      requests += 1;
+      if (requests === 1) {
+        return Stream.fromEffect(
+          Deferred.succeed(firstProviderEntered, undefined).pipe(
+            Effect.zipRight(Deferred.await(releaseFirstProvider)),
+            Effect.zipRight(
+              Effect.fail(
+                new ProviderError({ message: "Permanent Provider failure.", transient: false }),
+              ),
+            ),
+          ),
+        );
+      }
+      return Stream.fromIterable([
+        { _tag: "textDelta" as const, text: `Follow-up answer ${requests}.` },
+        { _tag: "done" as const, stopReason: "done" as const },
+      ]);
+    },
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const progress = yield* Effect.fork(
+        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+          Effect.sync(() => observed.push(item)).pipe(
+            Effect.zipRight(
+              item._tag === "turnSettled" && ++settlements === 3
+                ? Deferred.succeed(convertedTurnsSettled, undefined)
+                : Effect.void,
+            ),
+          ),
+        ),
+      );
+      yield* Effect.yieldNow();
+      const running = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      yield* Deferred.await(firstProviderEntered);
+      yield* turns.steer(session.id, "Recover first");
+      yield* turns.steer(session.id, "Recover second");
+      yield* Deferred.succeed(releaseFirstProvider, undefined);
+      const settled = yield* Fiber.join(running);
+      const followUpsSettled = yield* Deferred.await(convertedTurnsSettled).pipe(
+        Effect.timeoutOption("100 millis"),
+      );
+      yield* Fiber.interrupt(progress);
+      return {
+        branch: yield* journal.readBranch(session.id),
+        followUpsSettled,
+        settled,
+      };
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+
+  expect(result.settled).toEqual({ stopReason: "error" });
+  expect(Option.isSome(result.followUpsSettled)).toBe(true);
+  expect(requests).toBe(3);
+  expect(
+    observed.filter((item) => item._tag === "followUpQueued").map((item) => item.content),
+  ).toEqual(["Recover first", "Recover second"]);
+  expect(contexts[1]).toEqual([
+    { content: "Initial", role: "user" },
+    { content: "", role: "assistant" },
+    { content: "Recover first", role: "user" },
+  ]);
+  expect(contexts[2]?.at(-1)).toEqual({ content: "Recover second", role: "user" });
+  expect(result.branch.at(-1)).toMatchObject({
+    payload: { content: "Follow-up answer 3.", role: "assistant", stopReason: "done" },
+  });
+});
+
+test("abort in the settlement drain window prevents a queued steering loop", async () => {
+  const enteredSettling = await Effect.runPromise(Deferred.make<void>());
+  const releaseSettling = await Effect.runPromise(Deferred.make<void>());
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      return Stream.fromIterable([
+        { _tag: "textDelta" as const, text: "Completed round." },
+        { _tag: "done" as const, stopReason: "done" as const },
+      ]);
+    },
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const running = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      yield* Deferred.await(enteredSettling);
+      yield* turns.steer(session.id, "Do not loop");
+      const aborted = yield* turns.abortTurn(session.id);
+      yield* Deferred.succeed(releaseSettling, undefined);
+      const settled = yield* Fiber.join(running);
+      return {
+        aborted,
+        branch: yield* journal.readBranch(session.id),
+        settled,
+      };
+    }).pipe(
+      Effect.provide(testLayer(provider, pauseAssistantAppend(enteredSettling, releaseSettling))),
+    ),
+  );
+
+  expect(result.aborted).toEqual({ aborted: true, note: "loop-prevented", turnOrdinal: 1 });
+  expect(result.settled).toEqual({ stopReason: "done" });
+  expect(requests).toBe(1);
+  expect(result.branch.map((entry) => entry.payload)).toMatchObject([
+    {},
+    { content: "Initial", role: "user" },
+    { content: "Completed round.", role: "assistant", stopReason: "done" },
+  ]);
+  expect(result.branch).not.toContainEqual(
+    expect.objectContaining({ payload: expect.objectContaining({ content: "Do not loop" }) }),
+  );
+});
+
+test("abort during looped ASSEMBLING does not reuse text from the completed round", async () => {
+  const firstProviderEntered = await Effect.runPromise(Deferred.make<void>());
+  const releaseFirstProvider = await Effect.runPromise(Deferred.make<void>());
+  const loopAssembling = await Effect.runPromise(Deferred.make<void>());
+  const releaseLoopAssembling = await Effect.runPromise(Deferred.make<void>());
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      return Stream.fromEffect(
+        Deferred.succeed(firstProviderEntered, undefined).pipe(
+          Effect.zipRight(Deferred.await(releaseFirstProvider)),
+          Effect.as({ _tag: "textDelta" as const, text: "reply 1 text" }),
+        ),
+      ).pipe(Stream.concat(Stream.fromIterable([{ _tag: "done", stopReason: "done" }] as const)));
+    },
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const running = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      yield* Deferred.await(firstProviderEntered);
+      yield* turns.steer(session.id, "Loop once");
+      yield* Deferred.succeed(releaseFirstProvider, undefined);
+      yield* Deferred.await(loopAssembling);
+      const aborted = yield* turns.abortTurn(session.id);
+      yield* Deferred.succeed(releaseLoopAssembling, undefined);
+      return {
+        aborted,
+        branch: yield* journal.readBranch(session.id),
+        settled: yield* Fiber.join(running),
+      };
+    }).pipe(
+      Effect.provide(
+        testLayer(provider, pauseBranchRead(3, loopAssembling, releaseLoopAssembling)),
+      ),
+    ),
+  );
+
+  expect(requests).toBe(1);
+  expect(result.aborted).toEqual({ aborted: true, turnOrdinal: 1 });
+  expect(result.settled).toEqual({ stopReason: "aborted" });
+  expect(result.branch.at(-1)).toMatchObject({
+    payload: { content: "", role: "assistant", stopReason: "aborted" },
+  });
 });
 
 test("prompt during a running turn routes steer mode to steering and defaults to follow-up", async () => {
@@ -488,6 +777,150 @@ test("steering while IDLE rejects typed as phase-invalid", async () => {
     message: "Steering requires a running turn.",
     reason: "phase_invalid_command",
   });
+});
+
+test("runTurn steer delivery at IDLE starts a normal turn", async () => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const settled = yield* turns.runTurn(session.id, "Start from IDLE", {
+        deliveryMode: "steer",
+      });
+      return { branch: yield* journal.readBranch(session.id), settled };
+    }).pipe(
+      Effect.provide(
+        testLayer(
+          scriptedProvider([
+            { _tag: "textDelta", text: "Started." },
+            { _tag: "done", stopReason: "done" },
+          ]),
+        ),
+      ),
+    ),
+  );
+
+  expect(result.settled).toEqual({ stopReason: "done" });
+  expect(result.branch.map((entry) => entry.payload)).toMatchObject([
+    {},
+    { content: "Start from IDLE", role: "user" },
+    { content: "Started.", role: "assistant", stopReason: "done" },
+  ]);
+  expect(result.branch[1]?.payload).not.toHaveProperty("deliveryMode");
+});
+
+test("runTurn steer delivery converts to follow-up after settlement closes steering", async () => {
+  const settlementCountEntered = await Effect.runPromise(Deferred.make<void>());
+  const releaseSettlementCount = await Effect.runPromise(Deferred.make<void>());
+  const observed: Array<Progress> = [];
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      return Stream.fromIterable([
+        { _tag: "textDelta" as const, text: requests === 1 ? "First." : "Follow-up." },
+        { _tag: "done" as const, stopReason: "done" as const },
+      ]);
+    },
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const progress = yield* Effect.fork(
+        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+          Effect.sync(() => observed.push(item)),
+        ),
+      );
+      yield* Effect.yieldNow();
+      const initial = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      yield* Deferred.await(settlementCountEntered);
+      const raced = yield* Effect.fork(
+        turns.runTurn(session.id, "Race follow-up", { deliveryMode: "steer" }),
+      );
+      yield* Effect.yieldNow();
+      yield* Deferred.succeed(releaseSettlementCount, undefined);
+      const results = yield* Effect.all([Fiber.join(initial), Fiber.join(raced)], {
+        concurrency: "unbounded",
+      });
+      yield* Fiber.interrupt(progress);
+      return { branch: yield* journal.readBranch(session.id), results };
+    }).pipe(
+      Effect.provide(
+        testLayer(provider, pauseSettlementCount(settlementCountEntered, releaseSettlementCount)),
+      ),
+    ),
+  );
+
+  expect(result.results).toEqual([{ stopReason: "done" }, { stopReason: "done" }]);
+  expect(requests).toBe(2);
+  expect(observed).toContainEqual({ _tag: "followUpQueued", content: "Race follow-up" });
+  expect(result.branch.map((entry) => entry.payload)).toMatchObject([
+    {},
+    { content: "Initial", role: "user" },
+    { content: "First.", role: "assistant", stopReason: "done" },
+    { content: "Race follow-up", role: "user" },
+    { content: "Follow-up.", role: "assistant", stopReason: "done" },
+  ]);
+});
+
+test("explicit steer converts to follow-up after settlement closes steering", async () => {
+  const settlementCountEntered = await Effect.runPromise(Deferred.make<void>());
+  const releaseSettlementCount = await Effect.runPromise(Deferred.make<void>());
+  const secondSettled = await Effect.runPromise(Deferred.make<void>());
+  let settlements = 0;
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      return Stream.fromIterable([
+        { _tag: "textDelta" as const, text: requests === 1 ? "First." : "Follow-up." },
+        { _tag: "done" as const, stopReason: "done" as const },
+      ]);
+    },
+  };
+
+  const branch = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const progress = yield* Effect.fork(
+        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+          item._tag === "turnSettled" && ++settlements === 2
+            ? Deferred.succeed(secondSettled, undefined)
+            : Effect.void,
+        ),
+      );
+      const initial = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      yield* Deferred.await(settlementCountEntered);
+      yield* turns.steer(session.id, "Explicit follow-up");
+      yield* Deferred.succeed(releaseSettlementCount, undefined);
+      yield* Fiber.join(initial);
+      yield* Deferred.await(secondSettled);
+      yield* Fiber.interrupt(progress);
+      return yield* journal.readBranch(session.id);
+    }).pipe(
+      Effect.provide(
+        testLayer(provider, pauseSettlementCount(settlementCountEntered, releaseSettlementCount)),
+      ),
+    ),
+  );
+
+  expect(requests).toBe(2);
+  expect(branch.map((entry) => entry.payload)).toMatchObject([
+    {},
+    { content: "Initial", role: "user" },
+    { content: "First.", role: "assistant", stopReason: "done" },
+    { content: "Explicit follow-up", role: "user" },
+    { content: "Follow-up.", role: "assistant", stopReason: "done" },
+  ]);
 });
 
 test("tool calls append results in call order while completion order appears only in progress", async () => {
@@ -801,7 +1234,7 @@ test("tool defects remain model-visible and the turn continues after healthy sib
   });
 });
 
-test("a looping tool-call provider settles at the configured round bound", async () => {
+test("a looping tool-call provider settles at the configured provider round bound", async () => {
   let requests = 0;
   const provider: ProviderService = {
     streamAssistant: () => {
@@ -829,18 +1262,73 @@ test("a looping tool-call provider settles at the configured round bound", async
       const sessions = yield* Sessions;
       const turns = yield* Turns;
       const session = yield* sessions.create();
-      const settled = yield* turns.runTurn(session.id, "Loop", { maxToolRounds: 2 });
+      const settled = yield* turns.runTurn(session.id, "Loop", { maxProviderRounds: 2 });
       return { branch: yield* journal.readBranch(session.id), settled };
     }).pipe(Effect.provide(testLayer(provider, undefined, ToolRegistryLive([defineTool(loop)])))),
   );
 
-  expect(requests).toBe(3);
+  expect(requests).toBe(2);
   expect(result.settled).toEqual({ stopReason: "error" });
   expect(result.branch.at(-1)).toMatchObject({
     payload: {
-      content: "Maximum tool round bound of 2 exceeded.",
+      content: "Maximum provider round bound of 2 exceeded.",
       diagnostic: {
-        detail: "Maximum tool round bound of 2 exceeded.",
+        detail: "Maximum provider round bound of 2 exceeded.",
+        reason: "turn_failure",
+      },
+      role: "assistant",
+      stopReason: "error",
+    },
+  });
+});
+
+test("steering-driven loops settle at the configured provider round bound", async () => {
+  const firstEntered = await Effect.runPromise(Deferred.make<void>());
+  const releaseFirst = await Effect.runPromise(Deferred.make<void>());
+  const secondEntered = await Effect.runPromise(Deferred.make<void>());
+  const releaseSecond = await Effect.runPromise(Deferred.make<void>());
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      const entered = requests === 1 ? firstEntered : secondEntered;
+      const release = requests === 1 ? releaseFirst : releaseSecond;
+      return Stream.fromEffect(
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.zipRight(Deferred.await(release)),
+          Effect.as({ _tag: "done" as const, stopReason: "done" as const }),
+        ),
+      );
+    },
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const running = yield* Effect.fork(
+        turns.runTurn(session.id, "Loop", { maxProviderRounds: 2 }),
+      );
+      yield* Deferred.await(firstEntered);
+      yield* turns.steer(session.id, "Loop one");
+      yield* Deferred.succeed(releaseFirst, undefined);
+      yield* Deferred.await(secondEntered);
+      yield* turns.steer(session.id, "Loop two");
+      yield* Deferred.succeed(releaseSecond, undefined);
+      const settled = yield* Fiber.join(running);
+      return { branch: yield* journal.readBranch(session.id), settled };
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+
+  expect(requests).toBe(2);
+  expect(result.settled).toEqual({ stopReason: "error" });
+  expect(result.branch.at(-1)).toMatchObject({
+    payload: {
+      content: "Maximum provider round bound of 2 exceeded.",
+      diagnostic: {
+        detail: "Maximum provider round bound of 2 exceeded.",
         reason: "turn_failure",
       },
       role: "assistant",
@@ -1363,6 +1851,9 @@ test("turn capacity options reject invalid values before enqueue", async () => {
       const sessions = yield* Sessions;
       const turns = yield* Turns;
       const session = yield* sessions.create();
+      expect(() => turns.runTurn(session.id, "Invalid", { maxProviderRounds: 0 })).toThrow(
+        "Maximum provider rounds must be a positive safe integer.",
+      );
       expect(() => turns.runTurn(session.id, "Invalid", { maxToolRounds: 0 })).toThrow(
         "Maximum tool rounds must be a positive safe integer.",
       );
@@ -1373,7 +1864,170 @@ test("turn capacity options reject invalid values before enqueue", async () => {
   );
 });
 
-test("abort after assistant settlement begins leaves the active turn untouched", async () => {
+test("runTurn threads expectedRevision to the mailbox command", async () => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const error = yield* Effect.flip(
+        turns.runTurn(session.id, "Stale", { expectedRevision: session.revision - 1 }),
+      );
+      return { branch: yield* journal.readBranch(session.id), error };
+    }).pipe(Effect.provide(testLayer(scriptedProvider([])))),
+  );
+
+  expect(result.error).toMatchObject({
+    _tag: "StaleRevision",
+    actual: 1,
+    expected: 0,
+  });
+  expect(result.branch).toHaveLength(1);
+});
+
+test("a prompt in the active-turn registration gap publishes turnQueued", async () => {
+  const registrationEntered = await Effect.runPromise(Deferred.make<void>());
+  const releaseRegistration = await Effect.runPromise(Deferred.make<void>());
+  const turnQueued = await Effect.runPromise(Deferred.make<void>());
+  const observed: Array<Progress> = [];
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const progress = yield* Effect.fork(
+        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+          Effect.sync(() => observed.push(item)).pipe(
+            Effect.zipRight(
+              item._tag === "turnQueued" ? Deferred.succeed(turnQueued, undefined) : Effect.void,
+            ),
+          ),
+        ),
+      );
+      yield* Effect.yieldNow();
+      const first = yield* Effect.fork(turns.runTurn(session.id, "First"));
+      yield* Deferred.await(registrationEntered);
+      const second = yield* Effect.fork(turns.runTurn(session.id, "Second"));
+      yield* Deferred.await(turnQueued);
+      yield* Deferred.succeed(releaseRegistration, undefined);
+      const results = yield* Effect.all([Fiber.join(first), Fiber.join(second)], {
+        concurrency: "unbounded",
+      });
+      yield* Fiber.interrupt(progress);
+      return { branch: yield* journal.readBranch(session.id), results };
+    }).pipe(
+      Effect.provide(
+        testLayer(
+          scriptedProvider([{ _tag: "done", stopReason: "done" }]),
+          pauseBranchRead(1, registrationEntered, releaseRegistration),
+        ),
+      ),
+    ),
+  );
+
+  expect(result.results).toEqual([{ stopReason: "done" }, { stopReason: "done" }]);
+  expect(observed).toContainEqual({ _tag: "turnQueued", content: "Second" });
+  expect(result.branch.map((entry) => entry.payload)).toMatchObject([
+    {},
+    { content: "First", role: "user" },
+    { role: "assistant", stopReason: "done" },
+    { content: "Second", role: "user" },
+    { role: "assistant", stopReason: "done" },
+  ]);
+});
+
+test("steering queue rejects the item beyond capacity with TurnQueueFull", async () => {
+  const providerEntered = await Effect.runPromise(Deferred.make<void>());
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const running = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      yield* Deferred.await(providerEntered);
+      yield* Effect.forEach(
+        Array.from({ length: TURN_INPUT_QUEUE_CAPACITY }, (_, index) => index),
+        (index) => turns.steer(session.id, `Steering ${index}`),
+      );
+      const error = yield* Effect.flip(turns.steer(session.id, "Overflow"));
+      yield* turns.abortTurn(session.id);
+      yield* Fiber.join(running);
+      return { error, session };
+    }).pipe(
+      Effect.provide(
+        testLayer({
+          streamAssistant: () =>
+            Stream.fromEffect(
+              Deferred.succeed(providerEntered, undefined).pipe(Effect.zipRight(Effect.never)),
+            ),
+        }),
+      ),
+    ),
+  );
+
+  expect(result.error).toMatchObject({
+    _tag: "TurnQueueFull",
+    capacity: TURN_INPUT_QUEUE_CAPACITY,
+    queue: "steering",
+    sessionId: result.session.id,
+  });
+});
+
+test("follow-up queue rejects the item beyond capacity with TurnQueueFull", async () => {
+  const allQueued = await Effect.runPromise(Deferred.make<void>());
+  const providerEntered = await Effect.runPromise(Deferred.make<void>());
+  let queuedCount = 0;
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      return requests === 1
+        ? Stream.fromEffect(
+            Deferred.succeed(providerEntered, undefined).pipe(Effect.zipRight(Effect.never)),
+          )
+        : Stream.fromIterable([{ _tag: "done", stopReason: "done" }]);
+    },
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const progress = yield* Effect.fork(
+        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+          item._tag === "followUpQueued" && ++queuedCount === TURN_INPUT_QUEUE_CAPACITY
+            ? Deferred.succeed(allQueued, undefined)
+            : Effect.void,
+        ),
+      );
+      const running = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      yield* Deferred.await(providerEntered);
+      const followers = yield* Effect.forEach(
+        Array.from({ length: TURN_INPUT_QUEUE_CAPACITY }, (_, index) => index),
+        (index) => Effect.fork(turns.runTurn(session.id, `Follow-up ${index}`)),
+      );
+      yield* Deferred.await(allQueued);
+      const error = yield* Effect.flip(turns.runTurn(session.id, "Overflow"));
+      yield* turns.abortTurn(session.id);
+      yield* Fiber.join(running);
+      yield* Effect.forEach(followers, Fiber.join, { concurrency: "unbounded" });
+      yield* Fiber.interrupt(progress);
+      return { error, session };
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+
+  expect(result.error).toMatchObject({
+    _tag: "TurnQueueFull",
+    capacity: TURN_INPUT_QUEUE_CAPACITY,
+    queue: "followUp",
+    sessionId: result.session.id,
+  });
+});
+
+test("abort after assistant settlement begins prevents any settlement loop", async () => {
   const entered = await Effect.runPromise(Deferred.make<void>());
   const release = await Effect.runPromise(Deferred.make<void>());
   const result = await Effect.runPromise(
@@ -1399,8 +2053,102 @@ test("abort after assistant settlement begins leaves the active turn untouched",
     ),
   );
 
-  expect(result.aborted).toEqual({ aborted: false, reason: "settling", turnOrdinal: 1 });
+  expect(result.aborted).toEqual({ aborted: true, note: "loop-prevented", turnOrdinal: 1 });
   expect(result.settled).toEqual({ stopReason: "done" });
+});
+
+test("kernel.turn records the accumulated steering drain count once at settlement", async () => {
+  const firstEntered = await Effect.runPromise(Deferred.make<void>());
+  const releaseFirst = await Effect.runPromise(Deferred.make<void>());
+  const secondEntered = await Effect.runPromise(Deferred.make<void>());
+  const releaseSecond = await Effect.runPromise(Deferred.make<void>());
+  const spans: Array<CapturedSpan> = [];
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      if (requests === 3) {
+        return Stream.fromIterable([{ _tag: "done", stopReason: "done" }]);
+      }
+      const entered = requests === 1 ? firstEntered : secondEntered;
+      const release = requests === 1 ? releaseFirst : releaseSecond;
+      return Stream.fromEffect(
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.zipRight(Deferred.await(release)),
+          Effect.as({ _tag: "done" as const, stopReason: "done" as const }),
+        ),
+      );
+    },
+  };
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const running = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      yield* Deferred.await(firstEntered);
+      yield* turns.steer(session.id, "First steering");
+      yield* Deferred.succeed(releaseFirst, undefined);
+      yield* Deferred.await(secondEntered);
+      yield* turns.steer(session.id, "Second steering");
+      yield* Deferred.succeed(releaseSecond, undefined);
+      yield* Fiber.join(running);
+    }).pipe(Effect.provide(testLayer(provider).pipe(Layer.provide(tracerLayer(spans))))),
+  );
+
+  const turnSpan = spans.find((span) => span.name === "kernel.turn");
+  expect(turnSpan?.attributes.get("steeringDrainedCount")).toBe(2);
+});
+
+test("follow-up drain count is recorded on kernel.turn instead of kernel.command", async () => {
+  const followUpQueued = await Effect.runPromise(Deferred.make<void>());
+  const providerEntered = await Effect.runPromise(Deferred.make<void>());
+  const releaseProvider = await Effect.runPromise(Deferred.make<void>());
+  const spans: Array<CapturedSpan> = [];
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      return requests === 1
+        ? Stream.fromEffect(
+            Deferred.succeed(providerEntered, undefined).pipe(
+              Effect.zipRight(Deferred.await(releaseProvider)),
+              Effect.as({ _tag: "done" as const, stopReason: "done" as const }),
+            ),
+          )
+        : Stream.fromIterable([{ _tag: "done", stopReason: "done" }]);
+    },
+  };
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const progress = yield* Effect.fork(
+        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+          item._tag === "followUpQueued"
+            ? Deferred.succeed(followUpQueued, undefined)
+            : Effect.void,
+        ),
+      );
+      const initial = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      yield* Deferred.await(providerEntered);
+      const followUp = yield* Effect.fork(turns.runTurn(session.id, "Follow-up"));
+      yield* Deferred.await(followUpQueued);
+      yield* Deferred.succeed(releaseProvider, undefined);
+      yield* Fiber.join(initial);
+      yield* Fiber.join(followUp);
+      yield* Fiber.interrupt(progress);
+    }).pipe(Effect.provide(testLayer(provider).pipe(Layer.provide(tracerLayer(spans))))),
+  );
+
+  const turnSpans = spans.filter((span) => span.name === "kernel.turn");
+  const commandSpans = spans.filter((span) => span.name === "kernel.command");
+  expect(turnSpans).toHaveLength(2);
+  expect(turnSpans[1]?.attributes.get("followUpDrainedCount")).toBe(1);
+  expect(commandSpans.every((span) => !span.attributes.has("followUpDrainedCount"))).toBe(true);
 });
 
 test("turn spans carry session id, turn ordinal, appended entry ids, and stop reason", async () => {

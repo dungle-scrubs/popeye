@@ -24,6 +24,7 @@ export const ProgressSchema = Schema.Union(
   Schema.TaggedStruct("progressDropped", { count: Schema.Number }),
   Schema.TaggedStruct("steeringApplied", { content: Schema.String }),
   Schema.TaggedStruct("steeringQueued", { content: Schema.String }),
+  Schema.TaggedStruct("turnQueued", { content: Schema.String }),
   Schema.TaggedStruct("toolCompleted", {
     isError: Schema.Boolean,
     toolCallId: Schema.String,

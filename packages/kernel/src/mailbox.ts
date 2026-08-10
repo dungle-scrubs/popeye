@@ -36,6 +36,7 @@ export interface MailboxOptions {
 export interface MailboxCommand<TValue, TError = never> {
   readonly expectedRevision?: number;
   readonly name: string;
+  readonly onAccepted?: Effect.Effect<void>;
   readonly run: (revision: number) => Effect.Effect<TValue, TError>;
 }
 
@@ -337,6 +338,9 @@ export const MailboxLive = (options: MailboxOptions = {}): Layer.Layer<Mailbox, 
               return yield* closed
                 ? new MailboxClosed({ sessionId })
                 : new MailboxFull({ capacity, sessionId });
+            }
+            if (command.onAccepted !== undefined) {
+              yield* command.onAccepted;
             }
             return yield* Deferred.await(deferred);
           }),

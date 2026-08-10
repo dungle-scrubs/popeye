@@ -42,7 +42,10 @@ export interface TurnOptions {
   readonly abortGraceMs?: number;
   readonly contextBudget?: number;
   readonly deliveryMode?: "followUp" | "steer";
+  readonly expectedRevision?: number;
   readonly maxAttempts?: number;
+  readonly maxProviderRounds?: number;
+  /** @deprecated Use maxProviderRounds. */
   readonly maxToolRounds?: number;
   readonly toolConcurrency?: number;
 }
@@ -57,7 +60,12 @@ export type AbortTurnResult =
       readonly reason: "none" | "settling";
       readonly turnOrdinal: number | undefined;
     }
-  | { readonly aborted: true; readonly turnOrdinal: number };
+  | { readonly aborted: true; readonly turnOrdinal: number }
+  | {
+      readonly aborted: true;
+      readonly note: "loop-prevented";
+      readonly turnOrdinal: number;
+    };
 
 export type TurnFailure = JournalFailure | MailboxFailure | ProtocolError | TurnQueueFull;
 
@@ -84,18 +92,42 @@ interface ActiveTurn {
   >;
   readonly fiber: Fiber.Fiber<TurnResult, BudgetExceeded | JournalFailure | ProviderError>;
   readonly forceAbort: Effect.Effect<void>;
-  readonly stage: Ref.Ref<"running" | "settling">;
+  readonly stage: Ref.Ref<TurnStage>;
   readonly steering: Ref.Ref<SteeringState>;
+  readonly steeringMutex: Effect.Semaphore;
   readonly turnOrdinal: number;
+}
+
+type TurnStage = "finishing" | "running" | "settling" | "settling-aborted";
+
+interface SteeringItem {
+  readonly content: string;
+  readonly options: TurnOptions;
 }
 
 interface SteeringState {
   readonly accepting: boolean;
-  readonly items: ReadonlyArray<string>;
+  readonly items: ReadonlyArray<SteeringItem>;
 }
+
+type OfferSteeringResult = { readonly _tag: "closed" } | { readonly _tag: "queued" };
+
+type OfferSteeringCommit = OfferSteeringResult | { readonly _tag: "full" };
+
+type SettlementSteeringDecision =
+  | { readonly _tag: "convert"; readonly items: ReadonlyArray<SteeringItem> }
+  | { readonly _tag: "discard" }
+  | { readonly _tag: "finish" }
+  | { readonly _tag: "loop"; readonly items: ReadonlyArray<SteeringItem> };
+
+type SettlementSteeringMode = "convert" | "discard" | "loop";
 
 interface FollowUpItem {
   readonly content: string;
+}
+
+interface TurnRegistration {
+  readonly token: symbol;
 }
 
 type AssistantDiagnostic =
@@ -107,7 +139,7 @@ type AssistantDiagnostic =
 
 const DEFAULT_CONTEXT_BUDGET = 32_000;
 const DEFAULT_MAX_ATTEMPTS = 3;
-const DEFAULT_MAX_TOOL_ROUNDS = 16;
+const DEFAULT_MAX_PROVIDER_ROUNDS = 32;
 const DEFAULT_ABORT_GRACE_MS = 5_000;
 
 /** Maximum steering or follow-up items retained per session. Excess input fails typed. */
@@ -195,12 +227,24 @@ const validateTurnOptions = (options: TurnOptions): void => {
   if (options.maxAttempts !== undefined) {
     validatePositiveInteger("Maximum attempts", options.maxAttempts);
   }
+  if (options.maxProviderRounds !== undefined) {
+    validatePositiveInteger("Maximum provider rounds", options.maxProviderRounds);
+  }
   if (options.maxToolRounds !== undefined) {
     validatePositiveInteger("Maximum tool rounds", options.maxToolRounds);
   }
   if (options.toolConcurrency !== undefined) {
     validatePositiveInteger("Tool concurrency", options.toolConcurrency);
   }
+};
+
+const providerRoundBound = (options: TurnOptions): number =>
+  options.maxProviderRounds ?? options.maxToolRounds ?? DEFAULT_MAX_PROVIDER_ROUNDS;
+
+const withoutExpectedRevision = (options: TurnOptions): TurnOptions => {
+  const next = { ...options };
+  delete next.expectedRevision;
+  return next;
 };
 
 const phaseChanged = (progress: ProgressHub["Type"], sessionId: SessionId, phase: TurnPhase) =>
@@ -228,6 +272,57 @@ export const TurnsLive = (): Layer.Layer<
       const toolRegistry = yield* ToolRegistry;
       const active = yield* Ref.make<Map<SessionId, ActiveTurn>>(new Map());
       const followUps = yield* Ref.make<Map<SessionId, ReadonlyArray<FollowUpItem>>>(new Map());
+      const turnRegistrations = yield* Ref.make<Map<SessionId, ReadonlyArray<TurnRegistration>>>(
+        new Map(),
+      );
+
+      const offerTurnRegistration = (
+        sessionId: SessionId,
+      ): Effect.Effect<
+        { readonly queued: boolean; readonly registration: TurnRegistration },
+        TurnQueueFull
+      > =>
+        Ref.modify(turnRegistrations, (current) => {
+          const registrations = current.get(sessionId) ?? [];
+          if (registrations.length > TURN_INPUT_QUEUE_CAPACITY) {
+            return [undefined, current];
+          }
+          const registration: TurnRegistration = { token: Symbol("turn-registration") };
+          const next = new Map(current);
+          next.set(sessionId, [...registrations, registration]);
+          return [{ queued: registrations.length > 0, registration }, next];
+        }).pipe(
+          Effect.flatMap((result) =>
+            result === undefined
+              ? Effect.fail(
+                  new TurnQueueFull({
+                    capacity: TURN_INPUT_QUEUE_CAPACITY,
+                    queue: "followUp",
+                    sessionId,
+                  }),
+                )
+              : Effect.succeed(result),
+          ),
+        );
+
+      const removeTurnRegistration = (
+        sessionId: SessionId,
+        registration: TurnRegistration,
+      ): Effect.Effect<void> =>
+        Ref.update(turnRegistrations, (current) => {
+          const registrations = current.get(sessionId);
+          if (registrations === undefined) {
+            return current;
+          }
+          const next = new Map(current);
+          const remaining = registrations.filter((item) => item !== registration);
+          if (remaining.length === 0) {
+            next.delete(sessionId);
+          } else {
+            next.set(sessionId, remaining);
+          }
+          return next;
+        });
 
       const offerFollowUp = (
         sessionId: SessionId,
@@ -276,26 +371,35 @@ export const TurnsLive = (): Layer.Layer<
         turn: ActiveTurn,
         sessionId: SessionId,
         content: string,
-      ): Effect.Effect<"closed" | "queued", TurnQueueFull> =>
-        Ref.modify(turn.steering, (current) => {
-          if (!current.accepting) {
-            return ["closed" as const, current];
-          }
-          if (current.items.length >= TURN_INPUT_QUEUE_CAPACITY) {
-            return ["full" as const, current];
-          }
-          return ["queued" as const, { ...current, items: [...current.items, content] }];
-        }).pipe(
-          Effect.flatMap((result) =>
-            result === "full"
-              ? Effect.fail(
+        options: TurnOptions,
+      ): Effect.Effect<OfferSteeringResult, TurnQueueFull> =>
+        turn.steeringMutex.withPermits(1)(
+          Ref.modify<SteeringState, OfferSteeringCommit>(turn.steering, (current) => {
+            if (!current.accepting) {
+              return [{ _tag: "closed" }, current];
+            }
+            if (current.items.length >= TURN_INPUT_QUEUE_CAPACITY) {
+              return [{ _tag: "full" }, current];
+            }
+            const item: SteeringItem = { content, options };
+            return [{ _tag: "queued" }, { ...current, items: [...current.items, item] }];
+          }).pipe(
+            Effect.flatMap((result): Effect.Effect<OfferSteeringResult, TurnQueueFull> => {
+              if (result._tag === "full") {
+                return Effect.fail(
                   new TurnQueueFull({
                     capacity: TURN_INPUT_QUEUE_CAPACITY,
                     queue: "steering",
                     sessionId,
                   }),
-                )
-              : Effect.succeed(result),
+                );
+              }
+              return result._tag === "queued"
+                ? progress
+                    .publish(sessionId, { _tag: "steeringQueued", content })
+                    .pipe(Effect.as<OfferSteeringResult>(result))
+                : Effect.succeed<OfferSteeringResult>(result);
+            }),
           ),
         );
 
@@ -324,6 +428,7 @@ export const TurnsLive = (): Layer.Layer<
         sessionId: SessionId,
         content: string,
         options: TurnOptions,
+        registration: TurnRegistration | undefined,
       ): Effect.Effect<TurnResult, BudgetExceeded | JournalFailure | ProviderError> =>
         Effect.gen(function* () {
           const priorBranch = yield* journal.readBranch(sessionId);
@@ -344,55 +449,150 @@ export const TurnsLive = (): Layer.Layer<
             completed: new Map(),
             finalized: false,
           });
-          const stage = yield* Ref.make<"running" | "settling">("running");
+          const stage = yield* Ref.make<TurnStage>("running");
           const steering = yield* Ref.make<SteeringState>({ accepting: true, items: [] });
+          const steeringDrainedCount = yield* Ref.make(0);
+          const steeringMutex = yield* Effect.makeSemaphore(1);
           const stopReason = yield* Ref.make<AssistantStopReason>("done");
           const terminalDiagnostic = yield* Ref.make<AssistantDiagnostic | undefined>(undefined);
           const text = yield* Ref.make("");
           const toolCalls = yield* Ref.make<ReadonlyArray<BufferedToolCall>>([]);
-          const toolRounds = yield* Ref.make(0);
+          const providerRounds = yield* Ref.make(0);
           const executingCalls = yield* Ref.make<ReadonlyArray<ToolCall> | undefined>(undefined);
           const persistedToolCallIds = yield* Ref.make<Set<string>>(new Set());
           const persistenceMutex = yield* Effect.makeSemaphore(1);
 
-          const takeSteering = (closeWhenEmpty: boolean): Effect.Effect<ReadonlyArray<string>> =>
-            Ref.modify(steering, (current) => [
-              current.items,
-              {
-                accepting: closeWhenEmpty && current.items.length === 0 ? false : current.accepting,
-                items: [],
-              },
-            ]);
+          const takeSteering = (
+            closeWhenEmpty: boolean,
+          ): Effect.Effect<ReadonlyArray<SteeringItem>> =>
+            steeringMutex.withPermits(1)(
+              Ref.modify(steering, (current) => [
+                current.items,
+                {
+                  accepting:
+                    closeWhenEmpty && current.items.length === 0 ? false : current.accepting,
+                  items: [],
+                },
+              ]),
+            );
+
+          const decideSettlementSteering = (
+            mode: SettlementSteeringMode,
+          ): Effect.Effect<SettlementSteeringDecision> =>
+            steeringMutex.withPermits(1)(
+              Effect.gen(function* () {
+                const current = yield* Ref.get(steering);
+                const decision = yield* Ref.modify<TurnStage, SettlementSteeringDecision>(
+                  stage,
+                  (currentStage) => {
+                    if (currentStage === "settling-aborted") {
+                      return [{ _tag: "discard" } as const, "finishing" as const];
+                    }
+                    if (mode === "loop" && current.items.length > 0) {
+                      return [{ _tag: "loop", items: current.items } as const, "running" as const];
+                    }
+                    if (mode === "convert" && current.items.length > 0) {
+                      return [
+                        { _tag: "convert", items: current.items } as const,
+                        "finishing" as const,
+                      ];
+                    }
+                    return [
+                      { _tag: mode === "discard" ? "discard" : "finish" } as const,
+                      "finishing" as const,
+                    ];
+                  },
+                );
+                yield* Ref.set(steering, {
+                  accepting: decision._tag === "loop",
+                  items: [],
+                });
+                return decision;
+              }),
+            );
 
           const applySteering = (
-            items: ReadonlyArray<string>,
+            items: ReadonlyArray<SteeringItem>,
           ): Effect.Effect<void, JournalFailure> =>
             Effect.forEach(
               items,
-              (steeringContent) =>
+              (item) =>
                 journal
                   .appendEntry(
                     sessionId,
                     EntryDraftSchema.make({
                       kind: "message",
-                      payload: { content: steeringContent, deliveryMode: "steer", role: "user" },
+                      payload: { content: item.content, deliveryMode: "steer", role: "user" },
                     }),
                   )
                   .pipe(
                     Effect.zipRight(
                       progress.publish(sessionId, {
                         _tag: "steeringApplied",
-                        content: steeringContent,
+                        content: item.content,
                       }),
                     ),
                   ),
               { concurrency: 1 },
             ).pipe(
-              Effect.zipRight(Effect.annotateCurrentSpan({ steeringDrainedCount: items.length })),
+              Effect.zipRight(Ref.update(steeringDrainedCount, (count) => count + items.length)),
             );
+
+          const queueConvertedSteering = (
+            items: ReadonlyArray<SteeringItem>,
+          ): Effect.Effect<void> =>
+            Effect.gen(function* () {
+              const queued = items.map((item) => ({
+                followUp: { content: item.content } satisfies FollowUpItem,
+                options: withoutExpectedRevision(item.options),
+              }));
+              yield* Ref.update(followUps, (current) => {
+                const next = new Map(current);
+                next.set(sessionId, [
+                  ...(current.get(sessionId) ?? []),
+                  ...queued.map((item) => item.followUp),
+                ]);
+                return next;
+              });
+              yield* Effect.forEach(queued, (item) =>
+                progress.publish(sessionId, {
+                  _tag: "followUpQueued",
+                  content: item.followUp.content,
+                }),
+              );
+              yield* Effect.forkDaemon(
+                Effect.forEach(
+                  queued,
+                  (item) =>
+                    Effect.gen(function* () {
+                      const accepted = yield* Deferred.make<void>();
+                      yield* Effect.forkDaemon(
+                        enqueueTurn(
+                          sessionId,
+                          item.followUp.content,
+                          item.options,
+                          item.followUp,
+                          undefined,
+                          Deferred.succeed(accepted, undefined).pipe(Effect.asVoid),
+                        ).pipe(
+                          Effect.ensuring(Deferred.succeed(accepted, undefined)),
+                          Effect.asVoid,
+                        ),
+                      );
+                      yield* Deferred.await(accepted);
+                    }),
+                  { concurrency: 1 },
+                ).pipe(Effect.asVoid),
+              );
+            });
 
           const finishSettlement = (reason: AssistantStopReason): Effect.Effect<void> =>
             Effect.gen(function* () {
+              yield* Ref.get(steeringDrainedCount).pipe(
+                Effect.flatMap((count) =>
+                  Effect.annotateCurrentSpan({ steeringDrainedCount: count }),
+                ),
+              );
               const revision = yield* journal
                 .countDurableLines(sessionId)
                 .pipe(Effect.catchAll(() => Effect.succeed(0)));
@@ -409,7 +609,7 @@ export const TurnsLive = (): Layer.Layer<
             diagnostic: AssistantDiagnostic | undefined,
             contentOverride: string | undefined = undefined,
             appendAssistant = true,
-            allowSteering = false,
+            steeringMode: SettlementSteeringMode = reason === "error" ? "convert" : "discard",
           ): Effect.Effect<boolean, JournalFailure> =>
             Effect.uninterruptible(
               Effect.gen(function* () {
@@ -441,18 +641,13 @@ export const TurnsLive = (): Layer.Layer<
                     stopReason: reason,
                   });
                 }
-                if (allowSteering) {
-                  const items = yield* takeSteering(true);
-                  if (items.length > 0) {
-                    yield* applySteering(items);
-                    yield* Ref.set(stage, "running");
-                    return true;
-                  }
-                } else {
-                  yield* Ref.update(steering, () => ({
-                    accepting: false,
-                    items: [],
-                  }));
+                const steeringDecision = yield* decideSettlementSteering(steeringMode);
+                if (steeringDecision._tag === "loop") {
+                  yield* applySteering(steeringDecision.items);
+                  return true;
+                }
+                if (steeringDecision._tag === "convert") {
+                  yield* queueConvertedSteering(steeringDecision.items);
                 }
                 yield* finishSettlement(reason);
                 return false;
@@ -525,10 +720,10 @@ export const TurnsLive = (): Layer.Layer<
                           { concurrency: 1 },
                         );
                         yield* Effect.annotateCurrentSpan({ interrupted: true });
-                        yield* settle("aborted", undefined, "");
+                        yield* settle("aborted", undefined, "", true, "discard");
                         return;
                       }
-                      yield* settle("aborted", undefined);
+                      yield* settle("aborted", undefined, undefined, true, "discard");
                     }).pipe(Effect.uninterruptible)
                   : Effect.void,
               ),
@@ -538,16 +733,36 @@ export const TurnsLive = (): Layer.Layer<
               ),
             );
 
+          const resetProviderBuffers = (): Effect.Effect<void> =>
+            Effect.all(
+              [
+                Ref.set(executingCalls, undefined),
+                Ref.set(stopReason, "done"),
+                Ref.set(terminalDiagnostic, undefined),
+                Ref.set(text, ""),
+                Ref.set(toolCalls, []),
+              ],
+              { discard: true },
+            );
+
           const consume = (
             context: ReadonlyArray<ContextItem>,
           ): Effect.Effect<void, ProviderError> =>
             Effect.suspend(() =>
               Effect.gen(function* () {
-                yield* Ref.set(executingCalls, undefined);
-                yield* Ref.set(stopReason, "done");
-                yield* Ref.set(terminalDiagnostic, undefined);
-                yield* Ref.set(text, "");
-                yield* Ref.set(toolCalls, []);
+                yield* resetProviderBuffers();
+                const providerRound = yield* Ref.updateAndGet(providerRounds, (count) => count + 1);
+                const maximumProviderRounds = providerRoundBound(options);
+                if (providerRound > maximumProviderRounds) {
+                  const detail = `Maximum provider round bound of ${maximumProviderRounds} exceeded.`;
+                  yield* Ref.set(text, detail);
+                  yield* Ref.set(terminalDiagnostic, {
+                    detail,
+                    reason: "turn_failure",
+                  });
+                  yield* Ref.set(stopReason, "error");
+                  return;
+                }
                 const attempt = yield* Ref.updateAndGet(attempts, (count) => count + 1);
                 const attemptProgress = yield* Ref.make<ReadonlyArray<Progress>>([]);
                 yield* Effect.annotateCurrentSpan({ attempt });
@@ -612,6 +827,7 @@ export const TurnsLive = (): Layer.Layer<
           > =>
             Effect.suspend(() =>
               Effect.gen(function* () {
+                yield* resetProviderBuffers();
                 yield* phaseChanged(progress, sessionId, "ASSEMBLING");
                 const branch = yield* journal.readBranch(sessionId);
                 const context = yield* foldContext(branch, {
@@ -653,17 +869,6 @@ export const TurnsLive = (): Layer.Layer<
                 );
                 if (calls.length === 0) {
                   const detail = "Provider returned stopReason toolCalls without any tool calls.";
-                  yield* Ref.set(text, detail);
-                  yield* Ref.set(terminalDiagnostic, {
-                    detail,
-                    reason: "turn_failure",
-                  });
-                  return "error";
-                }
-                const round = yield* Ref.updateAndGet(toolRounds, (count) => count + 1);
-                const maxToolRounds = options.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
-                if (round > maxToolRounds) {
-                  const detail = `Maximum tool round bound of ${maxToolRounds} exceeded.`;
                   yield* Ref.set(text, detail);
                   yield* Ref.set(terminalDiagnostic, {
                     detail,
@@ -747,7 +952,13 @@ export const TurnsLive = (): Layer.Layer<
             yield* Effect.annotateCurrentSpan({ sessionId, turnOrdinal, userEntryId: user.id });
             let reason = yield* request();
             while (
-              yield* settle(reason, yield* Ref.get(terminalDiagnostic), undefined, true, true)
+              yield* settle(
+                reason,
+                yield* Ref.get(terminalDiagnostic),
+                undefined,
+                true,
+                reason === "error" ? "convert" : "loop",
+              )
             ) {
               reason = yield* request();
             }
@@ -757,7 +968,7 @@ export const TurnsLive = (): Layer.Layer<
             Effect.catchAllCause((cause) =>
               Ref.get(stage).pipe(
                 Effect.flatMap((currentStage) => {
-                  if (currentStage === "settling") {
+                  if (currentStage !== "running") {
                     return Ref.get(abortSettleFailure).pipe(
                       Effect.flatMap((abortFailure) =>
                         abortFailure === undefined
@@ -843,9 +1054,13 @@ export const TurnsLive = (): Layer.Layer<
               forceAbort: settleAbort(),
               stage,
               steering,
+              steeringMutex,
               turnOrdinal,
             }),
           );
+          if (registration !== undefined) {
+            yield* removeTurnRegistration(sessionId, registration);
+          }
           yield* Deferred.succeed(start, undefined);
           const exit = yield* Deferred.await(completion);
           yield* Ref.update(active, (current) => {
@@ -861,10 +1076,16 @@ export const TurnsLive = (): Layer.Layer<
         content: string,
         options: TurnOptions,
         followUp: FollowUpItem | undefined = undefined,
+        registration: TurnRegistration | undefined = undefined,
+        onAccepted: Effect.Effect<void> | undefined = undefined,
       ): Effect.Effect<TurnResult, TurnFailure> =>
         mailbox
           .enqueue(sessionId, {
+            ...(options.expectedRevision === undefined
+              ? {}
+              : { expectedRevision: options.expectedRevision }),
             name: "turn",
+            ...(onAccepted === undefined ? {} : { onAccepted }),
             run: () =>
               (followUp === undefined
                 ? Effect.void
@@ -872,32 +1093,47 @@ export const TurnsLive = (): Layer.Layer<
                     Effect.zipRight(Effect.annotateCurrentSpan({ followUpDrainedCount: 1 })),
                   )
               ).pipe(
-                Effect.zipRight(
-                  execute(sessionId, content, options).pipe(
-                    Effect.withSpan("kernel.turn", { attributes: { sessionId } }),
-                    Effect.catchTag("BudgetExceeded", () =>
-                      Effect.succeed({ stopReason: "error" as const }),
-                    ),
-                    Effect.catchTag("ProviderError", () =>
-                      Effect.succeed({ stopReason: "error" as const }),
-                    ),
-                    Effect.catchAllCause((cause) =>
-                      Cause.isInterruptedOnly(cause)
-                        ? Effect.succeed({ stopReason: "aborted" as const })
-                        : Effect.failCause(cause),
-                    ),
-                  ),
+                Effect.zipRight(execute(sessionId, content, options, registration)),
+                Effect.withSpan("kernel.turn", { attributes: { sessionId } }),
+                Effect.catchTag("BudgetExceeded", () =>
+                  Effect.succeed({ stopReason: "error" as const }),
+                ),
+                Effect.catchTag("ProviderError", () =>
+                  Effect.succeed({ stopReason: "error" as const }),
+                ),
+                Effect.catchAllCause((cause) =>
+                  Cause.isInterruptedOnly(cause)
+                    ? Effect.succeed({ stopReason: "aborted" as const })
+                    : Effect.failCause(cause),
                 ),
               ),
           })
           .pipe(
             Effect.map((result) => result.value),
             Effect.catchAll((error) =>
-              followUp === undefined
-                ? Effect.fail(error)
-                : removeFollowUp(sessionId, followUp).pipe(Effect.zipRight(Effect.fail(error))),
+              (followUp === undefined ? Effect.void : removeFollowUp(sessionId, followUp)).pipe(
+                Effect.zipRight(
+                  registration === undefined
+                    ? Effect.void
+                    : removeTurnRegistration(sessionId, registration),
+                ),
+                Effect.zipRight(Effect.fail(error)),
+              ),
             ),
           );
+
+      const enqueueRegisteredTurn = (
+        sessionId: SessionId,
+        content: string,
+        options: TurnOptions,
+      ): Effect.Effect<TurnResult, TurnFailure> =>
+        Effect.gen(function* () {
+          const offered = yield* offerTurnRegistration(sessionId);
+          if (offered.queued) {
+            yield* progress.publish(sessionId, { _tag: "turnQueued", content });
+          }
+          return yield* enqueueTurn(sessionId, content, options, undefined, offered.registration);
+        });
 
       const enqueueFollowUp = (
         sessionId: SessionId,
@@ -908,6 +1144,16 @@ export const TurnsLive = (): Layer.Layer<
           const item = yield* offerFollowUp(sessionId, content);
           yield* progress.publish(sessionId, { _tag: "followUpQueued", content });
           return yield* enqueueTurn(sessionId, content, options, item);
+        });
+
+      const enqueueDetachedFollowUp = (
+        sessionId: SessionId,
+        content: string,
+      ): Effect.Effect<void, TurnQueueFull> =>
+        Effect.gen(function* () {
+          const item = yield* offerFollowUp(sessionId, content);
+          yield* progress.publish(sessionId, { _tag: "followUpQueued", content });
+          yield* Effect.forkDaemon(enqueueTurn(sessionId, content, {}, item).pipe(Effect.asVoid));
         });
 
       return {
@@ -923,40 +1169,55 @@ export const TurnsLive = (): Layer.Layer<
                 };
                 return Effect.succeed(result);
               }
-              return Ref.get(turn.stage).pipe(
+              return Ref.modify(turn.stage, (stage) => {
+                if (stage === "settling" || stage === "settling-aborted") {
+                  return ["loop-prevented" as const, "settling-aborted" as const];
+                }
+                return [stage === "finishing" ? "finishing" : "interrupt", stage] as const;
+              }).pipe(
                 Effect.flatMap(
-                  (stage): Effect.Effect<AbortTurnResult> =>
-                    stage === "settling"
-                      ? Effect.succeed<AbortTurnResult>({
-                          aborted: false,
-                          reason: "settling",
-                          turnOrdinal: turn.turnOrdinal,
-                        })
-                      : Effect.gen(function* () {
-                          yield* Fiber.interruptFork(turn.fiber);
-                          const settled = yield* Fiber.await(turn.fiber).pipe(
-                            Effect.timeoutOption(`${turn.abortGraceMs} millis`),
-                          );
-                          if (Option.isNone(settled)) {
-                            yield* turn.forceAbort;
-                            yield* Deferred.succeed(
-                              turn.completion,
-                              Exit.succeed({ stopReason: "aborted" } satisfies TurnResult),
-                            );
-                            yield* Effect.logError(
-                              "Turn fiber exceeded abort grace and remains leaked.",
-                            ).pipe(
-                              Effect.annotateLogs({
-                                fiberId: FiberId.threadName(Fiber.id(turn.fiber)),
-                                sessionId,
-                              }),
-                            );
-                          }
-                          return {
-                            aborted: true,
+                  (action): Effect.Effect<AbortTurnResult> =>
+                    action === "loop-prevented"
+                      ? turn.steeringMutex
+                          .withPermits(1)(Ref.set(turn.steering, { accepting: false, items: [] }))
+                          .pipe(
+                            Effect.as({
+                              aborted: true,
+                              note: "loop-prevented",
+                              turnOrdinal: turn.turnOrdinal,
+                            } satisfies AbortTurnResult),
+                          )
+                      : action === "finishing"
+                        ? Effect.succeed<AbortTurnResult>({
+                            aborted: false,
+                            reason: "settling",
                             turnOrdinal: turn.turnOrdinal,
-                          } satisfies AbortTurnResult;
-                        }),
+                          })
+                        : Effect.gen(function* () {
+                            yield* Fiber.interruptFork(turn.fiber);
+                            const settled = yield* Fiber.await(turn.fiber).pipe(
+                              Effect.timeoutOption(`${turn.abortGraceMs} millis`),
+                            );
+                            if (Option.isNone(settled)) {
+                              yield* turn.forceAbort;
+                              yield* Deferred.succeed(
+                                turn.completion,
+                                Exit.succeed({ stopReason: "aborted" } satisfies TurnResult),
+                              );
+                              yield* Effect.logError(
+                                "Turn fiber exceeded abort grace and remains leaked.",
+                              ).pipe(
+                                Effect.annotateLogs({
+                                  fiberId: FiberId.threadName(Fiber.id(turn.fiber)),
+                                  sessionId,
+                                }),
+                              );
+                            }
+                            return {
+                              aborted: true,
+                              turnOrdinal: turn.turnOrdinal,
+                            } satisfies AbortTurnResult;
+                          }),
                 ),
               );
             }),
@@ -973,25 +1234,18 @@ export const TurnsLive = (): Layer.Layer<
                 const turn = current.get(sessionId);
                 if (options.deliveryMode !== "steer") {
                   return turn === undefined
-                    ? enqueueTurn(sessionId, content, options)
+                    ? enqueueRegisteredTurn(sessionId, content, options)
                     : enqueueFollowUp(sessionId, content, options);
                 }
                 if (turn === undefined) {
-                  return Effect.fail(
-                    new ProtocolError({
-                      message: "Steering requires a running turn.",
-                      reason: "phase_invalid_command",
-                    }),
-                  );
+                  return enqueueRegisteredTurn(sessionId, content, options);
                 }
-                return offerSteering(turn, sessionId, content).pipe(
+                return offerSteering(turn, sessionId, content, options).pipe(
                   Effect.flatMap((result): Effect.Effect<TurnResult, TurnFailure> => {
-                    if (result === "closed") {
+                    if (result._tag === "closed") {
                       return enqueueFollowUp(sessionId, content, options);
                     }
-                    return progress
-                      .publish(sessionId, { _tag: "steeringQueued", content })
-                      .pipe(Effect.zipRight(awaitTurn(turn)));
+                    return awaitTurn(turn);
                   }),
                 );
               }),
@@ -1002,19 +1256,21 @@ export const TurnsLive = (): Layer.Layer<
           Effect.gen(function* () {
             const turn = (yield* Ref.get(active)).get(sessionId);
             if (turn === undefined) {
+              const hasPendingTurn =
+                (yield* Ref.get(turnRegistrations)).has(sessionId) ||
+                (yield* Ref.get(followUps)).has(sessionId);
+              if (hasPendingTurn) {
+                return yield* enqueueDetachedFollowUp(sessionId, content);
+              }
               return yield* new ProtocolError({
                 message: "Steering requires a running turn.",
                 reason: "phase_invalid_command",
               });
             }
-            const queued = yield* offerSteering(turn, sessionId, content);
-            if (queued === "closed") {
-              return yield* new ProtocolError({
-                message: "Steering requires a running turn.",
-                reason: "phase_invalid_command",
-              });
+            const queued = yield* offerSteering(turn, sessionId, content, {});
+            if (queued._tag === "closed") {
+              yield* enqueueDetachedFollowUp(sessionId, content);
             }
-            yield* progress.publish(sessionId, { _tag: "steeringQueued", content });
           }),
         subscribeProgress: (sessionId: SessionId) => progress.subscribe(sessionId),
       } satisfies TurnsService;
