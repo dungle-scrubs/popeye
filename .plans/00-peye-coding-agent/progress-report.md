@@ -93,14 +93,14 @@ Source: `implementation.md` (M7); D-016
 ### M8: Turn execution against fake provider
 Source: `implementation.md` (M8); Normative Contracts (state machine)
 
-- [ ] Tool-free turn walks IDLE→ASSEMBLING→STREAMING→SETTLING→IDLE with well-formed entries
-- [ ] Phase transitions surface as structured progress
-- [ ] Assistant text/thinking deltas stream as progress during STREAMING
-- [ ] Final assistant entry persists with stop reason `done`
-- [ ] Provider failure after retries exhausted persists an error entry with stop reason `error` and settles (no throw)
-- [ ] Abort mid-stream persists the partial assistant entry with stop reason `aborted`
-- [ ] Every terminal path (done/failed/aborted) leaves a well-formed entry sequence (fixture-verified)
-- [ ] Turn spans carry sessionId + turn ordinal + entry ids
+- [x] Tool-free turn walks IDLE→ASSEMBLING→STREAMING→SETTLING→IDLE with well-formed entries
+- [x] Phase transitions surface as structured progress
+- [x] Assistant text/thinking deltas stream as progress during STREAMING
+- [x] Final assistant entry persists with stop reason `done`
+- [x] Provider failure after retries exhausted persists an error entry with stop reason `error` and settles (no throw)
+- [x] Abort mid-stream persists the partial assistant entry with stop reason `aborted`
+- [x] Every terminal path (done/failed/aborted) leaves a well-formed entry sequence (fixture-verified)
+- [x] Turn spans carry sessionId + turn ordinal + entry ids
 
 ### M9: Tool execution
 Source: `implementation.md` (M9); D-016
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 51
-- Remaining: 126
-- Current cutoff blockers: 126
+- Completed: 59
+- Remaining: 118
+- Current cutoff blockers: 118
 - Accepted/deferred follow-up: 11
 - Superseded/obsolete checklist debt: 0
