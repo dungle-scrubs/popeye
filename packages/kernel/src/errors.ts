@@ -26,3 +26,12 @@ export class BudgetExceeded extends Data.TaggedError("BudgetExceeded")<{
   readonly optionsDiagnostic: string;
   readonly required: number;
 }> {}
+
+export class MailboxFull extends Data.TaggedError("MailboxFull")<{
+  readonly capacity: number;
+  readonly sessionId: string;
+}> {}
+
+export class MailboxSessionNotFound extends Data.TaggedError("MailboxSessionNotFound")<{
+  readonly sessionId: string;
+}> {}

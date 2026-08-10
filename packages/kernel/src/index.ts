@@ -4,4 +4,28 @@
  */
 export const kernelPackage = "@peye/kernel";
 
-export { BudgetExceeded, GateRejected, ProviderError, ToolError } from "./errors.js";
+export {
+  BudgetExceeded,
+  GateRejected,
+  MailboxFull,
+  MailboxSessionNotFound,
+  ProviderError,
+  ToolError,
+} from "./errors.js";
+export {
+  MAILBOX_CAPACITY,
+  Mailbox,
+  type MailboxCommand,
+  type MailboxCommandOutput,
+  type MailboxFailure,
+  MailboxLive,
+  type MailboxResult,
+  type MailboxService,
+} from "./mailbox.js";
+export {
+  type SessionInfo,
+  type SessionSummary,
+  Sessions,
+  SessionsLive,
+  type SessionsService,
+} from "./sessions.js";
