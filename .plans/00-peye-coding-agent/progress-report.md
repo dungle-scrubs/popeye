@@ -176,15 +176,15 @@ Source: `implementation.md` (M14); D-021
 ### M15: Manifests, registries, capabilities
 Source: `implementation.md` (M15); D-019; Normative Contracts (plugin rules)
 
-- [ ] Manifest Schema validates name, version, capabilities; invalid manifest is `PluginLoadError` naming the cause
-- [ ] Contribution keys are namespaced `plugin-name/thing`
-- [ ] Duplicate key resolves by declared priority with a diagnostic naming both plugins
-- [ ] Capability grants are per session
-- [ ] A tool requiring an ungranted capability is unavailable (not listed to the model) with a diagnostic
-- [ ] A manifest-required ungranted capability fails the plugin load with a message naming the capability
-- [ ] Grant set is visible in the snapshot
-- [ ] All four v1 contribution kinds register (tools, commands, hooks, instruction fragments)
-- [ ] Registering an unknown contribution kind fails typed (registry admits new kinds by extension, not silently)
+- [x] Manifest Schema validates name, version, capabilities; invalid manifest is `PluginLoadError` naming the cause
+- [x] Contribution keys are namespaced `plugin-name/thing`
+- [x] Duplicate key resolves by declared priority with a diagnostic naming both plugins
+- [x] Capability grants are per session
+- [x] A tool requiring an ungranted capability is unavailable (not listed to the model) with a diagnostic
+- [x] A manifest-required ungranted capability fails the plugin load with a message naming the capability
+- [x] Grant sets expose a sorted copy for snapshot wiring (kernel snapshot integration lands with M19; M15 review)
+- [x] All four v1 contribution kinds register (tools, commands, hooks, instruction fragments)
+- [x] Registering an unknown contribution kind fails typed (registry admits new kinds by extension, not silently)
 
 ### M16: Generic hook emitter
 Source: `implementation.md` (M16); D-020; Normative Contracts (hook points)
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 98
-- Remaining: 79
-- Current cutoff blockers: 79
+- Completed: 107
+- Remaining: 70
+- Current cutoff blockers: 70
 - Accepted/deferred follow-up: 5
 - Superseded/obsolete checklist debt: 0
