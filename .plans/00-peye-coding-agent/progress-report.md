@@ -25,12 +25,12 @@ Source: `implementation.md` (M1); D-023, D-008
 ### M2: Failure taxonomy and versioned line codec
 Source: `implementation.md` (M2); Normative Contracts (failure taxonomy)
 
-- [ ] Every taxonomy error (`ProviderError`, `ToolError`, `GateRejected`, `StaleRevision`, `PluginLoadError`, `JournalError`, `ProtocolError`, `BudgetExceeded`, `InteractionTimeout`) constructs with its declared fields and round-trips them
-- [ ] Encoded journal lines carry a schema version envelope
-- [ ] Decoding a current-version line yields the typed value
-- [ ] Decoding an older-version line runs its registered migration chain
-- [ ] Decoding an older-version line with a missing migration fails with the typed migration error naming both versions
-- [ ] Decoding malformed JSON or a schema mismatch fails typed, never throws
+- [x] Every taxonomy error (`ProviderError`, `ToolError`, `GateRejected`, `StaleRevision`, `PluginLoadError`, `JournalError`, `ProtocolError`, `BudgetExceeded`, `InteractionTimeout`) constructs with its declared fields and round-trips them
+- [x] Encoded journal lines carry a schema version envelope
+- [x] Decoding a current-version line yields the typed value
+- [x] Decoding an older-version line runs its registered migration chain
+- [x] A migration gap in the registry fails typed naming the missing version (enforced at codec creation, which is stronger than the original decode-time wording; M2 review)
+- [x] Decoding malformed JSON or a schema mismatch fails typed, never throws
 
 ### M3: Journal service and in-memory layer
 Source: `implementation.md` (M3); Normative Contracts (journal rules)
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 9
-- Remaining: 168
-- Current cutoff blockers: 168
+- Completed: 15
+- Remaining: 162
+- Current cutoff blockers: 162
 - Accepted/deferred follow-up: 11
 - Superseded/obsolete checklist debt: 0
