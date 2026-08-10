@@ -1,9 +1,13 @@
 /**
- * Owns overflow Compaction policy composed around a turn, not Kernel logic.
- * It exists because D-028 span totality belongs to Journal validation.
+ * Owns Compaction policy composed around turn execution.
+ * It exists because Compaction is policy composed around the turn so the kernel core stays
+ * policy-free.
+ * In-turn Compaction remains in ASSEMBLING because it is Context assembly. Manual compactNow
+ * publishes progress items without changing the session phase because it is not a turn.
  */
 
 import {
+  type CompactionPayload,
   type Entry,
   type EntryId,
   Journal,
@@ -13,7 +17,7 @@ import {
 } from "@peye/journal";
 import { Context, Effect, Layer, Stream } from "effect";
 
-import { ProviderError } from "./errors.js";
+import { CompactionDisabled, NothingToCompact, ProviderError } from "./errors.js";
 import { Mailbox, type MailboxFailure } from "./mailbox.js";
 import { ProgressHub, type ProgressService } from "./progress.js";
 import {
@@ -22,19 +26,31 @@ import {
   Provider,
   type ProviderService,
 } from "./provider.js";
+import {
+  DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_MAX_PROVIDER_ROUNDS,
+  makeProviderRequestRuntime,
+  type ProviderRequestRuntime,
+} from "./provider-retry.js";
 
-const COMPACTION_INSTRUCTION = "Summarize.";
+const MINIMUM_SLICE_BUDGET = 200;
+const PRIOR_SUMMARY_LABEL = "Prior summary:\n";
+const DEFAULT_SUMMARIZATION_INSTRUCTION =
+  "Summarize the conversation while preserving decisions, open tool state, file paths, and user intent.";
 
 export interface CompactionPolicyOptions {
   readonly enabled?: boolean;
   readonly retainedTailCount?: number;
   readonly sliceBudget?: number;
+  /** System instruction repeated on every bounded summarization slice. */
+  readonly summarizationInstruction?: string;
 }
 
 export interface ResolvedCompactionPolicyOptions {
   readonly enabled: boolean;
   readonly retainedTailCount: number;
   readonly sliceBudget: number;
+  readonly summarizationInstruction: string;
 }
 
 export interface CompactionResult {
@@ -49,15 +65,22 @@ export interface CompactBranchInput {
   readonly options: ResolvedCompactionPolicyOptions;
   readonly progress: ProgressService;
   readonly provider: ProviderService;
+  readonly providerRuntime?: ProviderRequestRuntime;
   readonly sessionId: SessionId;
   readonly turnOrdinal: number;
 }
 
 export interface CompactionService {
   readonly compactNow: (sessionId: SessionId) => Effect.Effect<CompactionResult, CompactionFailure>;
+  readonly policy: ResolvedCompactionPolicyOptions;
 }
 
-export type CompactionFailure = JournalFailure | MailboxFailure | ProviderError;
+export type CompactionFailure =
+  | CompactionDisabled
+  | JournalFailure
+  | MailboxFailure
+  | NothingToCompact
+  | ProviderError;
 
 export class Compaction extends Context.Tag("@peye/kernel/Compaction")<
   Compaction,
@@ -68,6 +91,7 @@ export const DEFAULT_COMPACTION_POLICY: ResolvedCompactionPolicyOptions = {
   enabled: true,
   retainedTailCount: 1,
   sliceBudget: 8_000,
+  summarizationInstruction: DEFAULT_SUMMARIZATION_INSTRUCTION,
 };
 
 const validateNonNegativeInteger = (name: string, value: number): void => {
@@ -76,11 +100,14 @@ const validateNonNegativeInteger = (name: string, value: number): void => {
   }
 };
 
-const validateSliceBudget = (value: number): void => {
-  if (!Number.isSafeInteger(value) || value <= COMPACTION_INSTRUCTION.length) {
+const validateSliceBudget = (value: number, instruction: string): void => {
+  if (!Number.isSafeInteger(value) || value < MINIMUM_SLICE_BUDGET) {
     throw new RangeError(
-      `Compaction slice budget must be a safe integer greater than ${COMPACTION_INSTRUCTION.length}.`,
+      `Compaction slice budget must be a safe integer of at least ${MINIMUM_SLICE_BUDGET}.`,
     );
+  }
+  if (instruction.length >= value) {
+    throw new RangeError("Compaction summarization instruction must be shorter than slice budget.");
   }
 };
 
@@ -96,9 +123,16 @@ export const resolveCompactionPolicyOptions = (
       DEFAULT_COMPACTION_POLICY.retainedTailCount,
     sliceBudget:
       turnOptions.sliceBudget ?? layerOptions.sliceBudget ?? DEFAULT_COMPACTION_POLICY.sliceBudget,
+    summarizationInstruction:
+      turnOptions.summarizationInstruction ??
+      layerOptions.summarizationInstruction ??
+      DEFAULT_COMPACTION_POLICY.summarizationInstruction,
   };
+  if (options.summarizationInstruction.trim().length === 0) {
+    throw new RangeError("Compaction summarization instruction must be non-empty.");
+  }
   validateNonNegativeInteger("Compaction retained-tail count", options.retainedTailCount);
-  validateSliceBudget(options.sliceBudget);
+  validateSliceBudget(options.sliceBudget, options.summarizationInstruction);
   return options;
 };
 
@@ -141,38 +175,50 @@ export const entryToContextItem = (entry: Entry): ContextItem | undefined => {
     : undefined;
 };
 
-const withContent = (item: ContextItem, content: string): ContextItem => ({ ...item, content });
+interface CompactionFragmentSource {
+  readonly content: string;
+}
+
+const priorSummary = (entry: Entry | undefined): CompactionFragmentSource | undefined => {
+  if (entry?.kind !== "compaction" || typeof entry.payload !== "object" || entry.payload === null) {
+    return undefined;
+  }
+  const payload = entry.payload as Partial<CompactionPayload>;
+  return typeof payload.summary === "string"
+    ? { content: `${PRIOR_SUMMARY_LABEL}${payload.summary}` }
+    : undefined;
+};
 
 const boundedSlices = (
-  branch: ReadonlyArray<Entry>,
+  sources: ReadonlyArray<CompactionFragmentSource>,
   sliceBudget: number,
+  instruction: string,
 ): ReadonlyArray<ReadonlyArray<ContextItem>> => {
-  const contentBudget = sliceBudget - COMPACTION_INSTRUCTION.length;
-  const fragments = branch.flatMap((entry): ReadonlyArray<ContextItem> => {
-    const item = entryToContextItem(entry);
-    if (item === undefined) {
-      return [];
-    }
-    if (item.content.length === 0) {
-      return [item];
-    }
-    const parts: Array<ContextItem> = [];
-    for (let offset = 0; offset < item.content.length; offset += contentBudget) {
-      parts.push(withContent(item, item.content.slice(offset, offset + contentBudget)));
-    }
-    return parts;
-  });
   const slices: Array<Array<ContextItem>> = [];
-  let current: Array<ContextItem> = [{ content: COMPACTION_INSTRUCTION, role: "system" }];
-  let used = COMPACTION_INSTRUCTION.length;
-  for (const fragment of fragments) {
-    if (current.length > 1 && used + fragment.content.length > sliceBudget) {
-      slices.push(current);
-      current = [{ content: COMPACTION_INSTRUCTION, role: "system" }];
-      used = COMPACTION_INSTRUCTION.length;
+  let current: Array<ContextItem> = [{ content: instruction, role: "system" }];
+  let used = instruction.length;
+  for (const source of sources) {
+    if (source.content.length === 0) {
+      current.push({ content: "", role: "user" });
+      continue;
     }
-    current.push(fragment);
-    used += fragment.content.length;
+    let offset = 0;
+    while (offset < source.content.length) {
+      if (used === sliceBudget) {
+        slices.push(current);
+        current = [{ content: instruction, role: "system" }];
+        used = instruction.length;
+      }
+      const length = Math.min(sliceBudget - used, source.content.length - offset);
+      current.push({ content: source.content.slice(offset, offset + length), role: "user" });
+      offset += length;
+      used += length;
+    }
+    if (used === sliceBudget) {
+      slices.push(current);
+      current = [{ content: instruction, role: "system" }];
+      used = instruction.length;
+    }
   }
   if (current.length > 1 || slices.length === 0) {
     slices.push(current);
@@ -182,50 +228,141 @@ const boundedSlices = (
 
 const summarizeSlice = (
   provider: ProviderService,
+  providerRuntime: ProviderRequestRuntime,
   context: ReadonlyArray<ContextItem>,
-  attempt: number,
+  sliceIndex: number,
   turnOrdinal: number,
 ): Effect.Effect<string, ProviderError> =>
-  Effect.gen(function* () {
-    let summary = "";
-    let completed = false;
-    yield* Stream.runForEach(
-      provider.streamAssistant(context, { attempt, purpose: "compaction", turnOrdinal }),
-      (item) => {
-        if (item._tag === "textDelta") {
-          summary += item.text;
-        }
-        if (item._tag === "done") {
-          completed = item.stopReason === "done";
-        }
-        return Effect.void;
-      },
-    );
-    if (!completed || summary.trim().length === 0) {
-      return yield* new ProviderError({
-        message: "Provider did not return a non-empty Compaction summary.",
-        transient: false,
-      });
+  providerRuntime.run((attempt) =>
+    Effect.gen(function* () {
+      let summary = "";
+      let completed = false;
+      yield* Stream.runForEach(
+        provider.streamAssistant(context, {
+          attempt,
+          purpose: "compaction",
+          sliceIndex,
+          turnOrdinal,
+        }),
+        (item) => {
+          if (item._tag === "textDelta") {
+            summary += item.text;
+          }
+          if (item._tag === "done") {
+            completed = item.stopReason === "done";
+          }
+          return Effect.void;
+        },
+      );
+      if (!completed || summary.trim().length === 0) {
+        return yield* new ProviderError({
+          message: "Provider did not return a non-empty Compaction summary.",
+          transient: false,
+        });
+      }
+      return summary;
+    }),
+  );
+
+const retainedTail = (branch: ReadonlyArray<Entry>, count: number): ReadonlyArray<Entry> => {
+  if (count === 0) {
+    return [];
+  }
+  let start = Math.max(0, branch.length - count);
+  const firstItem = entryToContextItem(branch[start] as Entry);
+  if (firstItem?.role === "user") {
+    return branch.slice(start);
+  }
+  if (
+    firstItem?.role === "assistant" &&
+    firstItem.toolCalls !== undefined &&
+    branch.slice(start + 1).some((entry) => {
+      const item = entryToContextItem(entry);
+      return (
+        item?.role === "toolResult" &&
+        firstItem.toolCalls?.some((call) => call.id === item.toolCallId) === true
+      );
+    })
+  ) {
+    return branch.slice(start);
+  }
+  if (firstItem?.role === "toolResult") {
+    for (let index = start - 1; index >= 0; index -= 1) {
+      const item = entryToContextItem(branch[index] as Entry);
+      if (
+        item?.role === "assistant" &&
+        item.toolCalls?.some((call) => call.id === firstItem.toolCallId) === true
+      ) {
+        start = index;
+        return branch.slice(start);
+      }
+      if (item?.role === "user") {
+        start = index;
+        return branch.slice(start);
+      }
     }
-    return summary;
-  });
+  }
+  for (let index = start - 1; index >= 0; index -= 1) {
+    if (entryToContextItem(branch[index] as Entry)?.role === "user") {
+      start = index;
+      break;
+    }
+  }
+  return branch.slice(start);
+};
 
 export const compactBranch = (
   input: CompactBranchInput,
-): Effect.Effect<CompactionResult, JournalFailure | ProviderError> =>
+): Effect.Effect<
+  CompactionResult,
+  CompactionDisabled | JournalFailure | NothingToCompact | ProviderError
+> =>
   Effect.gen(function* () {
+    if (!input.options.enabled) {
+      return yield* new CompactionDisabled({
+        message: "Compaction is disabled by policy.",
+        sessionId: input.sessionId,
+      });
+    }
     const branch = yield* input.journal.readBranch(input.sessionId);
     const newestCompactionIndex = branch.findLastIndex((entry) => entry.kind === "compaction");
     const unsummarized = branch.slice(newestCompactionIndex < 0 ? 1 : newestCompactionIndex + 1);
     const first = unsummarized[0];
     const last = unsummarized.at(-1);
     if (first === undefined || last === undefined) {
-      return yield* new ProviderError({
+      return yield* new NothingToCompact({
         message: "Compaction requires at least one unsummarized Entry.",
-        transient: false,
+        sessionId: input.sessionId,
       });
     }
-    const slices = boundedSlices(unsummarized, input.options.sliceBudget);
+    const providerRuntime =
+      input.providerRuntime ??
+      (yield* makeProviderRequestRuntime({
+        maxAttempts: DEFAULT_MAX_ATTEMPTS,
+        maxProviderRounds: DEFAULT_MAX_PROVIDER_ROUNDS,
+        onRetry: (attempt, delayMs) =>
+          input.progress.publish(input.sessionId, {
+            _tag: "providerRetryScheduled",
+            attempt,
+            delayMs,
+          }),
+      }));
+    const sources = [
+      ...(newestCompactionIndex < 0
+        ? []
+        : [priorSummary(branch[newestCompactionIndex])].filter(
+            (item): item is CompactionFragmentSource => item !== undefined,
+          )),
+      ...unsummarized.flatMap((entry): ReadonlyArray<CompactionFragmentSource> => {
+        const item = entryToContextItem(entry);
+        return item === undefined ? [] : [{ content: item.content }];
+      }),
+    ];
+    const slices = boundedSlices(
+      sources,
+      input.options.sliceBudget,
+      input.options.summarizationInstruction,
+    );
     const started = {
       entriesCovered: unsummarized.length,
       sliceCount: slices.length,
@@ -237,14 +374,15 @@ export const compactBranch = (
     });
     const summaries = yield* Effect.forEach(
       slices,
-      (slice, index) => summarizeSlice(input.provider, slice, index + 1, input.turnOrdinal),
+      (slice, index) =>
+        summarizeSlice(input.provider, providerRuntime, slice, index + 1, input.turnOrdinal),
       { concurrency: 1 },
     );
     const summary = summaries.join("\n");
     yield* Effect.annotateCurrentSpan({ summaryLength: summary.length });
-    const retainedTailIds = unsummarized
-      .slice(Math.max(0, unsummarized.length - input.options.retainedTailCount))
-      .map((entry) => entry.id);
+    const retainedTailIds = retainedTail(unsummarized, input.options.retainedTailCount).map(
+      (entry) => entry.id,
+    );
     const compaction = yield* input.journal.appendCompaction(input.sessionId, {
       firstSummarizedId: first.id,
       lastSummarizedId: last.id,
@@ -294,6 +432,7 @@ export const CompactionLive = (
                 }),
             })
             .pipe(Effect.map((result) => result.value)),
+        policy: resolved,
       });
     }),
   );

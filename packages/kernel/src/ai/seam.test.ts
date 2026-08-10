@@ -623,9 +623,14 @@ test("kernel.provider spans record attempt, classifier verdict, and abort-bridge
   await Effect.runPromise(
     Effect.gen(function* () {
       const provider = yield* Provider;
-      yield* Stream.runDrain(provider.streamAssistant([], { attempt: 3, turnOrdinal: 9 })).pipe(
-        Effect.exit,
-      );
+      yield* Stream.runDrain(
+        provider.streamAssistant([], {
+          attempt: 3,
+          purpose: "compaction",
+          sliceIndex: 2,
+          turnOrdinal: 9,
+        }),
+      ).pipe(Effect.exit);
     }).pipe(
       Effect.provide(failedLayer),
       Effect.provide(ToolRegistryLive([])),
@@ -649,7 +654,9 @@ test("kernel.provider spans record attempt, classifier verdict, and abort-bridge
     Effect.gen(function* () {
       const provider = yield* Provider;
       const fiber = yield* Effect.fork(
-        Stream.runDrain(provider.streamAssistant([], { attempt: 4, turnOrdinal: 10 })),
+        Stream.runDrain(
+          provider.streamAssistant([], { attempt: 4, purpose: "turn", turnOrdinal: 10 }),
+        ),
       );
       yield* Effect.promise(() => ready);
       const interrupted = yield* Fiber.interrupt(fiber);
@@ -667,9 +674,13 @@ test("kernel.provider spans record attempt, classifier verdict, and abort-bridge
   expect(providerSpans[0]?.attributes.get("classifierVerdict")).toBe(true);
   expect(providerSpans[0]?.attributes.get("modelId")).toBe(fixtureModel.id);
   expect(providerSpans[0]?.attributes.get("provider")).toBe(fixtureModel.provider);
+  expect(providerSpans[0]?.attributes.get("purpose")).toBe("compaction");
+  expect(providerSpans[0]?.attributes.get("sliceIndex")).toBe(2);
   expect(providerSpans[0]?.attributes.get("turnOrdinal")).toBe(9);
   expect(providerSpans[1]?.attributes.get("abortBridgeFired")).toBe(true);
   expect(providerSpans[1]?.attributes.get("attempt")).toBe(4);
+  expect(providerSpans[1]?.attributes.get("purpose")).toBe("turn");
+  expect(providerSpans[1]?.attributes.has("sliceIndex")).toBe(false);
 });
 
 test("public ai seam signatures expose kernel-owned configuration without pi-ai types", () => {

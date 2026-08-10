@@ -35,6 +35,16 @@ export class BudgetExceeded extends Data.TaggedError("BudgetExceeded")<{
   readonly required: number;
 }> {}
 
+export class NothingToCompact extends Data.TaggedError("NothingToCompact")<{
+  readonly message: string;
+  readonly sessionId: SessionId;
+}> {}
+
+export class CompactionDisabled extends Data.TaggedError("CompactionDisabled")<{
+  readonly message: string;
+  readonly sessionId: SessionId;
+}> {}
+
 export class MailboxFull extends Data.TaggedError("MailboxFull")<{
   readonly capacity: number;
   readonly sessionId: SessionId;

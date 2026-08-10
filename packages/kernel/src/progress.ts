@@ -3,7 +3,7 @@
  * It exists so slow heads cannot block durable journal work or become snapshot input.
  */
 
-import type { SessionId } from "@peye/journal";
+import { EntryIdSchema, type SessionId } from "@peye/journal";
 import { Context, Effect, Layer, Queue, Ref, Schema, Stream } from "effect";
 
 export const TurnPhaseSchema = Schema.Literal(
@@ -20,14 +20,14 @@ export const ProgressSchema = Schema.Union(
   Schema.TaggedStruct("assistantText", { text: Schema.String }),
   Schema.TaggedStruct("assistantThinking", { text: Schema.String }),
   Schema.TaggedStruct("compactionApplied", {
-    compactionEntryId: Schema.String,
-    entriesCovered: Schema.Number,
-    sliceCount: Schema.Number,
-    summaryLength: Schema.Number,
+    compactionEntryId: EntryIdSchema,
+    entriesCovered: Schema.Number.pipe(Schema.int(), Schema.positive()),
+    sliceCount: Schema.Number.pipe(Schema.int(), Schema.positive()),
+    summaryLength: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
   }),
   Schema.TaggedStruct("compactionStarted", {
-    entriesCovered: Schema.Number,
-    sliceCount: Schema.Number,
+    entriesCovered: Schema.Number.pipe(Schema.int(), Schema.positive()),
+    sliceCount: Schema.Number.pipe(Schema.int(), Schema.positive()),
   }),
   Schema.TaggedStruct("followUpQueued", { content: Schema.String }),
   Schema.TaggedStruct("phaseChanged", { phase: TurnPhaseSchema }),

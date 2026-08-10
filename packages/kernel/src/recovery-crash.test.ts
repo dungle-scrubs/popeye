@@ -12,6 +12,7 @@ import {
 import { Effect, Exit, Layer, Schema, Stream } from "effect";
 import { expect, test } from "vitest";
 
+import { CompactionLive } from "./compaction-policy.js";
 import { MailboxLive } from "./mailbox.js";
 import { ProgressHubLive } from "./progress.js";
 import { type ContextItem, Provider, type ProviderService } from "./provider.js";
@@ -80,7 +81,13 @@ const kernelLayer = <E>(
   const sessionsLayer = SessionsLive({ recoveryDiagnosticSink }).pipe(
     Layer.provide(Layer.mergeAll(journalLayer, mailboxLayer, toolLayer)),
   );
-  return Layer.mergeAll(dependencies, sessionsLayer, TurnsLive().pipe(Layer.provide(dependencies)));
+  const compactionLayer = CompactionLive().pipe(Layer.provide(dependencies));
+  const turnDependencies = Layer.merge(dependencies, compactionLayer);
+  return Layer.mergeAll(
+    turnDependencies,
+    sessionsLayer,
+    TurnsLive().pipe(Layer.provide(turnDependencies)),
+  );
 };
 
 const doneProvider: ProviderService = {

@@ -3,13 +3,14 @@
  * It exists so both paths use one AssistantDiagnostic shape and one trust-boundary decoder.
  */
 
+import { EntryIdSchema } from "@peye/journal";
 import { Schema } from "effect";
 
 import { ASSISTANT_STOP_REASONS } from "./provider.js";
 
 export const AssistantDiagnosticSchema = Schema.Union(
   Schema.Struct({
-    compactionApplied: Schema.optional(Schema.String),
+    compactionApplied: Schema.optional(EntryIdSchema),
     detail: Schema.String,
     reason: Schema.Literal("budget_exceeded"),
   }),

@@ -15,7 +15,6 @@ import {
   Cause,
   Context,
   Deferred,
-  Duration,
   Effect,
   Exit,
   Fiber,
@@ -23,11 +22,10 @@ import {
   Layer,
   Option,
   Ref,
-  Schedule,
-  ScheduleDecision,
   Stream,
 } from "effect";
 import {
+  Compaction,
   type CompactionPolicyOptions,
   compactBranch,
   entryToContextItem,
@@ -38,6 +36,12 @@ import { BudgetExceeded, type ProviderError, TurnQueueFull } from "./errors.js";
 import { Mailbox, type MailboxFailure } from "./mailbox.js";
 import { type Progress, ProgressHub, type TurnPhase } from "./progress.js";
 import { type AssistantStopReason, type ContextItem, Provider } from "./provider.js";
+import {
+  DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_MAX_PROVIDER_ROUNDS,
+  DEFAULT_RETRY_BASE_DELAY_MS,
+  makeProviderRequestRuntime,
+} from "./provider-retry.js";
 import {
   appendOperationFinished,
   appendOperationStarted,
@@ -58,10 +62,6 @@ export interface TurnOptions {
   /** @deprecated Use maxProviderRounds. */
   readonly maxToolRounds?: number;
   readonly toolConcurrency?: number;
-}
-
-export interface TurnsLayerOptions {
-  readonly compaction?: CompactionPolicyOptions;
 }
 
 export interface TurnResult {
@@ -145,10 +145,9 @@ interface TurnRegistration {
 }
 
 const DEFAULT_CONTEXT_BUDGET = 32_000;
-const DEFAULT_MAX_ATTEMPTS = 3;
-const DEFAULT_MAX_PROVIDER_ROUNDS = 32;
 const DEFAULT_ABORT_GRACE_MS = 5_000;
-export const DEFAULT_RETRY_BASE_DELAY_MS = 100;
+
+export { DEFAULT_RETRY_BASE_DELAY_MS };
 
 /** Maximum steering or follow-up items retained per session. Excess input fails typed. */
 export const TURN_INPUT_QUEUE_CAPACITY = 64;
@@ -170,7 +169,7 @@ const validatePositiveInteger = (name: string, value: number): void => {
 
 const validateTurnOptions = (
   options: TurnOptions,
-  layerCompactionOptions: CompactionPolicyOptions,
+  compactionPolicy: CompactionPolicyOptions,
 ): void => {
   if (options.abortGraceMs !== undefined) {
     validatePositiveInteger("Abort grace milliseconds", options.abortGraceMs);
@@ -187,7 +186,7 @@ const validateTurnOptions = (
   if (options.toolConcurrency !== undefined) {
     validatePositiveInteger("Tool concurrency", options.toolConcurrency);
   }
-  resolveCompactionPolicyOptions(layerCompactionOptions, options.compaction);
+  resolveCompactionPolicyOptions(compactionPolicy, options.compaction);
 };
 
 const providerRoundBound = (options: TurnOptions): number =>
@@ -209,13 +208,15 @@ const journalFailureDetail = (failure: JournalFailure, cause: Cause.Cause<unknow
     ? failure.message
     : causeDetail(cause);
 
-export const TurnsLive = (
-  layerOptions: TurnsLayerOptions = {},
-): Layer.Layer<Turns, never, Journal | Mailbox | ProgressHub | Provider | ToolRegistry> => {
-  const layerCompactionOptions = resolveCompactionPolicyOptions(layerOptions.compaction);
-  return Layer.effect(
+export const TurnsLive = (): Layer.Layer<
+  Turns,
+  never,
+  Compaction | Journal | Mailbox | ProgressHub | Provider | ToolRegistry
+> =>
+  Layer.effect(
     Turns,
     Effect.gen(function* () {
+      const compaction = yield* Compaction;
       const journal = yield* Journal;
       const mailbox = yield* Mailbox;
       const progress = yield* ProgressHub;
@@ -392,7 +393,6 @@ export const TurnsLive = (
               const payload = entry.payload as { readonly deliveryMode?: unknown };
               return payload.deliveryMode !== "steer";
             }).length + 1;
-          const attempts = yield* Ref.make(0);
           const abortSettleFailure = yield* Ref.make<Cause.Cause<JournalFailure> | undefined>(
             undefined,
           );
@@ -408,7 +408,6 @@ export const TurnsLive = (
           const terminalDiagnostic = yield* Ref.make<AssistantDiagnostic | undefined>(undefined);
           const text = yield* Ref.make("");
           const toolCalls = yield* Ref.make<ReadonlyArray<BufferedToolCall>>([]);
-          const providerRounds = yield* Ref.make(0);
           const executingCalls = yield* Ref.make<ReadonlyArray<ToolCall> | undefined>(undefined);
           const persistedToolCallIds = yield* Ref.make<Set<string>>(new Set());
           const persistenceMutex = yield* Effect.makeSemaphore(1);
@@ -416,6 +415,16 @@ export const TurnsLive = (
           const operationFinished = yield* Ref.make(false);
           const operationRecorded = yield* Ref.make(false);
           const compactionAttempted = yield* Ref.make(false);
+          const providerRuntime = yield* makeProviderRequestRuntime({
+            maxAttempts: options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+            maxProviderRounds: providerRoundBound(options),
+            onRetry: (attempt, delayMs) =>
+              progress.publish(sessionId, {
+                _tag: "providerRetryScheduled",
+                attempt,
+                delayMs,
+              }),
+          });
 
           const takeSteering = (
             closeWhenEmpty: boolean,
@@ -721,76 +730,73 @@ export const TurnsLive = (
           const consume = (
             context: ReadonlyArray<ContextItem>,
           ): Effect.Effect<void, ProviderError> =>
-            Effect.suspend(() =>
-              Effect.gen(function* () {
-                yield* resetProviderBuffers();
-                const providerRound = yield* Ref.updateAndGet(providerRounds, (count) => count + 1);
-                const maximumProviderRounds = providerRoundBound(options);
-                if (providerRound > maximumProviderRounds) {
-                  const detail = `Maximum provider round bound of ${maximumProviderRounds} exceeded.`;
-                  yield* Ref.set(text, detail);
-                  yield* Ref.set(terminalDiagnostic, {
-                    detail,
-                    reason: "turn_failure",
-                  });
-                  yield* Ref.set(stopReason, "error");
-                  return;
-                }
-                const attempt = yield* Ref.updateAndGet(attempts, (count) => count + 1);
-                const attemptProgress = yield* Ref.make<ReadonlyArray<Progress>>([]);
-                yield* Effect.annotateCurrentSpan({ attempt });
-                yield* Stream.runForEach(
-                  provider.streamAssistant(context, { attempt, purpose: "turn", turnOrdinal }),
-                  (item) => {
-                    if (item._tag === "textDelta") {
-                      const next: Progress = { _tag: "assistantText", text: item.text };
-                      return Ref.update(text, (current) => current + item.text).pipe(
-                        Effect.zipRight(
-                          Ref.update(attemptProgress, (current) => [...current, next]),
-                        ),
-                      );
-                    }
-                    if (item._tag === "thinkingDelta") {
-                      const next: Progress = { _tag: "assistantThinking", text: item.text };
-                      return Ref.update(attemptProgress, (current) => [...current, next]);
-                    }
-                    if (item._tag === "toolCall") {
-                      return Ref.update(toolCalls, (current) => {
-                        const priorIndex = current.findIndex((call) => call.id === item.id);
-                        const next: BufferedToolCall = {
-                          argumentsJson: item.argumentsJson,
-                          id: item.id,
-                          name: item.name,
-                        };
-                        return priorIndex < 0
-                          ? [...current, next]
-                          : current.map((call, index) => (index === priorIndex ? next : call));
-                      });
-                    }
-                    if (item._tag === "toolCallDelta") {
-                      return Ref.update(toolCalls, (current) => {
-                        const priorIndex = current.findIndex(
-                          (call) =>
-                            call.id === item.id ||
-                            (item.index !== undefined && call.index === item.index),
+            providerRuntime.run(
+              (attempt) =>
+                Effect.gen(function* () {
+                  yield* resetProviderBuffers();
+                  const attemptProgress = yield* Ref.make<ReadonlyArray<Progress>>([]);
+                  yield* Effect.annotateCurrentSpan({ attempt });
+                  yield* Stream.runForEach(
+                    provider.streamAssistant(context, { attempt, purpose: "turn", turnOrdinal }),
+                    (item) => {
+                      if (item._tag === "textDelta") {
+                        const next: Progress = { _tag: "assistantText", text: item.text };
+                        return Ref.update(text, (current) => current + item.text).pipe(
+                          Effect.zipRight(
+                            Ref.update(attemptProgress, (current) => [...current, next]),
+                          ),
                         );
-                        const prior = current[priorIndex];
-                        const next: BufferedToolCall = {
-                          argumentsJson: (prior?.argumentsJson ?? "") + item.argumentsJsonDelta,
-                          id: item.id,
-                          name: item.name ?? prior?.name ?? "",
-                          ...(item.index === undefined ? {} : { index: item.index }),
-                        };
-                        return priorIndex < 0
-                          ? [...current, next]
-                          : current.map((call, index) => (index === priorIndex ? next : call));
-                      });
-                    }
-                    return Ref.set(stopReason, item.stopReason);
-                  },
-                );
-                const buffered = yield* Ref.get(attemptProgress);
-                yield* Effect.forEach(buffered, (item) => progress.publish(sessionId, item));
+                      }
+                      if (item._tag === "thinkingDelta") {
+                        const next: Progress = { _tag: "assistantThinking", text: item.text };
+                        return Ref.update(attemptProgress, (current) => [...current, next]);
+                      }
+                      if (item._tag === "toolCall") {
+                        return Ref.update(toolCalls, (current) => {
+                          const priorIndex = current.findIndex((call) => call.id === item.id);
+                          const next: BufferedToolCall = {
+                            argumentsJson: item.argumentsJson,
+                            id: item.id,
+                            name: item.name,
+                          };
+                          return priorIndex < 0
+                            ? [...current, next]
+                            : current.map((call, index) => (index === priorIndex ? next : call));
+                        });
+                      }
+                      if (item._tag === "toolCallDelta") {
+                        return Ref.update(toolCalls, (current) => {
+                          const priorIndex = current.findIndex(
+                            (call) =>
+                              call.id === item.id ||
+                              (item.index !== undefined && call.index === item.index),
+                          );
+                          const prior = current[priorIndex];
+                          const next: BufferedToolCall = {
+                            argumentsJson: (prior?.argumentsJson ?? "") + item.argumentsJsonDelta,
+                            id: item.id,
+                            name: item.name ?? prior?.name ?? "",
+                            ...(item.index === undefined ? {} : { index: item.index }),
+                          };
+                          return priorIndex < 0
+                            ? [...current, next]
+                            : current.map((call, index) => (index === priorIndex ? next : call));
+                        });
+                      }
+                      return Ref.set(stopReason, item.stopReason);
+                    },
+                  );
+                  const buffered = yield* Ref.get(attemptProgress);
+                  yield* Effect.forEach(buffered, (item) => progress.publish(sessionId, item));
+                }),
+              Effect.gen(function* () {
+                const detail = `Maximum provider round bound of ${providerRoundBound(options)} exceeded.`;
+                yield* Ref.set(text, detail);
+                yield* Ref.set(terminalDiagnostic, {
+                  detail,
+                  reason: "turn_failure",
+                });
+                yield* Ref.set(stopReason, "error");
               }),
             );
 
@@ -818,7 +824,7 @@ export const TurnsLive = (
                 const context = yield* fold().pipe(
                   Effect.catchTag("ContextBudgetExceeded", (error) => {
                     const compactionOptions = resolveCompactionPolicyOptions(
-                      layerCompactionOptions,
+                      compaction.policy,
                       options.compaction,
                     );
                     return Ref.getAndSet(compactionAttempted, true).pipe(
@@ -829,9 +835,19 @@ export const TurnsLive = (
                               options: compactionOptions,
                               progress,
                               provider,
+                              providerRuntime,
                               sessionId,
                               turnOrdinal,
-                            }).pipe(Effect.zipRight(fold()))
+                            }).pipe(
+                              // An overflow follows the current user or tool-result Entry, so the
+                              // unsummarized span is non-empty. Either error is an invariant defect
+                              // in this in-turn path, while compactNow keeps both errors typed.
+                              Effect.catchTags({
+                                CompactionDisabled: (failure) => Effect.die(failure),
+                                NothingToCompact: (failure) => Effect.die(failure),
+                              }),
+                              Effect.zipRight(fold()),
+                            )
                           : Effect.fail(error),
                       ),
                     );
@@ -850,29 +866,7 @@ export const TurnsLive = (
                   ),
                 );
                 yield* phaseChanged(progress, sessionId, "STREAMING");
-                yield* consume(context.items).pipe(
-                  Effect.retry(
-                    Schedule.exponential(`${DEFAULT_RETRY_BASE_DELAY_MS} millis`).pipe(
-                      Schedule.intersect(
-                        Schedule.recurs((options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS) - 1),
-                      ),
-                      Schedule.whileInput((error: ProviderError) => error.transient),
-                      Schedule.onDecision(([delay], decision) =>
-                        ScheduleDecision.isContinue(decision)
-                          ? Ref.get(attempts).pipe(
-                              Effect.flatMap((attempt) =>
-                                progress.publish(sessionId, {
-                                  _tag: "providerRetryScheduled",
-                                  attempt: attempt + 1,
-                                  delayMs: Duration.toMillis(delay),
-                                }),
-                              ),
-                            )
-                          : Effect.void,
-                      ),
-                    ),
-                  ),
-                );
+                yield* consume(context.items);
                 const reason = yield* Ref.get(stopReason);
                 if (reason !== "toolCalls") {
                   return reason;
@@ -1030,7 +1024,7 @@ export const TurnsLive = (
                   if (failure?._tag === "ProviderError") {
                     return Effect.logError("Provider stream failed", cause).pipe(
                       Effect.zipRight(
-                        Ref.get(attempts).pipe(
+                        providerRuntime.attemptCount.pipe(
                           Effect.flatMap((attemptCount) =>
                             settle("error", {
                               attempts: attemptCount,
@@ -1277,7 +1271,7 @@ export const TurnsLive = (
           content: string,
           options: TurnOptions = {},
         ): Effect.Effect<TurnResult, TurnFailure> => {
-          validateTurnOptions(options, layerCompactionOptions);
+          validateTurnOptions(options, compaction.policy);
           return Effect.suspend(() =>
             Ref.get(active).pipe(
               Effect.flatMap((current) => {
@@ -1326,4 +1320,3 @@ export const TurnsLive = (
       } satisfies TurnsService;
     }),
   );
-};

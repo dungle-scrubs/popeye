@@ -19,11 +19,13 @@ export {
 } from "./compaction-policy.js";
 export {
   BudgetExceeded,
+  CompactionDisabled,
   DuplicateToolName,
   GateRejected,
   MailboxClosed,
   MailboxFull,
   MailboxSessionNotFound,
+  NothingToCompact,
   ProviderError,
   ToolError,
   TurnQueueFull,
@@ -123,7 +125,6 @@ export {
   type TurnOptions,
   type TurnResult,
   Turns,
-  type TurnsLayerOptions,
   TurnsLive,
   type TurnsService,
 } from "./turn.js";

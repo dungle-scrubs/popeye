@@ -20,6 +20,7 @@ import {
   Tracer,
 } from "effect";
 import { expect, test } from "vitest";
+import { Compaction, CompactionLive, type CompactionPolicyOptions } from "./compaction-policy.js";
 import { ProviderError } from "./errors.js";
 import { MailboxLive } from "./mailbox.js";
 import { type Progress, ProgressHubLive } from "./progress.js";
@@ -41,6 +42,7 @@ const testLayer = (
   service: ProviderService,
   journalLayer = JournalMemory(createMemoryJournalBacking()),
   toolLayer = ToolRegistryLive([]),
+  compactionOptions: CompactionPolicyOptions = {},
 ) => {
   const mailboxLayer = MailboxLive().pipe(Layer.provide(journalLayer));
   const sessionsLayer = SessionsLive().pipe(
@@ -53,7 +55,13 @@ const testLayer = (
     providerLayer(service),
     toolLayer,
   );
-  return Layer.mergeAll(dependencies, sessionsLayer, TurnsLive().pipe(Layer.provide(dependencies)));
+  const compactionLayer = CompactionLive(compactionOptions).pipe(Layer.provide(dependencies));
+  const turnDependencies = Layer.merge(dependencies, compactionLayer);
+  return Layer.mergeAll(
+    turnDependencies,
+    sessionsLayer,
+    TurnsLive().pipe(Layer.provide(turnDependencies)),
+  );
 };
 
 const scriptedProvider = (items: ReadonlyArray<AssistantItem>): ProviderService => ({
@@ -1720,6 +1728,81 @@ test("budget exhaustion persists the fold diagnostic and publishes an error sett
   expect(observed.at(-1)).toEqual({ _tag: "phaseChanged", phase: "IDLE" });
 });
 
+test("a disabled Compaction service makes overflow settle without a summarize request", async () => {
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      return Stream.empty;
+    },
+  };
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const settled = yield* turns.runTurn(session.id, "Too large", { contextBudget: 0 });
+      return { branch: yield* journal.readBranch(session.id), settled };
+    }).pipe(
+      Effect.provide(
+        testLayer(provider, undefined, ToolRegistryLive([]), {
+          enabled: false,
+        }),
+      ),
+    ),
+  );
+
+  expect(requests).toBe(0);
+  expect(result.settled).toEqual({ stopReason: "error" });
+  expect(result.branch.filter((entry) => entry.kind === "compaction")).toHaveLength(0);
+});
+
+test("compactNow waits for an active turn to settle before it compacts", async () => {
+  const entered = await Effect.runPromise(Deferred.make<void>());
+  const release = await Effect.runPromise(Deferred.make<void>());
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: (_context, options) => {
+      requests += 1;
+      return options.purpose === "turn"
+        ? Stream.fromEffect(
+            Deferred.succeed(entered, undefined).pipe(
+              Effect.zipRight(Deferred.await(release)),
+              Effect.as({ _tag: "done" as const, stopReason: "done" as const }),
+            ),
+          )
+        : Stream.fromIterable([
+            { _tag: "textDelta" as const, text: "manual summary" },
+            { _tag: "done" as const, stopReason: "done" as const },
+          ]);
+    },
+  };
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const compaction = yield* Compaction;
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const running = yield* Effect.fork(turns.runTurn(session.id, "Hold"));
+      yield* Deferred.await(entered);
+      const compacting = yield* Effect.fork(compaction.compactNow(session.id));
+      yield* Effect.yieldNow();
+      const whileRunning = yield* Fiber.poll(compacting);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(running);
+      const compacted = yield* Fiber.join(compacting);
+      return { branch: yield* journal.readBranch(session.id), compacted, whileRunning };
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+
+  expect(Option.isNone(result.whileRunning)).toBe(true);
+  expect(requests).toBe(2);
+  expect(result.compacted.entriesCovered).toBe(2);
+  expect(result.branch.at(-1)?.kind).toBe("compaction");
+});
+
 test("context overflow triggers compact-then-retry exactly once per turn", async () => {
   const requestKinds: Array<string | undefined> = [];
   const provider: ProviderService = {
@@ -1728,7 +1811,7 @@ test("context overflow triggers compact-then-retry exactly once per turn", async
       requestKinds.push(purpose);
       return purpose === "compaction"
         ? Stream.fromIterable([
-            { _tag: "textDelta" as const, text: "brief" },
+            { _tag: "textDelta" as const, text: "summary remains above budget" },
             { _tag: "done" as const, stopReason: "done" as const },
           ])
         : Stream.fromIterable([
@@ -1751,28 +1834,30 @@ test("context overflow triggers compact-then-retry exactly once per turn", async
         }),
       );
       const settled = yield* turns.runTurn(session.id, "Now", {
-        compaction: { retainedTailCount: 1, sliceBudget: 64 },
+        compaction: { retainedTailCount: 1, sliceBudget: 256 },
         contextBudget: 12,
       });
       return { branch: yield* journal.readBranch(session.id), settled };
     }).pipe(Effect.provide(testLayer(provider))),
   );
 
-  expect(result.settled).toEqual({ stopReason: "done" });
+  expect(result.settled).toEqual({ stopReason: "error" });
   expect(result.branch.filter((entry) => entry.kind === "compaction")).toHaveLength(1);
   expect(result.branch.at(-1)).toMatchObject({
-    payload: { content: "Completed.", role: "assistant", stopReason: "done" },
+    payload: { diagnostic: { reason: "budget_exceeded" }, role: "assistant", stopReason: "error" },
   });
-  expect(requestKinds).toEqual(["compaction", "turn"]);
+  expect(requestKinds).toEqual(["compaction"]);
 });
 
 test("compaction summarization requests are bounded slices", async () => {
   const compactionContexts: Array<ReadonlyArray<ContextItem>> = [];
+  const sliceIndexes: Array<number | undefined> = [];
   const summaries: Array<string> = [];
   const provider: ProviderService = {
     streamAssistant: (context, options) => {
       if (options.purpose === "compaction") {
         compactionContexts.push(context);
+        sliceIndexes.push(options.sliceIndex);
         const summary = `s${compactionContexts.length}`;
         summaries.push(summary);
         return Stream.fromIterable([
@@ -1793,11 +1878,11 @@ test("compaction summarization requests are bounded slices", async () => {
         session.id,
         EntryDraftSchema.make({
           kind: "message",
-          payload: { content: "x".repeat(200), role: "user" },
+          payload: { content: "x".repeat(500), role: "user" },
         }),
       );
       yield* turns.runTurn(session.id, "Now", {
-        compaction: { retainedTailCount: 0, sliceBudget: 32 },
+        compaction: { retainedTailCount: 0, sliceBudget: 256 },
         contextBudget: 64,
       });
       return yield* journal.readBranch(session.id);
@@ -1805,13 +1890,315 @@ test("compaction summarization requests are bounded slices", async () => {
   );
 
   expect(compactionContexts.length).toBeGreaterThan(1);
+  expect(sliceIndexes).toEqual(compactionContexts.map((_, index) => index + 1));
   expect(
     compactionContexts.every(
-      (context) => context.reduce((size, item) => size + item.content.length, 0) <= 32,
+      (context) => context.reduce((size, item) => size + item.content.length, 0) <= 256,
     ),
   ).toBe(true);
+  const sourceFragments = compactionContexts.flatMap((context) => context.slice(1));
+  expect(sourceFragments.map((item) => item.content).join("")).toBe(`${"x".repeat(500)}Now`);
+  const averageFill =
+    compactionContexts.reduce(
+      (total, context) => total + context.reduce((size, item) => size + item.content.length, 0),
+      0,
+    ) /
+    compactionContexts.length /
+    256;
+  expect(averageFill).toBeGreaterThan(0.85);
   expect(result.find((entry) => entry.kind === "compaction")?.payload).toMatchObject({
     summary: summaries.join("\n"),
+  });
+});
+
+test("successive overflows carry the prior summary marker through compaction-of-compaction", async () => {
+  const marker = "ORIGINAL-BRANCH-MARKER";
+  const compactionContexts: Array<ReadonlyArray<ContextItem>> = [];
+  const turnContexts: Array<ReadonlyArray<ContextItem>> = [];
+  const provider: ProviderService = {
+    streamAssistant: (context, options) => {
+      if (options.purpose === "compaction") {
+        compactionContexts.push(context);
+        const summary = context.some((item) => item.content.includes(marker))
+          ? `summary:${marker}`
+          : "summary:marker-missing";
+        return Stream.fromIterable([
+          { _tag: "textDelta" as const, text: summary },
+          { _tag: "done" as const, stopReason: "done" as const },
+        ]);
+      }
+      turnContexts.push(context);
+      return Stream.fromIterable([
+        {
+          _tag: "textDelta" as const,
+          text: turnContexts.length === 1 ? "z".repeat(80) : "Complete.",
+        },
+        { _tag: "done" as const, stopReason: "done" as const },
+      ]);
+    },
+  };
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      yield* journal.appendEntry(
+        session.id,
+        EntryDraftSchema.make({
+          kind: "message",
+          payload: { content: `${marker}:${"x".repeat(80)}`, role: "user" },
+        }),
+      );
+      const options = {
+        compaction: { retainedTailCount: 0, sliceBudget: 256 },
+        contextBudget: 40,
+      } as const;
+      yield* turns.runTurn(session.id, "First", options);
+      yield* turns.runTurn(session.id, "Second", options);
+      return yield* journal.readBranch(session.id);
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+
+  expect(result.filter((entry) => entry.kind === "compaction")).toHaveLength(2);
+  expect(compactionContexts).toHaveLength(2);
+  expect(compactionContexts[1]?.[1]).toMatchObject({
+    role: "user",
+  });
+  expect(compactionContexts[1]?.[1]?.content).toContain("Prior summary:");
+  expect(compactionContexts[1]?.[1]?.content).toContain(marker);
+  expect(turnContexts[1]?.some((item) => item.content.includes(marker))).toBe(true);
+});
+
+test("retained tail extends backward to keep a Tool call with its retained result", async () => {
+  const turnContexts: Array<ReadonlyArray<ContextItem>> = [];
+  const provider: ProviderService = {
+    streamAssistant: (context, options) =>
+      options.purpose === "compaction"
+        ? Stream.fromIterable([
+            { _tag: "textDelta" as const, text: "brief" },
+            { _tag: "done" as const, stopReason: "done" as const },
+          ])
+        : Stream.fromIterable([
+            ...(turnContexts.push(context) > 0
+              ? [{ _tag: "done" as const, stopReason: "done" as const }]
+              : []),
+          ]),
+  };
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      yield* journal.appendEntry(
+        session.id,
+        EntryDraftSchema.make({
+          kind: "message",
+          payload: { content: "x".repeat(100), role: "user" },
+        }),
+      );
+      yield* journal.appendEntry(
+        session.id,
+        EntryDraftSchema.make({
+          kind: "message",
+          payload: {
+            content: "Calling tool.",
+            role: "assistant",
+            stopReason: "toolCalls",
+            toolCalls: [{ argumentsJson: "{}", id: "call-1", name: "lookup" }],
+          },
+        }),
+      );
+      yield* journal.appendEntry(
+        session.id,
+        EntryDraftSchema.make({
+          kind: "message",
+          payload: {
+            content: "tool result",
+            isError: false,
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "lookup",
+          },
+        }),
+      );
+      yield* turns.runTurn(session.id, "Continue", {
+        compaction: { retainedTailCount: 2, sliceBudget: 256 },
+        contextBudget: 60,
+      });
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+
+  const context = turnContexts[0] ?? [];
+  const toolResultIndex = context.findIndex((item) => item.role === "toolResult");
+  expect(toolResultIndex).toBeGreaterThan(0);
+  expect(context[toolResultIndex - 1]).toMatchObject({
+    role: "assistant",
+    toolCalls: [{ id: "call-1" }],
+  });
+});
+
+test("Compaction slices long Tool results into plain user fragments", async () => {
+  const compactionContexts: Array<ReadonlyArray<ContextItem>> = [];
+  const provider: ProviderService = {
+    streamAssistant: (context, options) => {
+      if (options.purpose === "compaction") {
+        compactionContexts.push(context);
+        return Stream.fromIterable([
+          { _tag: "textDelta" as const, text: "brief" },
+          { _tag: "done" as const, stopReason: "done" as const },
+        ]);
+      }
+      return Stream.fromIterable([{ _tag: "done" as const, stopReason: "done" as const }]);
+    },
+  };
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      yield* journal.appendEntry(
+        session.id,
+        EntryDraftSchema.make({
+          kind: "message",
+          payload: {
+            content: "Calling.",
+            role: "assistant",
+            stopReason: "toolCalls",
+            toolCalls: [{ argumentsJson: "{}", id: "long-call", name: "lookup" }],
+          },
+        }),
+      );
+      yield* journal.appendEntry(
+        session.id,
+        EntryDraftSchema.make({
+          kind: "message",
+          payload: {
+            content: "r".repeat(400),
+            isError: false,
+            role: "toolResult",
+            toolCallId: "long-call",
+            toolName: "lookup",
+          },
+        }),
+      );
+      yield* turns.runTurn(session.id, "Continue", {
+        compaction: { retainedTailCount: 0, sliceBudget: 256 },
+        contextBudget: 32,
+      });
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+
+  const fragments = compactionContexts.flatMap((context) => context.slice(1));
+  expect(compactionContexts.length).toBeGreaterThan(1);
+  expect(fragments.every((item) => item.role === "user")).toBe(true);
+  expect(fragments.every((item) => !("toolCalls" in item) && !("toolCallId" in item))).toBe(true);
+});
+
+test("a transient summarize failure retries under the turn attempt policy", async () => {
+  const calls: Array<{
+    readonly attempt: number;
+    readonly purpose: string | undefined;
+    readonly sliceIndex: number | undefined;
+  }> = [];
+  const provider: ProviderService = {
+    streamAssistant: (_context, options) => {
+      calls.push({
+        attempt: options.attempt,
+        purpose: options.purpose,
+        sliceIndex: options.sliceIndex,
+      });
+      if (options.purpose === "compaction" && calls.length === 1) {
+        return Stream.fail(
+          new ProviderError({ message: "Transient summary blip.", transient: true }),
+        );
+      }
+      return options.purpose === "compaction"
+        ? Stream.fromIterable([
+            { _tag: "textDelta" as const, text: "brief" },
+            { _tag: "done" as const, stopReason: "done" as const },
+          ])
+        : Stream.fromIterable([{ _tag: "done" as const, stopReason: "done" as const }]);
+    },
+  };
+  const settled = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      yield* journal.appendEntry(
+        session.id,
+        EntryDraftSchema.make({
+          kind: "message",
+          payload: { content: "x".repeat(80), role: "user" },
+        }),
+      );
+      return yield* turns.runTurn(session.id, "Now", {
+        compaction: { retainedTailCount: 0, sliceBudget: 256 },
+        contextBudget: 20,
+        maxAttempts: 2,
+        maxProviderRounds: 3,
+      });
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+
+  expect(settled).toEqual({ stopReason: "done" });
+  expect(calls).toEqual([
+    { attempt: 1, purpose: "compaction", sliceIndex: 1 },
+    { attempt: 2, purpose: "compaction", sliceIndex: 1 },
+    { attempt: 3, purpose: "turn", sliceIndex: undefined },
+  ]);
+});
+
+test("Compaction slice requests stop at the shared provider-round bound", async () => {
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: (_context, options) => {
+      requests += 1;
+      expect(options.purpose).toBe("compaction");
+      return Stream.fromIterable([
+        { _tag: "textDelta" as const, text: "partial" },
+        { _tag: "done" as const, stopReason: "done" as const },
+      ]);
+    },
+  };
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      yield* journal.appendEntry(
+        session.id,
+        EntryDraftSchema.make({
+          kind: "message",
+          payload: { content: "x".repeat(600), role: "user" },
+        }),
+      );
+      const settled = yield* turns.runTurn(session.id, "Now", {
+        compaction: { retainedTailCount: 0, sliceBudget: 256 },
+        contextBudget: 20,
+        maxAttempts: 1,
+        maxProviderRounds: 2,
+      });
+      return { branch: yield* journal.readBranch(session.id), settled };
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+
+  expect(requests).toBe(2);
+  expect(result.settled).toEqual({ stopReason: "error" });
+  expect(result.branch.filter((entry) => entry.kind === "compaction")).toHaveLength(0);
+  expect(result.branch.at(-1)).toMatchObject({
+    payload: {
+      diagnostic: {
+        attempts: 2,
+        detail: "Maximum provider round bound of 2 exceeded.",
+        reason: "provider_error",
+      },
+    },
   });
 });
 
@@ -1843,7 +2230,7 @@ test("unsummarizable overflow yields BudgetExceeded with the options diagnostic"
         }),
       );
       const settled = yield* turns.runTurn(session.id, "Retained tail is too large", {
-        compaction: { retainedTailCount: 1, sliceBudget: 64 },
+        compaction: { retainedTailCount: 1, sliceBudget: 256 },
         contextBudget: 12,
       });
       return { branch: yield* journal.readBranch(session.id), settled };
@@ -1904,7 +2291,7 @@ test("retry and compaction-trigger diagnostics surface as structured progress", 
       );
       yield* Effect.yieldNow();
       const settled = yield* turns.runTurn(session.id, "Now", {
-        compaction: { retainedTailCount: 1, sliceBudget: 64 },
+        compaction: { retainedTailCount: 1, sliceBudget: 256 },
         contextBudget: 12,
         maxAttempts: 2,
       });
@@ -1925,7 +2312,7 @@ test("retry and compaction-trigger diagnostics surface as structured progress", 
   });
   expect(observed).toContainEqual({
     _tag: "providerRetryScheduled",
-    attempt: 2,
+    attempt: 3,
     delayMs: 100,
   });
 });
@@ -2405,7 +2792,7 @@ test("turn capacity options reject invalid values before enqueue", async () => {
       ).toThrow("Compaction retained-tail count must be a non-negative safe integer.");
       expect(() =>
         turns.runTurn(session.id, "Invalid", { compaction: { sliceBudget: 0 } }),
-      ).toThrow("Compaction slice budget must be a safe integer greater than 10.");
+      ).toThrow("Compaction slice budget must be a safe integer of at least 200.");
     }).pipe(Effect.provide(testLayer(scriptedProvider([])))),
   );
 });

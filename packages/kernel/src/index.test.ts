@@ -8,11 +8,13 @@ test("exports the kernel package marker", () => {
 
 test("exports every public kernel failure", () => {
   expect(kernel.BudgetExceeded).toBeDefined();
+  expect(kernel.CompactionDisabled).toBeDefined();
   expect(kernel.DuplicateToolName).toBeDefined();
   expect(kernel.GateRejected).toBeDefined();
   expect(kernel.MailboxClosed).toBeDefined();
   expect(kernel.MailboxFull).toBeDefined();
   expect(kernel.MailboxSessionNotFound).toBeDefined();
+  expect(kernel.NothingToCompact).toBeDefined();
   expect(kernel.ProviderError).toBeDefined();
   expect(kernel.ToolError).toBeDefined();
 });

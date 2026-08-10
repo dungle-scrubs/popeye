@@ -460,6 +460,8 @@ export const makePiAiProviderLayer = (
                 attempt: options.attempt,
                 modelId: model.id,
                 provider: model.provider,
+                purpose: options.purpose ?? "turn",
+                ...(options.sliceIndex === undefined ? {} : { sliceIndex: options.sliceIndex }),
                 turnOrdinal: options.turnOrdinal,
               },
             }),

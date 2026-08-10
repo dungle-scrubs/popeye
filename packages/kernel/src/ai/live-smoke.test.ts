@@ -7,6 +7,7 @@ import { createMemoryJournalBacking, Journal, JournalMemory } from "@peye/journa
 import { Effect, Layer } from "effect";
 import { expect, test } from "vitest";
 
+import { CompactionLive } from "../compaction-policy.js";
 import { MailboxLive } from "../mailbox.js";
 import { ProgressHubLive } from "../progress.js";
 import { Sessions, SessionsLive } from "../sessions.js";
@@ -46,10 +47,12 @@ test.skipIf(liveSmoke === undefined)(
       providerLayer,
       toolLayer,
     );
+    const compactionLayer = CompactionLive().pipe(Layer.provide(dependencies));
+    const turnDependencies = Layer.merge(dependencies, compactionLayer);
     const liveLayer = Layer.mergeAll(
-      dependencies,
+      turnDependencies,
       SessionsLive().pipe(Layer.provide(Layer.mergeAll(journalLayer, mailboxLayer, toolLayer))),
-      TurnsLive().pipe(Layer.provide(dependencies)),
+      TurnsLive().pipe(Layer.provide(turnDependencies)),
     );
 
     const output = await Effect.runPromise(
