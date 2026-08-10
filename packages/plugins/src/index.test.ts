@@ -10,12 +10,16 @@ test("exports the M15 interface from the public Plugin seam", () => {
   expect(Object.keys(plugins)).toEqual(
     expect.arrayContaining([
       "CapabilityDeclarationSchema",
+      "CapabilityNameSchema",
+      "CommandContributionKind",
+      "ContributionRegistry",
       "ContributionRegistryError",
+      "ContributionRegistryLive",
       "PluginLoadError",
       "PluginManifestSchema",
       "contributionKey",
       "createCapabilityGrants",
-      "createContributionRegistry",
+      "defineContributionKind",
       "decodePluginManifest",
       "defineCommandContribution",
       "defineHookContribution",

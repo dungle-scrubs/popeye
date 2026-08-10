@@ -67,6 +67,9 @@ importers:
         specifier: workspace:*
         version: link:../protocol
     devDependencies:
+      '@peye/kernel':
+        specifier: workspace:*
+        version: link:../kernel
       effect:
         specifier: 3.22.1
         version: 3.22.1

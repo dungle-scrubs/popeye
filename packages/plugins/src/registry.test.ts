@@ -3,140 +3,349 @@ import { Effect, Schema } from "effect";
 import { expect, test } from "vitest";
 
 import { createCapabilityGrants } from "./capability.js";
-import { contributionKey } from "./contribution.js";
-import { createContributionRegistry, type RegistryDiagnostic } from "./registry.js";
+import {
+  contributionKey,
+  defineContribution,
+  defineInstructionFragmentContribution,
+  defineToolContribution,
+} from "./contribution.js";
+import {
+  ContributionRegistry,
+  ContributionRegistryLive,
+  defineContributionKind,
+  InstructionFragmentContributionKind,
+  type RegistryDiagnostic,
+  ToolContributionKind,
+} from "./registry.js";
 
-test("Duplicate key resolves by declared priority with a diagnostic naming both plugins", async () => {
+const manifest = (name: string, requiredCapabilities: ReadonlyArray<string> = []) => ({
+  capabilities: requiredCapabilities.map((capability) => ({ name: capability, required: true })),
+  name,
+  version: "1.0.0",
+});
+
+const grants = (name: string, capabilities: ReadonlyArray<string> = []) =>
+  createCapabilityGrants(Schema.decodeSync(SessionIdSchema)(name), capabilities);
+
+test("Plugin registration is atomic when the third Contribution conflicts", async () => {
   const diagnostics: Array<RegistryDiagnostic> = [];
-  const registry = createContributionRegistry({
-    diagnosticSink: (diagnostic) => Effect.sync(() => diagnostics.push(diagnostic)),
-  });
-  registry.registerKind("command");
-  const key = contributionKey("repo-tools", "scan");
-  const lowerPriority = { key, kind: "command", payload: "first", priority: 1 };
-  const higherPriority = { key, kind: "command", payload: "second", priority: 10 };
-  const manifest = { capabilities: [], name: "repo-tools", version: "1.0.0" } as const;
-  const sessionId = Schema.decodeSync(SessionIdSchema)("priority-session");
-  const grants = createCapabilityGrants(sessionId);
+  const contributions = [
+    defineInstructionFragmentContribution({ content: "one", id: "one", trigger: "explicit" }),
+    defineInstructionFragmentContribution({ content: "two", id: "two", trigger: "explicit" }),
+    defineInstructionFragmentContribution({ content: "two again", id: "two", trigger: "explicit" }),
+  ];
 
-  await Effect.runPromise(registry.registerPlugin(manifest, [lowerPriority], grants));
-  await Effect.runPromise(registry.registerPlugin(manifest, [higherPriority], grants));
-
-  const tied = { key, kind: "command", payload: "third", priority: 10 };
-  const tieError = await Effect.runPromise(
-    Effect.flip(registry.registerPlugin(manifest, [tied], grants)),
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const registry = yield* ContributionRegistry;
+      const error = yield* Effect.flip(
+        registry.registerPlugin(manifest("repo-tools"), contributions),
+      );
+      return {
+        error,
+        remaining: yield* registry.list(
+          InstructionFragmentContributionKind,
+          grants("atomic-session"),
+        ),
+      };
+    }).pipe(
+      Effect.provide(
+        ContributionRegistryLive({
+          diagnosticSink: (diagnostic) => Effect.sync(() => diagnostics.push(diagnostic)),
+        }),
+      ),
+    ),
   );
 
-  expect(await Effect.runPromise(registry.lookup("command", key, grants))).toBe(higherPriority);
-  expect(tieError).toMatchObject({
+  expect(result.error).toMatchObject({
     _tag: "ContributionRegistryError",
-    key,
+    key: contributionKey("repo-tools", "two"),
     reason: "priority_tie",
   });
+  expect(result.remaining).toEqual([]);
   expect(diagnostics).toEqual([
     expect.objectContaining({
       existingPlugin: "repo-tools",
-      existingPriority: 1,
       incomingPlugin: "repo-tools",
-      incomingPriority: 10,
-      key,
-      kind: "command",
-      selectedPlugin: "repo-tools",
-      type: "contribution_conflict",
-    }),
-    expect.objectContaining({
-      existingPlugin: "repo-tools",
-      incomingPlugin: "repo-tools",
-      key,
-      kind: "command",
+      key: contributionKey("repo-tools", "two"),
       selectedPlugin: null,
       type: "contribution_conflict",
     }),
   ]);
 });
 
-test("A tool requiring an ungranted capability is unavailable (not listed to the model) with a diagnostic", async () => {
+test("Distinct Plugin namespaces do not conflict", async () => {
   const diagnostics: Array<RegistryDiagnostic> = [];
-  const registry = createContributionRegistry({
-    diagnosticSink: (diagnostic) => Effect.sync(() => diagnostics.push(diagnostic)),
-  });
-  const tool = {
-    key: contributionKey("repo-tools", "write-file"),
-    kind: "tool",
-    payload: {
-      description: "Writes a file.",
-      execute: () => Effect.succeed({ content: "written" }),
-      name: "write-file",
-      parameters: Schema.Struct({ path: Schema.String }),
-      replay: "never" as const,
-      requiredCapabilities: ["filesystem-write"],
-    },
-    priority: 0,
-  };
-  const sessionId = Schema.decodeSync(SessionIdSchema)("session-a");
-  const ungranted = createCapabilityGrants(sessionId);
-  const manifest = { capabilities: [], name: "repo-tools", version: "1.0.0" } as const;
-  await Effect.runPromise(registry.registerPlugin(manifest, [tool], ungranted));
-
-  expect(await Effect.runPromise(registry.lookup("tool", tool.key, ungranted))).toBeUndefined();
-  expect(await Effect.runPromise(registry.list("tool", ungranted))).toEqual([]);
-  expect(diagnostics).toContainEqual({
-    key: tool.key,
-    kind: "tool",
-    missingCapabilities: ["filesystem-write"],
-    plugin: "repo-tools",
-    type: "contribution_unavailable",
+  const contribution = defineInstructionFragmentContribution({
+    content: "scan",
+    id: "scan",
+    trigger: "explicit",
   });
 
-  const granted = createCapabilityGrants(sessionId, ["filesystem-write"]);
-  expect(await Effect.runPromise(registry.lookup("tool", tool.key, granted))).toBe(tool);
-  expect(await Effect.runPromise(registry.list("tool", granted))).toEqual([tool]);
+  const listed = await Effect.runPromise(
+    Effect.gen(function* () {
+      const registry = yield* ContributionRegistry;
+      yield* registry.registerPlugin(manifest("repo-tools"), [contribution]);
+      yield* registry.registerPlugin(manifest("other-tools"), [contribution]);
+      return yield* registry.list(InstructionFragmentContributionKind, grants("namespace-session"));
+    }).pipe(
+      Effect.provide(
+        ContributionRegistryLive({
+          diagnosticSink: (diagnostic) => Effect.sync(() => diagnostics.push(diagnostic)),
+        }),
+      ),
+    ),
+  );
+
+  expect(listed.map((item) => item.key)).toEqual(["repo-tools/scan", "other-tools/scan"]);
+  expect(diagnostics).toEqual([]);
 });
 
-test("A manifest-required ungranted capability fails the plugin load with a message naming the capability", async () => {
-  const registry = createContributionRegistry();
-  const sessionId = Schema.decodeSync(SessionIdSchema)("session-required");
-  const grants = createCapabilityGrants(sessionId);
-  const manifest = {
-    capabilities: [{ name: "shell", required: true }],
-    name: "repo-tools",
-    version: "1.0.0",
-  } as const;
-
-  const error = await Effect.runPromise(Effect.flip(registry.registerPlugin(manifest, [], grants)));
-
-  expect(error).toMatchObject({
-    _tag: "PluginLoadError",
-    cause: "capability_ungranted",
-    plugin: "repo-tools",
-  });
-  expect(error.message).toContain("shell");
-});
-
-test("Registering an unknown contribution kind fails typed until that kind is registered", async () => {
-  const registry = createContributionRegistry();
-  const sessionId = Schema.decodeSync(SessionIdSchema)("session-new-kind");
-  const grants = createCapabilityGrants(sessionId);
-  const manifest = { capabilities: [], name: "repo-tools", version: "1.0.0" } as const;
-  const contribution = {
-    key: contributionKey("repo-tools", "status-panel"),
-    kind: "renderer",
-    payload: { target: "status" },
-  };
-
+test("Raw adversarial Contribution names fail through the typed registration channel", async () => {
   const error = await Effect.runPromise(
-    Effect.flip(registry.registerPlugin(manifest, [contribution], grants)),
+    Effect.gen(function* () {
+      const registry = yield* ContributionRegistry;
+      return yield* Effect.flip(
+        registry.registerPlugin(manifest("repo-tools"), [
+          {
+            kind: "instruction-fragment",
+            name: "other-plugin/squat",
+            payload: { content: "squat", id: "squat", trigger: "explicit" },
+          },
+        ]),
+      );
+    }).pipe(Effect.provide(ContributionRegistryLive())),
   );
 
   expect(error).toMatchObject({
-    _tag: "ContributionRegistryError",
+    kind: "instruction-fragment",
+    reason: "invalid_name",
+  });
+  expect(error.message).toContain("contribution name must use kebab-case");
+});
+
+test("registerPlugin atomically replaces an existing Plugin and removePlugin unloads it", async () => {
+  const first = defineInstructionFragmentContribution({
+    content: "first",
+    id: "first",
+    trigger: "explicit",
+  });
+  const second = defineInstructionFragmentContribution({
+    content: "second",
+    id: "second",
+    trigger: "explicit",
+  });
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const registry = yield* ContributionRegistry;
+      yield* registry.registerPlugin(manifest("repo-tools"), [first]);
+      yield* registry.registerPlugin(manifest("repo-tools"), [second]);
+      const afterReplace = yield* registry.list(
+        InstructionFragmentContributionKind,
+        grants("replace-session"),
+      );
+      const removed = yield* registry.removePlugin("repo-tools");
+      const afterRemove = yield* registry.list(
+        InstructionFragmentContributionKind,
+        grants("replace-session"),
+      );
+      return { afterRemove, afterReplace, removed };
+    }).pipe(Effect.provide(ContributionRegistryLive())),
+  );
+
+  expect(result.afterReplace.map((item) => item.key)).toEqual(["repo-tools/second"]);
+  expect(result.removed).toBe(true);
+  expect(result.afterRemove).toEqual([]);
+});
+
+test("A kind Schema decodes payloads for typed list and lookup results", async () => {
+  const RendererPayloadSchema = Schema.Struct({ count: Schema.NumberFromString });
+  const RendererKind = defineContributionKind("renderer", RendererPayloadSchema);
+  const contribution = defineContribution("status-panel", "renderer", { count: "3" });
+  const key = contributionKey("display", "status-panel");
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const registry = yield* ContributionRegistry;
+      yield* registry.registerKind(RendererKind);
+      yield* registry.registerPlugin(manifest("display"), [contribution]);
+      const listed = yield* registry.list(RendererKind, grants("typed-session"));
+      const found = yield* registry.lookup(RendererKind, key, grants("typed-session"));
+      return { found, listed };
+    }).pipe(Effect.provide(ContributionRegistryLive())),
+  );
+
+  expect(result.listed[0]?.payload.count).toBe(3);
+  expect(result.found?.payload.count).toBe(3);
+});
+
+test("Invalid payloads fail registration without changing the registry", async () => {
+  const RendererKind = defineContributionKind(
+    "renderer",
+    Schema.Struct({ count: Schema.NumberFromString }),
+  );
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const registry = yield* ContributionRegistry;
+      yield* registry.registerKind(RendererKind);
+      const error = yield* Effect.flip(
+        registry.registerPlugin(manifest("display"), [
+          defineContribution("status-panel", "renderer", { count: "not-a-number" }),
+        ]),
+      );
+      return { error, listed: yield* registry.list(RendererKind, grants("payload-session")) };
+    }).pipe(Effect.provide(ContributionRegistryLive())),
+  );
+
+  expect(result.error).toMatchObject({ reason: "payload_invalid" });
+  expect(result.listed).toEqual([]);
+});
+
+test("Manifest-required Capabilities gate every Contribution at query time", async () => {
+  const instruction = defineInstructionFragmentContribution({
+    content: "Uses a shell.",
+    id: "shell-instructions",
+    trigger: "explicit",
+  });
+  const tool = defineToolContribution({
+    description: "Runs a shell command.",
+    execute: () => Effect.succeed({ content: "done" }),
+    name: "run-shell",
+    parameters: Schema.Struct({ command: Schema.String }),
+  });
+  const toolKey = contributionKey("shell-plugin", "run-shell");
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const registry = yield* ContributionRegistry;
+      yield* registry.registerPlugin(manifest("shell-plugin", ["shell"]), [instruction, tool]);
+      return {
+        privilegedInstructions: yield* registry.list(
+          InstructionFragmentContributionKind,
+          grants("privileged-session", ["shell"]),
+        ),
+        privilegedTools: yield* registry.list(
+          ToolContributionKind,
+          grants("privileged-session", ["shell"]),
+        ),
+        unprivilegedInstructions: yield* registry.list(
+          InstructionFragmentContributionKind,
+          grants("unprivileged-session"),
+        ),
+        unprivilegedLookup: yield* registry.lookup(
+          ToolContributionKind,
+          toolKey,
+          grants("unprivileged-session"),
+        ),
+        unprivilegedTools: yield* registry.list(
+          ToolContributionKind,
+          grants("unprivileged-session"),
+        ),
+      };
+    }).pipe(Effect.provide(ContributionRegistryLive())),
+  );
+
+  expect(result.unprivilegedInstructions).toEqual([]);
+  expect(result.unprivilegedTools).toEqual([]);
+  expect(result.unprivilegedLookup).toBeUndefined();
+  expect(result.privilegedInstructions.map((item) => item.key)).toEqual([
+    "shell-plugin/shell-instructions",
+  ]);
+  expect(result.privilegedTools.map((item) => item.key)).toEqual([toolKey]);
+});
+
+test("Capability diagnostics name every missing Capability and emit once per grant-set and key", async () => {
+  const diagnostics: Array<RegistryDiagnostic> = [];
+  const tool = defineToolContribution({
+    description: "Writes over the network.",
+    execute: () => Effect.succeed({ content: "written" }),
+    name: "publish",
+    parameters: Schema.Struct({ path: Schema.String }),
+    requiredCapabilities: ["network", "filesystem-write"],
+  });
+  const sessionGrants = grants("diagnostic-session");
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const registry = yield* ContributionRegistry;
+      yield* registry.registerPlugin(manifest("publisher", ["shell"]), [tool]);
+      yield* Effect.repeatN(registry.list(ToolContributionKind, sessionGrants), 9);
+      yield* registry.lookup(
+        ToolContributionKind,
+        contributionKey("publisher", "publish"),
+        sessionGrants,
+      );
+    }).pipe(
+      Effect.provide(
+        ContributionRegistryLive({
+          diagnosticSink: (diagnostic) => Effect.sync(() => diagnostics.push(diagnostic)),
+        }),
+      ),
+    ),
+  );
+
+  expect(diagnostics).toEqual([
+    {
+      cause: "capability_ungranted",
+      key: contributionKey("publisher", "publish"),
+      kind: "tool",
+      missingCapabilities: ["filesystem-write", "network", "shell"],
+      plugin: "publisher",
+      type: "contribution_unavailable",
+    },
+  ]);
+});
+
+test("Unregistered-kind queries and registrations fail typed", async () => {
+  const RendererKind = defineContributionKind("renderer", Schema.Struct({ target: Schema.String }));
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const registry = yield* ContributionRegistry;
+      const queryError = yield* Effect.flip(
+        registry.list(RendererKind, grants("unknown-kind-session")),
+      );
+      const registrationError = yield* Effect.flip(
+        registry.registerPlugin(manifest("display"), [
+          defineContribution("status", "renderer", { target: "status" }),
+        ]),
+      );
+      return { queryError, registrationError };
+    }).pipe(Effect.provide(ContributionRegistryLive())),
+  );
+
+  expect(result.queryError).toMatchObject({ kind: "renderer", reason: "unknown_kind" });
+  expect(result.registrationError).toMatchObject({
     kind: "renderer",
     reason: "unknown_kind",
   });
+});
 
-  registry.registerKind("renderer");
-  await Effect.runPromise(registry.registerPlugin(manifest, [contribution], grants));
-  expect(await Effect.runPromise(registry.lookup("renderer", contribution.key, grants))).toBe(
-    contribution,
+test("Re-registering a kind with different options fails typed and emits a diagnostic", async () => {
+  const diagnostics: Array<RegistryDiagnostic> = [];
+  const schema = Schema.Struct({ target: Schema.String });
+  const RendererKind = defineContributionKind("renderer", schema);
+  const ConflictingRendererKind = defineContributionKind("renderer", schema, {
+    requiredCapabilities: () => ["graphics"],
+  });
+
+  const error = await Effect.runPromise(
+    Effect.gen(function* () {
+      const registry = yield* ContributionRegistry;
+      yield* registry.registerKind(RendererKind);
+      yield* registry.registerKind(RendererKind);
+      return yield* Effect.flip(registry.registerKind(ConflictingRendererKind));
+    }).pipe(
+      Effect.provide(
+        ContributionRegistryLive({
+          diagnosticSink: (diagnostic) => Effect.sync(() => diagnostics.push(diagnostic)),
+        }),
+      ),
+    ),
   );
+
+  expect(error).toMatchObject({ kind: "renderer", reason: "kind_conflict" });
+  expect(diagnostics).toEqual([{ kind: "renderer", type: "kind_registration_conflict" }]);
 });

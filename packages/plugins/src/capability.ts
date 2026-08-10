@@ -5,6 +5,13 @@
  * security posture.
  */
 import type { SessionId } from "@peye/journal";
+import { Schema } from "effect";
+
+export const CapabilityNameSchema = Schema.String.pipe(
+  Schema.filter((name) => name.length > 0 && name === name.trim(), {
+    message: () => "capability name must be non-empty and trimmed",
+  }),
+);
 
 export interface CapabilityGrants {
   readonly capabilities: ReadonlyArray<string>;
@@ -16,7 +23,15 @@ export const createCapabilityGrants = (
   capabilities: Iterable<string> = [],
 ): CapabilityGrants =>
   Object.freeze({
-    capabilities: Object.freeze([...new Set(capabilities)].sort()),
+    capabilities: Object.freeze(
+      [
+        ...new Set(
+          [...capabilities].map((capability) =>
+            Schema.decodeSync(CapabilityNameSchema)(capability),
+          ),
+        ),
+      ].sort(),
+    ),
     sessionId,
   });
 
@@ -31,4 +46,6 @@ export const missingCapabilities = (
   grants: CapabilityGrants,
   requiredCapabilities: Iterable<string>,
 ): ReadonlyArray<string> =>
-  [...requiredCapabilities].filter((capability) => !hasCapability(grants, capability));
+  [...new Set(requiredCapabilities)]
+    .filter((capability) => !hasCapability(grants, capability))
+    .sort();
