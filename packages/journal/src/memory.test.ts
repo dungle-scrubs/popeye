@@ -1,4 +1,4 @@
 import { describeJournalContract } from "./journal-contract.js";
-import { createJournalMemoryHarness } from "./memory.js";
+import { createMemoryJournalHarness } from "./memory.js";
 
-describeJournalContract(createJournalMemoryHarness);
+describeJournalContract(createMemoryJournalHarness);

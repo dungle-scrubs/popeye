@@ -4,7 +4,13 @@
  */
 export const journalPackage = "@peye/journal";
 
-export { type JournalCorruptionClass, JournalError, JournalNotFound } from "./errors.js";
+export {
+  type JournalCorruptionClass,
+  JournalDraftRejected,
+  JournalError,
+  type JournalFailure,
+  JournalNotFound,
+} from "./errors.js";
 export { type CreatedSession, Journal, type JournalService } from "./journal.js";
 export {
   createLineCodec,
@@ -12,21 +18,33 @@ export {
   type LineCodecConfig,
   type LineVersion,
 } from "./line-codec.js";
-export { createJournalMemoryStore, JournalMemory, type JournalMemoryStore } from "./memory.js";
+export {
+  createMemoryJournalBacking,
+  JournalMemory,
+  type MemoryJournalBacking,
+} from "./memory.js";
 export {
   type Entry,
   type EntryDraft,
   EntryDraftSchema,
+  type EntryId,
   EntryIdSchema,
+  type EntryLine,
+  EntryLineSchema,
   EntrySchema,
   type JournalLine,
-  type LeafMovedRecord,
+  JournalLineSchema,
   LeafMovedRecordPayloadSchema,
-  LeafMovedRecordSchema,
   type Record,
   type RecordDraft,
   RecordDraftSchema,
+  type RecordId,
+  RecordIdSchema,
+  type RecordLine,
+  RecordLineSchema,
   RecordSchema,
+  type SessionId,
+  SessionIdSchema,
   type SessionRootEntry,
   SessionRootEntrySchema,
 } from "./shapes.js";

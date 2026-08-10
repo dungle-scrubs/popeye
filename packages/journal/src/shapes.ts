@@ -4,7 +4,17 @@
  */
 import { Schema } from "effect";
 
-export const EntryIdSchema = Schema.String;
+export const SessionIdSchema = Schema.String.pipe(Schema.brand("SessionId"));
+
+export type SessionId = Schema.Schema.Type<typeof SessionIdSchema>;
+
+export const EntryIdSchema = Schema.String.pipe(Schema.brand("EntryId"));
+
+export type EntryId = Schema.Schema.Type<typeof EntryIdSchema>;
+
+export const RecordIdSchema = Schema.String.pipe(Schema.brand("RecordId"));
+
+export type RecordId = Schema.Schema.Type<typeof RecordIdSchema>;
 
 export const EntrySchema = Schema.Struct({
   id: EntryIdSchema,
@@ -27,12 +37,12 @@ export type SessionRootEntry = Schema.Schema.Type<typeof SessionRootEntrySchema>
 export const EntryDraftSchema = Schema.Struct({
   kind: Schema.String,
   payload: Schema.Unknown,
-});
+}).pipe(Schema.brand("EntryDraft"));
 
 export type EntryDraft = Schema.Schema.Type<typeof EntryDraftSchema>;
 
 export const RecordSchema = Schema.Struct({
-  id: Schema.String,
+  id: RecordIdSchema,
   kind: Schema.String,
   payload: Schema.Unknown,
 });
@@ -42,7 +52,7 @@ export type Record = Schema.Schema.Type<typeof RecordSchema>;
 export const RecordDraftSchema = Schema.Struct({
   kind: Schema.String,
   payload: Schema.Unknown,
-});
+}).pipe(Schema.brand("RecordDraft"));
 
 export type RecordDraft = Schema.Schema.Type<typeof RecordDraftSchema>;
 
@@ -50,15 +60,22 @@ export const LeafMovedRecordPayloadSchema = Schema.Struct({
   toEntryId: EntryIdSchema,
 });
 
-export const LeafMovedRecordSchema = Schema.Struct({
-  id: Schema.String,
-  kind: Schema.Literal("leaf_moved"),
-  payload: LeafMovedRecordPayloadSchema,
+export const EntryLineSchema = Schema.Struct({
+  item: EntrySchema,
+  sessionId: SessionIdSchema,
+  type: Schema.Literal("entry"),
 });
 
-export type LeafMovedRecord = Schema.Schema.Type<typeof LeafMovedRecordSchema>;
+export type EntryLine = Schema.Schema.Type<typeof EntryLineSchema>;
 
-export interface JournalLine {
-  readonly item: Entry | Record;
-  readonly sessionId: string;
-}
+export const RecordLineSchema = Schema.Struct({
+  item: RecordSchema,
+  sessionId: SessionIdSchema,
+  type: Schema.Literal("record"),
+});
+
+export type RecordLine = Schema.Schema.Type<typeof RecordLineSchema>;
+
+export const JournalLineSchema = Schema.Union(EntryLineSchema, RecordLineSchema);
+
+export type JournalLine = Schema.Schema.Type<typeof JournalLineSchema>;

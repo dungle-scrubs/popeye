@@ -5,6 +5,7 @@
 import { Data } from "effect";
 
 export type JournalCorruptionClass =
+  | "dangling_leaf_reference"
   | "malformed_json"
   | "schema_mismatch"
   | "missing_migration"
@@ -22,3 +23,11 @@ export class JournalNotFound extends Data.TaggedError("JournalNotFound")<{
   readonly id: string;
   readonly what: "entry" | "session";
 }> {}
+
+export class JournalDraftRejected extends Data.TaggedError("JournalDraftRejected")<{
+  readonly cause?: unknown;
+  readonly kind: string;
+  readonly reason: "invalid_payload" | "reserved_kind";
+}> {}
+
+export type JournalFailure = JournalDraftRejected | JournalError | JournalNotFound;

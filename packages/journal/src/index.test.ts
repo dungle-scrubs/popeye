@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import * as journal from "./index.js";
 
 import {
-  createJournalMemoryStore,
+  createMemoryJournalBacking,
   EntrySchema,
   Journal,
   JournalMemory,
@@ -16,7 +16,7 @@ test("exports the journal package marker", () => {
 });
 
 test("exports the Journal seam and memory adapter without exporting its contract helper", () => {
-  expect(createJournalMemoryStore).toBeTypeOf("function");
+  expect(createMemoryJournalBacking).toBeTypeOf("function");
   expect(EntrySchema).toBeDefined();
   expect(Journal).toBeDefined();
   expect(JournalMemory).toBeTypeOf("function");

@@ -1,79 +1,147 @@
 /**
  * Owns the Journal interface and its tree rules independently from durable adapters.
  * It exists so callers and conformance checks use one seam for every Journal implementation.
+ * Every Journal serializes writers per session while operations for separate sessions stay concurrent.
  */
-import { Context, type Effect } from "effect";
+import { Context, Effect, Schema } from "effect";
 
-import type { JournalNotFound } from "./errors.js";
-import type { Entry, EntryDraft, JournalLine, Record, RecordDraft } from "./shapes.js";
+import { JournalError, type JournalFailure } from "./errors.js";
+import {
+  type Entry,
+  type EntryDraft,
+  type EntryId,
+  type EntryLine,
+  type JournalLine,
+  LeafMovedRecordPayloadSchema,
+  type Record,
+  type RecordDraft,
+  type SessionId,
+  type SessionRootEntry,
+  SessionRootEntrySchema,
+} from "./shapes.js";
 
 export interface CreatedSession {
-  readonly id: string;
-  readonly rootEntry: Entry;
+  readonly id: SessionId;
+  readonly rootEntry: SessionRootEntry;
 }
 
 export interface JournalService {
   readonly appendEntry: (
-    sessionId: string,
+    sessionId: SessionId,
     entry: EntryDraft,
-  ) => Effect.Effect<Entry, JournalNotFound>;
+  ) => Effect.Effect<Entry, JournalFailure>;
   readonly appendRecord: (
-    sessionId: string,
+    sessionId: SessionId,
     record: RecordDraft,
-  ) => Effect.Effect<Record, JournalNotFound>;
-  readonly createSession: () => Effect.Effect<CreatedSession>;
-  readonly getLeaf: (sessionId: string) => Effect.Effect<Entry, JournalNotFound>;
+  ) => Effect.Effect<Record, JournalFailure>;
+  readonly createSession: () => Effect.Effect<CreatedSession, JournalFailure>;
+  readonly getLeaf: (sessionId: SessionId) => Effect.Effect<Entry, JournalFailure>;
   readonly listSessions: () => Effect.Effect<ReadonlyArray<CreatedSession>>;
   readonly moveLeaf: (
-    sessionId: string,
-    toEntryId: string,
-  ) => Effect.Effect<Record, JournalNotFound>;
-  readonly readBranch: (sessionId: string) => Effect.Effect<ReadonlyArray<Entry>, JournalNotFound>;
+    sessionId: SessionId,
+    toEntryId: EntryId,
+  ) => Effect.Effect<Record, JournalFailure>;
+  readonly readBranch: (
+    sessionId: SessionId,
+  ) => Effect.Effect<ReadonlyArray<Entry>, JournalFailure>;
   readonly readRecords: (
-    sessionId: string,
-  ) => Effect.Effect<ReadonlyArray<Record>, JournalNotFound>;
+    sessionId: SessionId,
+  ) => Effect.Effect<ReadonlyArray<Record>, JournalFailure>;
 }
 
 export class Journal extends Context.Tag("@peye/journal/Journal")<Journal, JournalService>() {}
 
-export const isEntry = (item: Entry | Record): item is Entry => "parentId" in item;
+export const isEntry = (line: JournalLine): line is EntryLine => line.type === "entry";
 
 export const entriesFor = (lines: ReadonlyArray<JournalLine>): ReadonlyArray<Entry> =>
-  lines.flatMap((line) => (isEntry(line.item) ? [line.item] : []));
+  lines.flatMap((line) => (isEntry(line) ? [line.item] : []));
 
 export const recordsFor = (lines: ReadonlyArray<JournalLine>): ReadonlyArray<Record> =>
-  lines.flatMap((line) => (isEntry(line.item) ? [] : [line.item]));
+  lines.flatMap((line) => (isEntry(line) ? [] : [line.item]));
 
-export const leafFor = (lines: ReadonlyArray<JournalLine>): Entry | undefined => {
-  const entries = new Map(entriesFor(lines).map((entry) => [entry.id, entry]));
-  let leaf: Entry | undefined;
+const strict: { readonly onExcessProperty: "error" } = { onExcessProperty: "error" };
+const decodeLeafMovedPayload = Schema.decodeUnknown(LeafMovedRecordPayloadSchema, strict);
+const decodeSessionRoot = Schema.decodeUnknown(SessionRootEntrySchema, strict);
 
-  for (const { item } of lines) {
-    if (isEntry(item)) {
-      leaf = item;
-      continue;
+const schemaMismatch = (cause: unknown): JournalError =>
+  new JournalError({
+    cause,
+    corruptionClass: "schema_mismatch",
+    message: `Journal line does not match its schema: ${String(cause)}`,
+  });
+
+export interface DerivedSession {
+  readonly entries: ReadonlyMap<EntryId, Entry>;
+  readonly leaf: Entry;
+  readonly records: ReadonlyArray<Record>;
+  readonly rootEntry: SessionRootEntry;
+}
+
+export const deriveSession = (
+  lines: ReadonlyArray<JournalLine>,
+): Effect.Effect<DerivedSession | undefined, JournalError> =>
+  Effect.gen(function* () {
+    const rootLine = lines.find((line) => isEntry(line) && line.item.kind === "session_root");
+
+    if (rootLine === undefined) {
+      return undefined;
     }
 
-    if (item.kind === "leaf_moved" && typeof item.payload === "object" && item.payload !== null) {
-      const toEntryId = (item.payload as { readonly toEntryId?: unknown }).toEntryId;
-      if (typeof toEntryId === "string") {
-        leaf = entries.get(toEntryId) ?? leaf;
+    const rootEntry = yield* decodeSessionRoot(rootLine.item).pipe(Effect.mapError(schemaMismatch));
+    const entries = new Map(entriesFor(lines).map((entry) => [entry.id, entry]));
+    let leaf: Entry = rootEntry;
+
+    for (const line of lines) {
+      if (isEntry(line)) {
+        leaf = line.item;
       }
     }
-  }
 
-  return leaf;
-};
+    for (const line of lines) {
+      if (!isEntry(line) && line.item.kind === "leaf_moved") {
+        const payload = yield* decodeLeafMovedPayload(line.item.payload).pipe(
+          Effect.mapError(schemaMismatch),
+        );
+        const target = entries.get(payload.toEntryId);
 
-export const branchFor = (lines: ReadonlyArray<JournalLine>): ReadonlyArray<Entry> => {
-  const entries = new Map(entriesFor(lines).map((entry) => [entry.id, entry]));
-  const branch: Array<Entry> = [];
-  let entry = leafFor(lines);
+        if (target === undefined) {
+          return yield* Effect.fail(
+            new JournalError({
+              corruptionClass: "dangling_leaf_reference",
+              message: `leaf_moved references missing entry ${payload.toEntryId}.`,
+            }),
+          );
+        }
 
-  while (entry !== undefined) {
-    branch.push(entry);
-    entry = entry.parentId === null ? undefined : entries.get(entry.parentId);
-  }
+        leaf = target;
+      }
+    }
 
-  return branch.reverse();
-};
+    return { entries, leaf, records: recordsFor(lines), rootEntry };
+  });
+
+export const leafFor = (
+  lines: ReadonlyArray<JournalLine>,
+): Effect.Effect<Entry | undefined, JournalError> =>
+  deriveSession(lines).pipe(Effect.map((session) => session?.leaf));
+
+export const branchFor = (
+  lines: ReadonlyArray<JournalLine>,
+): Effect.Effect<ReadonlyArray<Entry>, JournalError> =>
+  deriveSession(lines).pipe(
+    Effect.map((session) => {
+      if (session === undefined) {
+        return [];
+      }
+
+      const branch: Array<Entry> = [];
+      let entry: Entry | undefined = session.leaf;
+
+      while (entry !== undefined) {
+        branch.push(entry);
+        entry = entry.parentId === null ? undefined : session.entries.get(entry.parentId);
+      }
+
+      return branch.reverse();
+    }),
+  );
