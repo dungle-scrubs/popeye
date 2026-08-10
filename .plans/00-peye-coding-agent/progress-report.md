@@ -59,10 +59,10 @@ Source: `implementation.md` (M4); Normative Contracts (journal rules)
 ### M5: Journal conformance suite
 Source: `implementation.md` (M5)
 
-- [ ] Conformance suite exports as a package export parameterized by a `Journal` layer
-- [ ] In-memory layer passes the full suite
-- [ ] JSONL layer passes the full suite
-- [ ] A deliberately broken fixture layer fails with actionable assertion output
+- [x] Conformance suite exports as a package export parameterized by a `Journal` layer
+- [x] In-memory layer passes the full suite
+- [x] JSONL layer passes the full suite
+- [x] A deliberately broken fixture layer fails with actionable assertion output
 
 ### M6: Compaction semantics and context fold
 Source: `implementation.md` (M6); Normative Contracts (journal rules)
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 31
-- Remaining: 146
-- Current cutoff blockers: 146
+- Completed: 35
+- Remaining: 142
+- Current cutoff blockers: 142
 - Accepted/deferred follow-up: 11
 - Superseded/obsolete checklist debt: 0
