@@ -17,3 +17,8 @@ export class JournalError extends Data.TaggedError("JournalError")<{
   readonly file?: string;
   readonly message: string;
 }> {}
+
+export class JournalNotFound extends Data.TaggedError("JournalNotFound")<{
+  readonly id: string;
+  readonly what: "entry" | "session";
+}> {}
