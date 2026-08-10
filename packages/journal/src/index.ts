@@ -13,6 +13,13 @@ export {
 } from "./errors.js";
 export { type CreatedSession, Journal, type JournalService } from "./journal.js";
 export {
+  createJsonlJournalHarness,
+  type JournalDiagnostic,
+  JournalDiagnosticSchema,
+  JournalJsonl,
+  type JsonlJournalOptions,
+} from "./jsonl.js";
+export {
   createLineCodec,
   type LineCodec,
   type LineCodecConfig,

@@ -81,24 +81,50 @@ export const deriveSession = (
   lines: ReadonlyArray<JournalLine>,
 ): Effect.Effect<DerivedSession | undefined, JournalError> =>
   Effect.gen(function* () {
-    const rootLine = lines.find((line) => isEntry(line) && line.item.kind === "session_root");
-
-    if (rootLine === undefined) {
+    if (lines.length === 0) {
       return undefined;
     }
 
-    const rootEntry = yield* decodeSessionRoot(rootLine.item).pipe(Effect.mapError(schemaMismatch));
-    const entries = new Map(entriesFor(lines).map((entry) => [entry.id, entry]));
-    let leaf: Entry = rootEntry;
-
-    for (const line of lines) {
-      if (isEntry(line)) {
-        leaf = line.item;
-      }
+    const rootLine = lines[0];
+    if (rootLine === undefined || !isEntry(rootLine) || rootLine.item.kind !== "session_root") {
+      return yield* Effect.fail(
+        new JournalError({
+          corruptionClass: "invalid_record_sequence",
+          message: "A session must begin with its session_root entry.",
+        }),
+      );
     }
 
-    for (const line of lines) {
-      if (!isEntry(line) && line.item.kind === "leaf_moved") {
+    const rootEntry = yield* decodeSessionRoot(rootLine.item).pipe(Effect.mapError(schemaMismatch));
+    const entries = new Map<EntryId, Entry>([[rootEntry.id, rootEntry]]);
+    const records: Array<Record> = [];
+    let leaf: Entry = rootEntry;
+
+    for (const line of lines.slice(1)) {
+      if (isEntry(line)) {
+        if (line.item.kind === "session_root") {
+          return yield* Effect.fail(
+            new JournalError({
+              corruptionClass: "invalid_record_sequence",
+              message: "A session may contain only one session_root entry.",
+            }),
+          );
+        }
+        if (entries.has(line.item.id) || line.item.parentId !== leaf.id) {
+          return yield* Effect.fail(
+            new JournalError({
+              corruptionClass: "invalid_record_sequence",
+              message: "An entry must have a new id and parent the current leaf.",
+            }),
+          );
+        }
+        entries.set(line.item.id, line.item);
+        leaf = line.item;
+        continue;
+      }
+
+      records.push(line.item);
+      if (line.item.kind === "leaf_moved") {
         const payload = yield* decodeLeafMovedPayload(line.item.payload).pipe(
           Effect.mapError(schemaMismatch),
         );
@@ -117,7 +143,7 @@ export const deriveSession = (
       }
     }
 
-    return { entries, leaf, records: recordsFor(lines), rootEntry };
+    return { entries, leaf, records, rootEntry };
   });
 
 export const leafFor = (

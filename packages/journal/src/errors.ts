@@ -6,6 +6,8 @@ import { Data } from "effect";
 
 export type JournalCorruptionClass =
   | "dangling_leaf_reference"
+  | "invalid_record_sequence"
+  | "io_failure"
   | "malformed_json"
   | "schema_mismatch"
   | "missing_migration"
