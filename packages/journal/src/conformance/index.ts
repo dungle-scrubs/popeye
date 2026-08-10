@@ -7,6 +7,7 @@
  */
 import { Effect, type Layer } from "effect";
 
+import { foldContext } from "../context.js";
 import type { JournalError } from "../errors.js";
 import { Journal } from "../journal.js";
 import {
@@ -29,6 +30,15 @@ const entryDraft = (kind: string, payload: unknown): EntryDraft =>
 
 const recordDraft = (kind: string, payload: unknown): RecordDraft =>
   RecordDraftSchema.make({ kind, payload });
+
+const foldBranch = (branch: Parameters<typeof foldContext>[0]) =>
+  foldContext(branch, {
+    budget: 10_000,
+    visibility: (entry) => {
+      const payload = entry.payload as { readonly text?: string };
+      return payload.text === undefined ? undefined : { content: payload.text, role: entry.kind };
+    },
+  });
 
 export const assertLeafMovePersistsAfterReopen = async (
   makeLayer: MakeJournalLayer,
@@ -143,6 +153,76 @@ export const describeJournalContract = async (makeLayer: MakeJournalLayer): Prom
         },
       });
       expect(result.leaf).toEqual(result.compaction);
+    });
+
+    test("compaction enforces full current-branch coverage with actionable entry ids", async () => {
+      const { layer } = makeLayer();
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const journal = yield* Journal;
+          const rootOnly = yield* journal.createSession();
+          const rootOnlyError = yield* Effect.flip(
+            journal.appendCompaction(rootOnly.id, {
+              firstSummarizedId: rootOnly.rootEntry.id,
+              lastSummarizedId: rootOnly.rootEntry.id,
+              retainedTailIds: [],
+              summary: "Summary.",
+            }),
+          );
+
+          const session = yield* journal.createSession();
+          const first = yield* journal.appendEntry(
+            session.id,
+            entryDraft("first", { text: "First." }),
+          );
+          const second = yield* journal.appendEntry(
+            session.id,
+            entryDraft("second", { text: "Second." }),
+          );
+          const reversedError = yield* Effect.flip(
+            journal.appendCompaction(session.id, {
+              firstSummarizedId: second.id,
+              lastSummarizedId: first.id,
+              retainedTailIds: [],
+              summary: "Summary.",
+            }),
+          );
+          const retainedOrderError = yield* Effect.flip(
+            journal.appendCompaction(session.id, {
+              firstSummarizedId: first.id,
+              lastSummarizedId: second.id,
+              retainedTailIds: [second.id, first.id],
+              summary: "Summary.",
+            }),
+          );
+          const missingSummaryError = yield* Effect.flip(
+            journal.appendCompaction(session.id, {
+              firstSummarizedId: first.id,
+              lastSummarizedId: second.id,
+              retainedTailIds: [],
+              summary: " ",
+            }),
+          );
+
+          return {
+            first,
+            missingSummaryError,
+            retainedOrderError,
+            reversedError,
+            rootId: rootOnly.rootEntry.id,
+            rootOnlyError,
+            second,
+          };
+        }).pipe(Effect.provide(layer)),
+      );
+
+      expect(result.rootOnlyError.message).toContain(result.rootId);
+      expect(result.reversedError.message).toContain(result.second.id);
+      expect(result.reversedError.message).toContain("reversed");
+      expect(result.retainedOrderError.message).toContain(result.first.id);
+      expect(result.retainedOrderError.message).toContain("branch-ascending");
+      expect(result.missingSummaryError.message).toContain(result.second.id);
+      expect(result.missingSummaryError.message).toContain("non-empty");
     });
 
     test("appendCompaction rejects a span outside the current branch with a typed draft rejection", async () => {
@@ -260,6 +340,89 @@ export const describeJournalContract = async (makeLayer: MakeJournalLayer): Prom
 
     test("leaf reconstructs after reopen", async () => {
       await assertLeafMovePersistsAfterReopen(makeLayer);
+    });
+
+    test("a compaction has identical fold output after reopen", async () => {
+      const harness = makeLayer();
+      const initial = await Effect.runPromise(
+        Effect.gen(function* () {
+          const journal = yield* Journal;
+          const session = yield* journal.createSession();
+          const first = yield* journal.appendEntry(
+            session.id,
+            entryDraft("user_input", { text: "First." }),
+          );
+          const second = yield* journal.appendEntry(
+            session.id,
+            entryDraft("assistant_output", { text: "Second." }),
+          );
+          yield* journal.appendCompaction(session.id, {
+            firstSummarizedId: first.id,
+            lastSummarizedId: second.id,
+            retainedTailIds: [second.id],
+            summary: "First and second.",
+          });
+          const branch = yield* journal.readBranch(session.id);
+          const folded = yield* foldBranch(branch);
+          return { folded, session };
+        }).pipe(Effect.provide(harness.layer)),
+      );
+      const reopened = await Effect.runPromise(
+        Effect.gen(function* () {
+          const journal = yield* Journal;
+          return yield* journal.readBranch(initial.session.id).pipe(Effect.flatMap(foldBranch));
+        }).pipe(Effect.provide(harness.reopen())),
+      );
+
+      expect(reopened).toEqual(initial.folded);
+    });
+
+    test("branches fold independently through the Journal readBranch seam", async () => {
+      const { layer } = makeLayer();
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const journal = yield* Journal;
+          const session = yield* journal.createSession();
+          const first = yield* journal.appendEntry(
+            session.id,
+            entryDraft("user_input", { text: "First." }),
+          );
+          const second = yield* journal.appendEntry(
+            session.id,
+            entryDraft("assistant_output", { text: "Second." }),
+          );
+          const third = yield* journal.appendEntry(
+            session.id,
+            entryDraft("user_input", { text: "Third." }),
+          );
+          yield* journal.appendCompaction(session.id, {
+            firstSummarizedId: first.id,
+            lastSummarizedId: third.id,
+            retainedTailIds: [second.id],
+            summary: "Branch A summary.",
+          });
+          const branchA = yield* journal.readBranch(session.id);
+          const foldedA = yield* foldBranch(branchA);
+          yield* journal.moveLeaf(session.id, first.id);
+          const branchBEntry = yield* journal.appendEntry(
+            session.id,
+            entryDraft("user_input", { text: "Branch B." }),
+          );
+          const branchB = yield* journal.readBranch(session.id);
+          const foldedB = yield* foldBranch(branchB);
+
+          return { branchA, branchB, branchBEntry, foldedA, foldedB };
+        }).pipe(Effect.provide(layer)),
+      );
+
+      expect(result.branchA.at(-1)?.kind).toBe("compaction");
+      expect(result.foldedA.accounting.compactionApplied).toBe(result.branchA.at(-1)?.id);
+      expect(result.branchB.map((entry) => entry.id)).toContain(result.branchBEntry.id);
+      expect(result.foldedB.accounting.compactionApplied).toBeUndefined();
+      expect(result.foldedB.items).toEqual([
+        { content: "First.", role: "user_input" },
+        { content: "Branch B.", role: "user_input" },
+      ]);
     });
 
     test("append after moveLeaf parents to the moved-to entry", async () => {

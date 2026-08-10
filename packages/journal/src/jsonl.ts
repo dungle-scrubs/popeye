@@ -49,6 +49,7 @@ export const JournalDiagnosticSchema = Schema.Struct({
   corruptionClass: Schema.optional(
     Schema.Literal(
       "dangling_leaf_reference",
+      "invalid_compaction",
       "invalid_record_sequence",
       "io_failure",
       "malformed_json",

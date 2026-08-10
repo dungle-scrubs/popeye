@@ -70,6 +70,31 @@ test("foldContext uses the newest compaction summary, retained tail, and later e
   });
 });
 
+test("foldContext delegates compaction summary shaping to summaryItem", async () => {
+  const first = entry("first", "root");
+  const compaction = EntrySchema.make({
+    id: EntryIdSchema.make("compaction"),
+    kind: "compaction",
+    parentId: first.id,
+    payload: {
+      firstSummarizedId: first.id,
+      lastSummarizedId: first.id,
+      retainedTailIds: [],
+      summary: "Raw summary.",
+    },
+  });
+
+  const result = await Effect.runPromise(
+    foldContext([root, first, compaction], {
+      budget: 100,
+      summaryItem: (payload) => ({ content: `summary:${payload.summary}`, role: "developer" }),
+      visibility: () => ({ content: "not visible", role: "user" }),
+    }),
+  );
+
+  expect(result.items).toEqual([{ content: "summary:Raw summary.", role: "developer" }]);
+});
+
 test("foldContext never visits entries before the newest compaction outside its retained tail", async () => {
   const earlier = entry("earlier", "root");
   const retained = entry("retained", "earlier");
@@ -219,6 +244,94 @@ test("foldContext accounts for every included entry through sizeOf", async () =>
   expect(result.accounting).toEqual({ compactionApplied: compaction.id, usedBudget: 12 });
 });
 
+test("foldContext emits retained entries in branch order when replayed content lists them out of order", async () => {
+  const first = entry("first", "root");
+  const second = entry("second", "first");
+  const compaction = EntrySchema.make({
+    id: EntryIdSchema.make("compaction"),
+    kind: "compaction",
+    parentId: second.id,
+    payload: {
+      firstSummarizedId: first.id,
+      lastSummarizedId: second.id,
+      retainedTailIds: [second.id, first.id],
+      summary: "Summary.",
+    },
+  });
+
+  const result = await Effect.runPromise(
+    foldContext([root, first, second, compaction], {
+      budget: 100,
+      visibility: (candidate) => ({ content: candidate.id, role: "user" }),
+    }),
+  );
+
+  expect(result.items).toEqual([
+    { content: "Summary.", role: "system" },
+    { content: first.id, role: "user" },
+    { content: second.id, role: "user" },
+  ]);
+});
+
+test("foldContext rejects malformed compactions and unresolved retained ids as corruption", async () => {
+  const first = entry("first", "root");
+  const malformed = EntrySchema.make({
+    id: EntryIdSchema.make("malformed"),
+    kind: "compaction",
+    parentId: first.id,
+    payload: { summary: "Missing span ids." },
+  });
+  const malformedError = await Effect.runPromise(
+    Effect.flip(
+      foldContext([root, first, malformed], {
+        budget: 100,
+        visibility: () => ({ content: "not visible", role: "user" }),
+      }),
+    ),
+  );
+  const unresolved = EntrySchema.make({
+    id: EntryIdSchema.make("unresolved"),
+    kind: "compaction",
+    parentId: first.id,
+    payload: {
+      firstSummarizedId: first.id,
+      lastSummarizedId: first.id,
+      retainedTailIds: [EntryIdSchema.make("missing")],
+      summary: "Summary.",
+    },
+  });
+  const unresolvedError = await Effect.runPromise(
+    Effect.flip(
+      foldContext([root, first, unresolved], {
+        budget: 100,
+        visibility: () => ({ content: "not visible", role: "user" }),
+      }),
+    ),
+  );
+
+  expect(malformedError).toMatchObject({
+    _tag: "JournalError",
+    corruptionClass: "invalid_compaction",
+  });
+  expect(unresolvedError).toMatchObject({
+    _tag: "JournalError",
+    corruptionClass: "invalid_compaction",
+    message: expect.stringContaining("missing"),
+  });
+});
+
+test("foldContext dies when sizeOf returns a negative or non-finite size", async () => {
+  await expect(
+    Effect.runPromise(
+      foldContext([root, entry("first", "root")], {
+        budget: 100,
+        sizeOf: () => Number.NaN,
+        visibility: () => ({ content: "visible", role: "user" }),
+      }),
+    ),
+  ).rejects.toThrow("sizeOf must return a finite, non-negative number");
+});
+
 test("foldContext fails with ContextBudgetExceeded when compaction cannot fit its budget", async () => {
   const first = entry("first", "root");
   const compaction = EntrySchema.make({
@@ -245,7 +358,8 @@ test("foldContext fails with ContextBudgetExceeded when compaction cannot fit it
   expect(error).toMatchObject({
     _tag: "ContextBudgetExceeded",
     budget: 4,
-    optionsDiagnostic: "branch, manual truncation",
+    compactionApplied: compaction.id,
+    optionsDiagnostic: "branch to an earlier entry or start a new session",
     required: 5,
   });
 });

@@ -14,7 +14,9 @@ import {
   JournalNotFound,
 } from "./errors.js";
 import {
+  branchToLeaf,
   type CreatedSession,
+  compactionValidationIssue,
   type DerivedSession,
   Journal,
   type JournalService,
@@ -55,45 +57,12 @@ const rejectedDraft = (kind: string, cause: unknown): JournalDraftRejected =>
 const rejectedCompaction = (message: string): JournalDraftRejected =>
   new JournalDraftRejected({ kind: "compaction", message, reason: "invalid_payload" });
 
-const branchToLeaf = (session: DerivedSession): ReadonlyArray<Entry> => {
-  const branch: Array<Entry> = [];
-  let entry: Entry | undefined = session.leaf;
-  while (entry !== undefined) {
-    branch.push(entry);
-    entry = entry.parentId === null ? undefined : session.entries.get(entry.parentId);
-  }
-  return branch.reverse();
-};
-
 const validateCompaction = (
   session: DerivedSession,
   payload: CompactionPayload,
 ): JournalDraftRejected | undefined => {
-  const branch = branchToLeaf(session);
-  const firstIndex = branch.findIndex((entry) => entry.id === payload.firstSummarizedId);
-  const lastIndex = branch.findIndex((entry) => entry.id === payload.lastSummarizedId);
-
-  if (firstIndex < 0 || lastIndex < 0 || firstIndex > lastIndex) {
-    return rejectedCompaction(
-      "Compaction span must be a first-to-last contiguous ancestor path of the current branch.",
-    );
-  }
-
-  const retainedTailIds = new Set(payload.retainedTailIds);
-  if (retainedTailIds.size !== payload.retainedTailIds.length) {
-    return rejectedCompaction("Compaction retainedTailIds must not contain duplicate entry ids.");
-  }
-
-  for (const retainedTailId of payload.retainedTailIds) {
-    const retainedIndex = branch.findIndex((entry) => entry.id === retainedTailId);
-    if (retainedIndex < firstIndex) {
-      return rejectedCompaction(
-        "Compaction retainedTailIds must name existing entries within or after the summarized span on the current branch.",
-      );
-    }
-  }
-
-  return undefined;
+  const issue = compactionValidationIssue(session, payload);
+  return issue === undefined ? undefined : rejectedCompaction(issue);
 };
 
 export interface JournalIoObservation {

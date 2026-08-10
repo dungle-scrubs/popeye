@@ -7,6 +7,8 @@ import { Context, Effect, Schema } from "effect";
 
 import { JournalError, type JournalFailure } from "./errors.js";
 import {
+  type CompactionEntry,
+  CompactionEntrySchema,
   type CompactionPayload,
   CompactionPayloadSchema,
   type Entry,
@@ -62,6 +64,8 @@ export const isEntry = (line: JournalLine): line is EntryLine => line.type === "
 const strict: { readonly onExcessProperty: "error" } = { onExcessProperty: "error" };
 const decodeLeafMovedPayload = Schema.decodeUnknown(LeafMovedRecordPayloadSchema, strict);
 const decodeSessionRoot = Schema.decodeUnknown(SessionRootEntrySchema, strict);
+const decodeCompactionEntry = (input: unknown): Effect.Effect<CompactionEntry, unknown> =>
+  Schema.decodeUnknown(CompactionEntrySchema, strict)(input);
 const decodeCompactionPayload = Schema.decodeUnknown(CompactionPayloadSchema, strict);
 
 const schemaMismatch = (cause: unknown): JournalError =>
@@ -77,6 +81,96 @@ export interface DerivedSession {
   readonly records: ReadonlyArray<Record>;
   readonly rootEntry: SessionRootEntry;
 }
+
+export const branchToLeaf = (session: DerivedSession): ReadonlyArray<Entry> => {
+  const branch: Array<Entry> = [];
+  let entry: Entry | undefined = session.leaf;
+  while (entry !== undefined) {
+    branch.push(entry);
+    entry = entry.parentId === null ? undefined : session.entries.get(entry.parentId);
+  }
+  return branch.reverse();
+};
+
+/**
+ * Describes the first broken compaction coverage rule for a current branch.
+ * The caller maps this detail to a draft rejection while replay maps it to corruption.
+ */
+export const compactionValidationIssue = (
+  session: DerivedSession,
+  payload: CompactionPayload,
+): string | undefined => {
+  const branch = branchToLeaf(session);
+  const rootId = session.rootEntry.id;
+  if (branch.length === 1) {
+    return `Compaction cannot summarize root ${rootId}: a root-only session has nothing to summarize.`;
+  }
+
+  const indexById = new Map(branch.map((entry, index) => [entry.id, index]));
+  const firstIndex = indexById.get(payload.firstSummarizedId);
+  if (firstIndex === undefined) {
+    return `Compaction firstSummarizedId ${payload.firstSummarizedId} is not on the current branch.`;
+  }
+  const lastIndex = indexById.get(payload.lastSummarizedId);
+  if (lastIndex === undefined) {
+    return `Compaction lastSummarizedId ${payload.lastSummarizedId} is not on the current branch.`;
+  }
+  if (payload.firstSummarizedId === rootId) {
+    return `Compaction span may not include root ${rootId}: firstSummarizedId names the root.`;
+  }
+  if (payload.lastSummarizedId === rootId) {
+    return `Compaction span may not include root ${rootId}: lastSummarizedId names the root.`;
+  }
+  if (firstIndex > lastIndex) {
+    return `Compaction span is reversed: firstSummarizedId ${payload.firstSummarizedId} follows lastSummarizedId ${payload.lastSummarizedId}.`;
+  }
+
+  const newestPriorCompactionIndex = branch.findLastIndex((entry) => entry.kind === "compaction");
+  const expectedFirst = branch[newestPriorCompactionIndex < 0 ? 1 : newestPriorCompactionIndex + 1];
+  if (expectedFirst === undefined) {
+    const priorCompaction = branch[newestPriorCompactionIndex];
+    return `Compaction cannot summarize after prior compaction ${priorCompaction?.id ?? rootId}: there is no unsummarized entry.`;
+  }
+  if (payload.firstSummarizedId !== expectedFirst.id) {
+    return `Compaction firstSummarizedId ${payload.firstSummarizedId} must be the oldest unsummarized entry ${expectedFirst.id}.`;
+  }
+
+  const leafId = session.leaf.id;
+  if (payload.lastSummarizedId !== leafId) {
+    return `Compaction lastSummarizedId ${payload.lastSummarizedId} must be the current leaf ${leafId}.`;
+  }
+
+  const retainedTailIds = new Set<EntryId>();
+  let previousRetainedIndex = -1;
+  let previousRetainedId: EntryId | undefined;
+  for (const retainedTailId of payload.retainedTailIds) {
+    if (retainedTailIds.has(retainedTailId)) {
+      return `Compaction retainedTailIds contains duplicate entry ${retainedTailId}.`;
+    }
+    retainedTailIds.add(retainedTailId);
+    if (retainedTailId === rootId) {
+      return `Compaction span may not include root ${rootId}: retainedTailIds names the root.`;
+    }
+    const retainedIndex = indexById.get(retainedTailId);
+    if (retainedIndex === undefined) {
+      return `Compaction retainedTailIds entry ${retainedTailId} is not on the current branch.`;
+    }
+    if (retainedIndex < firstIndex || retainedIndex > lastIndex) {
+      return `Compaction retainedTailIds entry ${retainedTailId} must lie within span ${payload.firstSummarizedId} through ${payload.lastSummarizedId}.`;
+    }
+    if (retainedIndex <= previousRetainedIndex) {
+      return `Compaction retainedTailIds entry ${retainedTailId} must be branch-ascending after ${previousRetainedId ?? retainedTailId}.`;
+    }
+    previousRetainedIndex = retainedIndex;
+    previousRetainedId = retainedTailId;
+  }
+
+  if (payload.summary.trim().length === 0) {
+    return `Compaction summary for span ending at ${payload.lastSummarizedId} must be non-empty.`;
+  }
+
+  return undefined;
+};
 
 export const deriveSession = (
   lines: ReadonlyArray<JournalLine>,
@@ -103,15 +197,11 @@ export const deriveSession = (
 
     for (const line of lines.slice(1)) {
       if (isEntry(line)) {
-        const entry =
+        const compaction =
           line.item.kind === "compaction"
-            ? {
-                ...line.item,
-                payload: yield* decodeCompactionPayload(line.item.payload).pipe(
-                  Effect.mapError(schemaMismatch),
-                ),
-              }
-            : line.item;
+            ? yield* decodeCompactionEntry(line.item).pipe(Effect.mapError(schemaMismatch))
+            : undefined;
+        const entry = compaction ?? line.item;
         if (entry.kind === "session_root") {
           return yield* Effect.fail(
             new JournalError({
@@ -127,6 +217,17 @@ export const deriveSession = (
               message: "An entry must have a new id and parent the current leaf.",
             }),
           );
+        }
+        if (compaction !== undefined) {
+          const payload = yield* decodeCompactionPayload(compaction.payload).pipe(
+            Effect.mapError(schemaMismatch),
+          );
+          const issue = compactionValidationIssue({ entries, leaf, records, rootEntry }, payload);
+          if (issue !== undefined) {
+            return yield* Effect.fail(
+              new JournalError({ corruptionClass: "invalid_compaction", message: issue }),
+            );
+          }
         }
         entries.set(entry.id, entry);
         leaf = entry;
