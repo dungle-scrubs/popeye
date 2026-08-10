@@ -127,14 +127,14 @@ Source: `implementation.md` (M10); Normative Contracts (state machine)
 ### M11: Records and crash recovery
 Source: `implementation.md` (M11); D-022
 
-- [ ] Operation-started records carry intent and pre-provisioned result entry ids
-- [ ] Recovery is a pure function of a bounded record slice (no journal scan beyond it)
-- [ ] Kill after tool start with `replay: never` recovers to a synthesized interrupted-error result entry using the pre-provisioned id
-- [ ] Kill after tool start with `replay: safe` re-executes the tool on recovery
-- [ ] Recovery is idempotent: running it twice produces no duplicate entries
-- [ ] Impossible record sequences reject with a named corruption class
-- [ ] Recovery reports state what was found and what action was taken
-- [ ] A recovered session accepts new prompts normally
+- [x] Operation records carry intent and recovery identity; idempotency keyed by (operationId, toolCallId) since the journal owns entry ids (D-032)
+- [x] Recovery is a pure function of a bounded record slice (no journal scan beyond it)
+- [x] Kill after tool start with `replay: never` recovers to a synthesized interrupted-error result entry using the pre-provisioned id
+- [x] Kill after tool start with `replay: safe` closes the operation with synthesized results and reports the call as advisory for driver re-execution (D-033)
+- [x] Recovery is idempotent: running it twice produces no duplicate entries
+- [x] Impossible record sequences reject with a named corruption class
+- [x] Recovery reports state what was found and what action was taken
+- [x] A recovered session accepts new prompts normally
 
 ### M12: ai seam
 Source: `implementation.md` (M12); D-001, D-014, D-026; spike A-001
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 67
-- Remaining: 110
-- Current cutoff blockers: 110
+- Completed: 75
+- Remaining: 102
+- Current cutoff blockers: 102
 - Accepted/deferred follow-up: 5
 - Superseded/obsolete checklist debt: 0
