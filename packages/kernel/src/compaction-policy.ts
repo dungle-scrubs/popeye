@@ -9,13 +9,13 @@
 import {
   type CompactionPayload,
   type Entry,
-  type EntryId,
+  EntryIdSchema,
   Journal,
   type JournalFailure,
   type JournalService,
   type SessionId,
 } from "@peye/journal";
-import { Context, Effect, Layer, Stream } from "effect";
+import { Context, Effect, Layer, Schema, Stream } from "effect";
 
 import { CompactionDisabled, NothingToCompact, ProviderError } from "./errors.js";
 import { Mailbox, type MailboxFailure } from "./mailbox.js";
@@ -38,13 +38,15 @@ const PRIOR_SUMMARY_LABEL = "Prior summary:\n";
 const DEFAULT_SUMMARIZATION_INSTRUCTION =
   "Summarize the conversation while preserving decisions, open tool state, file paths, and user intent.";
 
-export interface CompactionPolicyOptions {
-  readonly enabled?: boolean;
-  readonly retainedTailCount?: number;
-  readonly sliceBudget?: number;
+export const CompactionPolicyOptionsSchema = Schema.Struct({
+  enabled: Schema.optional(Schema.Boolean),
+  retainedTailCount: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.nonNegative())),
+  sliceBudget: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
   /** System instruction repeated on every bounded summarization slice. */
-  readonly summarizationInstruction?: string;
-}
+  summarizationInstruction: Schema.optional(Schema.String),
+});
+
+export type CompactionPolicyOptions = Schema.Schema.Type<typeof CompactionPolicyOptionsSchema>;
 
 export interface ResolvedCompactionPolicyOptions {
   readonly enabled: boolean;
@@ -53,12 +55,14 @@ export interface ResolvedCompactionPolicyOptions {
   readonly summarizationInstruction: string;
 }
 
-export interface CompactionResult {
-  readonly compactionEntryId: EntryId;
-  readonly entriesCovered: number;
-  readonly sliceCount: number;
-  readonly summaryLength: number;
-}
+export const CompactionResultSchema = Schema.Struct({
+  compactionEntryId: EntryIdSchema,
+  entriesCovered: Schema.Number.pipe(Schema.int(), Schema.positive()),
+  sliceCount: Schema.Number.pipe(Schema.int(), Schema.positive()),
+  summaryLength: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
+});
+
+export type CompactionResult = Schema.Schema.Type<typeof CompactionResultSchema>;
 
 export interface CompactBranchInput {
   readonly journal: JournalService;
@@ -71,7 +75,10 @@ export interface CompactBranchInput {
 }
 
 export interface CompactionService {
-  readonly compactNow: (sessionId: SessionId) => Effect.Effect<CompactionResult, CompactionFailure>;
+  readonly compactNow: (
+    sessionId: SessionId,
+    expectedRevision?: number,
+  ) => Effect.Effect<CompactionResult, CompactionFailure>;
   readonly policy: ResolvedCompactionPolicyOptions;
 }
 
@@ -417,9 +424,10 @@ export const CompactionLive = (
       const progress = yield* ProgressHub;
       const provider = yield* Provider;
       return Compaction.of({
-        compactNow: (sessionId) =>
+        compactNow: (sessionId, expectedRevision) =>
           mailbox
             .enqueue(sessionId, {
+              ...(expectedRevision === undefined ? {} : { expectedRevision }),
               name: "compact",
               run: () =>
                 compactBranch({

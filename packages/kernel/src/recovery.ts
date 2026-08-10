@@ -11,6 +11,7 @@ import {
   type EntryDraft,
   EntryDraftSchema,
   type EntryId,
+  EntryIdSchema,
   JournalError,
   type JournalFailure,
   type JournalService,
@@ -25,49 +26,56 @@ import {
   MessageEntryPayloadSchema,
   type MessageToolCall,
 } from "./entry-payloads.js";
-import type {
-  OperationFinishedPayload,
-  OperationId,
-  OperationStartedPayload,
-  ToolReplay,
-  ToolStartedPayload,
-} from "./records.js";
 import {
   appendOperationFinished,
+  type OperationFinishedPayload,
   OperationFinishedPayloadSchema,
+  type OperationId,
+  OperationIdSchema,
+  type OperationStartedPayload,
   OperationStartedPayloadSchema,
+  ToolReplaySchema,
+  type ToolStartedPayload,
   ToolStartedPayloadSchema,
 } from "./records.js";
 
-export interface ToolRecoveryAction {
-  readonly action:
-    | "already_resolved"
-    | "safe_replay"
-    | "synthesized_interrupted"
-    | "synthesized_missing_tool";
-  readonly replay: ToolReplay;
-  readonly toolCallId: string;
-  readonly toolName: string;
-}
+export const ToolRecoveryActionSchema = Schema.Struct({
+  action: Schema.Literal(
+    "already_resolved",
+    "safe_replay",
+    "synthesized_interrupted",
+    "synthesized_missing_tool",
+  ),
+  replay: ToolReplaySchema,
+  toolCallId: Schema.NonEmptyString,
+  toolName: Schema.NonEmptyString,
+});
 
-export type RecoveryAction =
-  | ToolRecoveryAction
-  | {
-      readonly action: "orphaned_prompt_closed";
-      readonly promptEntryId: EntryId;
-    }
-  | {
-      readonly action: "unrecoverable-on-this-branch";
-      readonly operationId: OperationId;
-      readonly promptEntryId: EntryId;
-    };
+export type ToolRecoveryAction = Schema.Schema.Type<typeof ToolRecoveryActionSchema>;
 
-export interface SafeReplayCall {
-  readonly argumentsJson: string;
-  readonly name: string;
-  readonly operationId: OperationId;
-  readonly toolCallId: string;
-}
+export const RecoveryActionSchema = Schema.Union(
+  ToolRecoveryActionSchema,
+  Schema.Struct({
+    action: Schema.Literal("orphaned_prompt_closed"),
+    promptEntryId: EntryIdSchema,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("unrecoverable-on-this-branch"),
+    operationId: OperationIdSchema,
+    promptEntryId: EntryIdSchema,
+  }),
+);
+
+export type RecoveryAction = Schema.Schema.Type<typeof RecoveryActionSchema>;
+
+export const SafeReplayCallSchema = Schema.Struct({
+  argumentsJson: Schema.String,
+  name: Schema.NonEmptyString,
+  operationId: OperationIdSchema,
+  toolCallId: Schema.NonEmptyString,
+});
+
+export type SafeReplayCall = Schema.Schema.Type<typeof SafeReplayCallSchema>;
 
 export interface RecoveryPlan {
   readonly actions: ReadonlyArray<RecoveryAction>;
@@ -79,12 +87,14 @@ export interface RecoveryPlan {
   readonly toolResults: ReadonlyArray<EntryDraft>;
 }
 
-export interface RecoveryReport {
-  readonly actions: ReadonlyArray<RecoveryAction>;
-  readonly entriesAppended: ReadonlyArray<EntryId>;
-  readonly operationIdFound: OperationId | undefined;
-  readonly safeReplay: ReadonlyArray<SafeReplayCall>;
-}
+export const RecoveryReportSchema = Schema.Struct({
+  actions: Schema.Array(RecoveryActionSchema),
+  entriesAppended: Schema.Array(EntryIdSchema),
+  operationIdFound: Schema.UndefinedOr(OperationIdSchema),
+  safeReplay: Schema.Array(SafeReplayCallSchema),
+});
+
+export type RecoveryReport = Schema.Schema.Type<typeof RecoveryReportSchema>;
 
 export interface RecoveryApplicationOptions {
   readonly availableToolNames?: ReadonlySet<string>;

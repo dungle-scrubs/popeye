@@ -37,3 +37,19 @@ test("exports the Compaction policy seam for explicit plugin commands", () => {
   expect(kernel.CompactionLive).toBeTypeOf("function");
   expect(kernel.DEFAULT_COMPACTION_POLICY).toBeDefined();
 });
+
+test("exports schemas for every Driver result and option shape", () => {
+  expect(kernel.AbortTurnResultSchema).toBeDefined();
+  expect(kernel.CompactionResultSchema).toBeDefined();
+  expect(kernel.DriverSnapshotSchema).toBeDefined();
+  expect(kernel.RecoveryReportSchema).toBeDefined();
+  expect(kernel.ResumedSessionInfoSchema).toBeDefined();
+  expect(kernel.SessionInfoSchema).toBeDefined();
+  expect(kernel.SessionSummarySchema).toBeDefined();
+  expect(kernel.TurnOptionsSchema).toBeDefined();
+  expect(kernel.TurnResultSchema).toBeDefined();
+});
+
+test("exports the known-good Driver layer composition", () => {
+  expect(kernel.DriverDefault).toBeTypeOf("function");
+});

@@ -3,7 +3,7 @@
  * It exists so turn coordination is independent from a concrete LLM endpoint.
  */
 
-import { Context, type Stream } from "effect";
+import { Context, Schema, type Stream } from "effect";
 
 import type { ProviderError } from "./errors.js";
 
@@ -17,9 +17,13 @@ export const ASSISTANT_STOP_REASONS = [
 
 export type AssistantStopReason = (typeof ASSISTANT_STOP_REASONS)[number];
 
+export const AssistantStopReasonSchema = Schema.Literal(...ASSISTANT_STOP_REASONS);
+
 export const THINKING_LEVELS = ["high", "low", "max", "medium", "minimal", "xhigh"] as const;
 
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+export const ThinkingLevelSchema = Schema.Literal(...THINKING_LEVELS);
 
 export interface ContextToolCall {
   readonly argumentsJson: string;

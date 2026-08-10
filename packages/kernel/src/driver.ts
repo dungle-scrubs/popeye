@@ -3,39 +3,69 @@
  * It exists because D-021 makes the Driver the seam used by tests and the SDK, and the surface
  * plugin Commands are exercised on before wire Heads exist. The interface is deliberately shaped
  * like the Protocol so M20 wire frames map to it one-to-one. It is not a wire transport.
+ *
+ * DriverDefault is the supported composition. It shares one ProgressHub instance between Turns,
+ * Compaction, and Driver. Composing those layers with separate ProgressHub instances makes phases
+ * and subscriptions disagree. Fork copies entries after it creates the target Session. A later copy
+ * failure leaves that target Session in the Journal because the Journal has no compensation API.
+ *
+ * Settings are Branch-derived. The newest model_change and thinking_change on the current Branch
+ * win independently. Branching to an Entry before a change restores the older value. A Branch
+ * command waits behind a running Turn, but expectedRevision can reject a stale queued command.
  */
 
 import {
   type CompactionPayload,
+  CompactionPayloadSchema,
+  type Entry,
   EntryDraftSchema,
   type EntryId,
   EntrySchema,
   Journal,
+  JournalDraftRejected,
   JournalError,
   type JournalFailure,
   type SessionId,
   SessionIdSchema,
 } from "@peye/journal";
+import type { ProtocolError } from "@peye/protocol";
 import { Context, Effect, Layer, Ref, Schema, type Stream } from "effect";
 
-import { Compaction, type CompactionFailure, type CompactionResult } from "./compaction-policy.js";
-import { Mailbox, type MailboxFailure } from "./mailbox.js";
-import { type Progress, ProgressHub, TurnPhaseSchema } from "./progress.js";
-import type { ThinkingLevel } from "./provider.js";
+import {
+  Compaction,
+  type CompactionFailure,
+  CompactionLive,
+  type CompactionPolicyOptions,
+  type CompactionResult,
+} from "./compaction-policy.js";
+import {
+  MessageEntryPayloadSchema,
+  type MessageToolCall,
+  ModelChangePayloadSchema,
+  ThinkingChangePayloadSchema,
+  ToolResultMessagePayloadSchema,
+} from "./entry-payloads.js";
+import type { TurnQueueFull } from "./errors.js";
+import { Mailbox, type MailboxFailure, MailboxLive, type MailboxOptions } from "./mailbox.js";
+import { type Progress, ProgressHub, ProgressHubLive, TurnPhaseSchema } from "./progress.js";
+import { type Provider, type ThinkingLevel, ThinkingLevelSchema } from "./provider.js";
 import {
   type ResumedSessionInfo,
   type SessionInfo,
   type SessionSummary,
   Sessions,
   type SessionsFailure,
+  SessionsLive,
+  type SessionsOptions,
 } from "./sessions.js";
+import type { ToolRegistry } from "./tool.js";
 import {
   type AbortTurnResult,
   type TurnFailure,
   type TurnOptions,
   type TurnResult,
   Turns,
-  type TurnsService,
+  TurnsLive,
 } from "./turn.js";
 
 export const DriverSnapshotSchema = Schema.Struct({
@@ -45,40 +75,52 @@ export const DriverSnapshotSchema = Schema.Struct({
   phase: TurnPhaseSchema,
   revision: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
   sessionId: SessionIdSchema,
-  thinkingLevel: Schema.optional(
-    Schema.Literal("high", "low", "max", "medium", "minimal", "xhigh"),
-  ),
+  thinkingLevel: Schema.optional(ThinkingLevelSchema),
 });
 
 export type DriverSnapshot = Schema.Schema.Type<typeof DriverSnapshotSchema>;
+
+interface DriverSnapshotCore {
+  readonly entries: ReadonlyArray<Entry>;
+  readonly leaf: Entry;
+  readonly model?: string;
+  readonly phase: DriverSnapshot["phase"];
+  readonly sessionId: SessionId;
+  readonly thinkingLevel?: ThinkingLevel;
+}
 
 interface SessionSettings {
   readonly model?: string;
   readonly thinkingLevel?: ThinkingLevel;
 }
 
-export type DriverFailure =
-  | CompactionFailure
-  | JournalFailure
-  | MailboxFailure
-  | SessionsFailure
-  | TurnFailure;
+export interface DriverDefaultOptions {
+  readonly compaction?: CompactionPolicyOptions;
+  readonly mailbox?: MailboxOptions;
+  readonly progressCapacity?: number;
+  readonly sessions?: SessionsOptions;
+}
 
 export interface DriverService {
   readonly abortTurn: (sessionId: SessionId) => Effect.Effect<AbortTurnResult>;
-  readonly attach: (sessionId: SessionId) => Effect.Effect<DriverSnapshot, JournalFailure>;
   readonly branch: (
     sessionId: SessionId,
     toEntryId: EntryId,
+    expectedRevision?: number,
   ) => Effect.Effect<DriverSnapshot, JournalFailure | MailboxFailure>;
-  readonly compactNow: (sessionId: SessionId) => Effect.Effect<CompactionResult, CompactionFailure>;
+  readonly compactNow: (
+    sessionId: SessionId,
+    expectedRevision?: number,
+  ) => Effect.Effect<CompactionResult, CompactionFailure>;
   readonly createSession: () => Effect.Effect<SessionInfo, SessionsFailure>;
-  readonly detach: (sessionId: SessionId) => Effect.Effect<void>;
   readonly fork: (
     sessionId: SessionId,
     fromEntryId: EntryId,
+    expectedRevision?: number,
   ) => Effect.Effect<DriverSnapshot, JournalFailure | MailboxFailure>;
-  readonly getSnapshot: (sessionId: SessionId) => Effect.Effect<DriverSnapshot, JournalFailure>;
+  readonly getSnapshot: (
+    sessionId: SessionId,
+  ) => Effect.Effect<DriverSnapshot, JournalFailure | MailboxFailure>;
   readonly listSessions: () => Effect.Effect<ReadonlyArray<SessionSummary>, JournalFailure>;
   readonly prompt: (
     sessionId: SessionId,
@@ -91,16 +133,64 @@ export interface DriverService {
   readonly setModel: (
     sessionId: SessionId,
     model: string,
+    expectedRevision?: number,
   ) => Effect.Effect<void, JournalFailure | MailboxFailure>;
   readonly setThinkingLevel: (
     sessionId: SessionId,
     thinkingLevel: ThinkingLevel,
+    expectedRevision?: number,
   ) => Effect.Effect<void, JournalFailure | MailboxFailure>;
-  readonly steer: TurnsService["steer"];
+  readonly steer: (
+    sessionId: SessionId,
+    content: string,
+  ) => Effect.Effect<void, ProtocolError | TurnQueueFull>;
   readonly subscribeProgress: (sessionId: SessionId) => Stream.Stream<Progress>;
 }
 
 export class Driver extends Context.Tag("@peye/kernel/Driver")<Driver, DriverService>() {}
+
+const strict: { readonly onExcessProperty: "error" } = { onExcessProperty: "error" };
+const decodeCompaction = Schema.decodeUnknown(CompactionPayloadSchema, strict);
+const decodeMessage = Schema.decodeUnknown(MessageEntryPayloadSchema, strict);
+const decodeModelChange = Schema.decodeUnknown(ModelChangePayloadSchema, strict);
+const decodeThinkingChange = Schema.decodeUnknown(ThinkingChangePayloadSchema, strict);
+const decodeToolResult = Schema.decodeUnknown(ToolResultMessagePayloadSchema, strict);
+
+const entrySchemaMismatch = (entry: Entry, cause: unknown): JournalError =>
+  new JournalError({
+    cause,
+    corruptionClass: "schema_mismatch",
+    message: `Entry ${entry.id} payload does not match ${entry.kind}: ${String(cause)}`,
+  });
+
+const invalidEntryPayload = (kind: string, cause: unknown): JournalDraftRejected =>
+  new JournalDraftRejected({ cause, kind, reason: "invalid_payload" });
+
+const deriveSettings = (
+  entries: ReadonlyArray<Entry>,
+): Effect.Effect<SessionSettings, JournalError> =>
+  Effect.gen(function* () {
+    let model: string | undefined;
+    let thinkingLevel: ThinkingLevel | undefined;
+    for (const entry of entries) {
+      if (entry.kind === "model_change") {
+        const payload = yield* decodeModelChange(entry.payload).pipe(
+          Effect.mapError((cause) => entrySchemaMismatch(entry, cause)),
+        );
+        model = payload.model;
+      }
+      if (entry.kind === "thinking_change") {
+        const payload = yield* decodeThinkingChange(entry.payload).pipe(
+          Effect.mapError((cause) => entrySchemaMismatch(entry, cause)),
+        );
+        thinkingLevel = payload.thinkingLevel;
+      }
+    }
+    return {
+      ...(model === undefined ? {} : { model }),
+      ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+    };
+  });
 
 const remapEntryId = (
   ids: ReadonlyMap<EntryId, EntryId>,
@@ -135,6 +225,52 @@ const remapCompaction = (
     };
   });
 
+const unansweredToolCalls = (
+  entries: ReadonlyArray<Entry>,
+): Effect.Effect<ReadonlyArray<MessageToolCall>, JournalError> =>
+  Effect.gen(function* () {
+    const newestCompactionIndex = entries.findLastIndex((entry) => entry.kind === "compaction");
+    let visibleEntries = entries;
+    if (newestCompactionIndex >= 0) {
+      const compactionEntry = entries[newestCompactionIndex];
+      if (compactionEntry === undefined) {
+        return yield* new JournalError({
+          corruptionClass: "invalid_compaction",
+          message: `Compaction index ${newestCompactionIndex} is outside its Branch.`,
+        });
+      }
+      const payload = yield* decodeCompaction(compactionEntry.payload).pipe(
+        Effect.mapError((cause) => entrySchemaMismatch(compactionEntry, cause)),
+      );
+      const retained = new Set(payload.retainedTailIds);
+      visibleEntries = [
+        ...entries.slice(0, newestCompactionIndex).filter((entry) => retained.has(entry.id)),
+        ...entries.slice(newestCompactionIndex + 1),
+      ];
+    }
+    const pending = new Map<string, MessageToolCall>();
+    for (const entry of visibleEntries) {
+      if (entry.kind !== "message") {
+        continue;
+      }
+      const payload = yield* decodeMessage(entry.payload).pipe(
+        Effect.mapError((cause) => entrySchemaMismatch(entry, cause)),
+      );
+      if (payload.role === "assistant") {
+        for (const call of payload.toolCalls ?? []) {
+          pending.set(call.id, call);
+        }
+      }
+      if (payload.role === "toolResult") {
+        pending.delete(payload.toolCallId);
+      }
+    }
+    return [...pending.values()];
+  });
+
+const makeSnapshot = (core: DriverSnapshotCore, revision: number): DriverSnapshot =>
+  DriverSnapshotSchema.make({ ...core, entries: [...core.entries], revision });
+
 export const DriverLive: Layer.Layer<
   Driver,
   never,
@@ -148,44 +284,47 @@ export const DriverLive: Layer.Layer<
     const progress = yield* ProgressHub;
     const sessions = yield* Sessions;
     const turns = yield* Turns;
-    const attachedSessions = yield* Ref.make<ReadonlySet<SessionId>>(new Set());
     const sessionSettings = yield* Ref.make<ReadonlyMap<SessionId, SessionSettings>>(new Map());
 
-    const readSnapshot = (sessionId: SessionId): Effect.Effect<DriverSnapshot, JournalFailure> =>
+    const cacheSettings = (sessionId: SessionId, settings: SessionSettings): Effect.Effect<void> =>
+      Ref.update(sessionSettings, (current) => new Map(current).set(sessionId, settings));
+
+    const readSnapshotCore = (
+      sessionId: SessionId,
+    ): Effect.Effect<DriverSnapshotCore, JournalFailure> =>
       Effect.gen(function* () {
         const entries = yield* journal.readBranch(sessionId);
-        const leaf = yield* journal.getLeaf(sessionId);
+        const leaf = entries.at(-1);
+        if (leaf === undefined) {
+          return yield* new JournalError({
+            corruptionClass: "dangling_leaf_reference",
+            message: `Session ${sessionId} has no current Branch.`,
+          });
+        }
         const phase = yield* progress.currentPhase(sessionId);
-        const revision = yield* journal.countDurableLines(sessionId);
-        const settings = (yield* Ref.get(sessionSettings)).get(sessionId);
-        return DriverSnapshotSchema.make({
-          entries: [...entries],
+        const settings = yield* deriveSettings(entries);
+        yield* cacheSettings(sessionId, settings);
+        return {
+          entries,
           leaf,
-          ...(settings?.model === undefined ? {} : { model: settings.model }),
+          ...(settings.model === undefined ? {} : { model: settings.model }),
           phase,
-          revision,
           sessionId,
-          ...(settings?.thinkingLevel === undefined
+          ...(settings.thinkingLevel === undefined
             ? {}
             : { thinkingLevel: settings.thinkingLevel }),
-        });
+        };
       });
 
-    const updateSettings = (
+    const readSnapshot = (
       sessionId: SessionId,
-      update: (settings: SessionSettings) => SessionSettings,
-    ): Effect.Effect<void, JournalFailure | MailboxFailure> =>
+    ): Effect.Effect<DriverSnapshot, JournalFailure | MailboxFailure> =>
       mailbox
         .enqueue(sessionId, {
-          name: "driver-settings",
-          run: () =>
-            Ref.update(sessionSettings, (current) => {
-              const next = new Map(current);
-              next.set(sessionId, update(current.get(sessionId) ?? {}));
-              return next;
-            }),
+          name: "read-snapshot",
+          run: () => readSnapshotCore(sessionId),
         })
-        .pipe(Effect.asVoid);
+        .pipe(Effect.map((result) => makeSnapshot(result.value, result.revision)));
 
     const forkBranch = (
       sessionId: SessionId,
@@ -195,30 +334,27 @@ export const DriverLive: Layer.Layer<
         const source = yield* journal.readBranch(sessionId);
         const branchPoint = source.findIndex((entry) => entry.id === fromEntryId);
         if (branchPoint < 0) {
-          return yield* Effect.fail(
-            new JournalError({
-              corruptionClass: "dangling_leaf_reference",
-              message: `Fork Entry ${fromEntryId} is not on the current Branch.`,
-            }),
-          );
+          return yield* new JournalError({
+            corruptionClass: "dangling_leaf_reference",
+            message: `Fork Entry ${fromEntryId} is not on the current Branch.`,
+          });
         }
         const created = yield* sessions.create();
         const sourceRoot = source[0];
         if (sourceRoot === undefined) {
-          return yield* Effect.fail(
-            new JournalError({
-              corruptionClass: "dangling_leaf_reference",
-              message: `Fork Session ${sessionId} has no root Entry.`,
-            }),
-          );
+          return yield* new JournalError({
+            corruptionClass: "dangling_leaf_reference",
+            message: `Fork Session ${sessionId} has no root Entry.`,
+          });
         }
         const ids = new Map<EntryId, EntryId>([[sourceRoot.id, created.leaf.id]]);
         for (const entry of source.slice(1, branchPoint + 1)) {
           const appended =
             entry.kind === "compaction"
-              ? yield* journal.appendCompaction(
-                  created.id,
-                  yield* remapCompaction(ids, entry.payload as CompactionPayload),
+              ? yield* decodeCompaction(entry.payload).pipe(
+                  Effect.mapError((cause) => entrySchemaMismatch(entry, cause)),
+                  Effect.flatMap((payload) => remapCompaction(ids, payload)),
+                  Effect.flatMap((payload) => journal.appendCompaction(created.id, payload)),
                 )
               : yield* journal.appendEntry(
                   created.id,
@@ -226,42 +362,104 @@ export const DriverLive: Layer.Layer<
                 );
           ids.set(entry.id, appended.id);
         }
-        const settings = (yield* Ref.get(sessionSettings)).get(sessionId);
-        if (settings !== undefined) {
-          yield* Ref.update(sessionSettings, (current) =>
-            new Map(current).set(created.id, settings),
+        const copied = yield* journal.readBranch(created.id);
+        const unanswered = yield* unansweredToolCalls(copied);
+        for (const call of unanswered) {
+          const payload = yield* decodeToolResult({
+            content: "Tool execution interrupted by fork.",
+            isError: true,
+            role: "toolResult",
+            toolCallId: call.id,
+            toolName: call.name,
+          }).pipe(Effect.mapError((cause) => invalidEntryPayload("message", cause)));
+          yield* journal.appendEntry(
+            created.id,
+            EntryDraftSchema.make({ kind: "message", payload }),
           );
         }
-        return yield* readSnapshot(created.id);
+        const core = yield* readSnapshotCore(created.id);
+        const revision = yield* journal.countDurableLines(created.id);
+        return makeSnapshot(core, revision);
       });
+
+    const updateModel = (
+      sessionId: SessionId,
+      model: string,
+      expectedRevision: number | undefined,
+    ): Effect.Effect<void, JournalFailure | MailboxFailure> =>
+      mailbox
+        .enqueue(sessionId, {
+          ...(expectedRevision === undefined ? {} : { expectedRevision }),
+          name: "set-model",
+          run: () =>
+            decodeModelChange({ model }).pipe(
+              Effect.mapError((cause) => invalidEntryPayload("model_change", cause)),
+              Effect.flatMap((payload) =>
+                journal.appendEntry(
+                  sessionId,
+                  EntryDraftSchema.make({ kind: "model_change", payload }),
+                ),
+              ),
+              Effect.flatMap(() =>
+                Ref.update(sessionSettings, (current) => {
+                  const next = new Map(current);
+                  next.set(sessionId, { ...(current.get(sessionId) ?? {}), model });
+                  return next;
+                }),
+              ),
+            ),
+        })
+        .pipe(Effect.asVoid);
+
+    const updateThinkingLevel = (
+      sessionId: SessionId,
+      thinkingLevel: ThinkingLevel,
+      expectedRevision: number | undefined,
+    ): Effect.Effect<void, JournalFailure | MailboxFailure> =>
+      mailbox
+        .enqueue(sessionId, {
+          ...(expectedRevision === undefined ? {} : { expectedRevision }),
+          name: "set-thinking-level",
+          run: () =>
+            decodeThinkingChange({ thinkingLevel }).pipe(
+              Effect.mapError((cause) => invalidEntryPayload("thinking_change", cause)),
+              Effect.flatMap((payload) =>
+                journal.appendEntry(
+                  sessionId,
+                  EntryDraftSchema.make({ kind: "thinking_change", payload }),
+                ),
+              ),
+              Effect.flatMap(() =>
+                Ref.update(sessionSettings, (current) => {
+                  const next = new Map(current);
+                  next.set(sessionId, { ...(current.get(sessionId) ?? {}), thinkingLevel });
+                  return next;
+                }),
+              ),
+            ),
+        })
+        .pipe(Effect.asVoid);
 
     return {
       abortTurn: (sessionId) => turns.abortTurn(sessionId),
-      attach: (sessionId) =>
-        readSnapshot(sessionId).pipe(
-          Effect.tap(() =>
-            Ref.update(attachedSessions, (current) => new Set(current).add(sessionId)),
-          ),
-        ),
-      branch: (sessionId, toEntryId) =>
+      branch: (sessionId, toEntryId, expectedRevision) =>
         mailbox
           .enqueue(sessionId, {
+            ...(expectedRevision === undefined ? {} : { expectedRevision }),
             name: "branch",
             run: () =>
-              journal.moveLeaf(sessionId, toEntryId).pipe(Effect.zipRight(readSnapshot(sessionId))),
+              journal
+                .moveLeaf(sessionId, toEntryId)
+                .pipe(Effect.zipRight(readSnapshotCore(sessionId))),
           })
-          .pipe(Effect.map((result) => result.value)),
-      compactNow: (sessionId) => compaction.compactNow(sessionId),
+          .pipe(Effect.map((result) => makeSnapshot(result.value, result.revision))),
+      compactNow: (sessionId, expectedRevision) =>
+        compaction.compactNow(sessionId, expectedRevision),
       createSession: () => sessions.create(),
-      detach: (sessionId) =>
-        Ref.update(attachedSessions, (current) => {
-          const next = new Set(current);
-          next.delete(sessionId);
-          return next;
-        }),
-      fork: (sessionId, fromEntryId) =>
+      fork: (sessionId, fromEntryId, expectedRevision) =>
         mailbox
           .enqueue(sessionId, {
+            ...(expectedRevision === undefined ? {} : { expectedRevision }),
             name: "fork",
             run: () => forkBranch(sessionId, fromEntryId),
           })
@@ -269,25 +467,38 @@ export const DriverLive: Layer.Layer<
       getSnapshot: readSnapshot,
       listSessions: () => sessions.list(),
       prompt: (sessionId, content, options = {}) =>
-        Ref.get(sessionSettings).pipe(
-          Effect.map((current) => current.get(sessionId)),
-          Effect.flatMap((settings) =>
-            turns.runTurn(sessionId, content, {
-              ...options,
+        turns.runTurn(sessionId, content, options, (turnOptions) =>
+          Ref.get(sessionSettings).pipe(
+            Effect.map((current) => current.get(sessionId)),
+            Effect.map((settings) => ({
+              ...turnOptions,
               ...(settings?.model === undefined ? {} : { model: settings.model }),
               ...(settings?.thinkingLevel === undefined
                 ? {}
                 : { thinkingLevel: settings.thinkingLevel }),
-            }),
+            })),
           ),
         ),
-      resumeSession: (sessionId) => sessions.resume(sessionId),
-      setModel: (sessionId, model) =>
-        updateSettings(sessionId, (settings) => ({ ...settings, model })),
-      setThinkingLevel: (sessionId, thinkingLevel) =>
-        updateSettings(sessionId, (settings) => ({ ...settings, thinkingLevel })),
+      resumeSession: (sessionId) =>
+        sessions.resume(sessionId).pipe(Effect.tap(() => readSnapshot(sessionId))),
+      setModel: updateModel,
+      setThinkingLevel: updateThinkingLevel,
       steer: (sessionId, content) => turns.steer(sessionId, content),
       subscribeProgress: (sessionId) => progress.subscribe(sessionId),
     } satisfies DriverService;
   }),
 );
+
+export const DriverDefault = (
+  options: DriverDefaultOptions = {},
+): Layer.Layer<Driver, never, Journal | Provider | ToolRegistry> => {
+  const mailbox = MailboxLive(options.mailbox);
+  const progress = ProgressHubLive(options.progressCapacity);
+  const shared = Layer.merge(mailbox, progress);
+  const compaction = CompactionLive(options.compaction).pipe(Layer.provide(shared));
+  const kernel = Layer.mergeAll(shared, compaction);
+  const sessions = SessionsLive(options.sessions).pipe(Layer.provide(kernel));
+  const turns = TurnsLive().pipe(Layer.provide(kernel));
+  const dependencies = Layer.mergeAll(kernel, sessions, turns);
+  return DriverLive.pipe(Layer.provide(dependencies));
+};

@@ -141,9 +141,7 @@ export const ProgressHubLive = (capacity = PROGRESS_CAPACITY): Layer.Layer<Progr
                 dropped: yield* Ref.make(0),
                 queue: yield* Queue.sliding<Progress>(capacity),
               };
-              const phase = yield* Ref.get(state).pipe(
-                Effect.map((current) => current.phases.get(sessionId) ?? "IDLE"),
-              );
+              const phase = yield* currentPhase(sessionId);
               yield* Ref.update(state, (current) => {
                 const subscribers = new Map(current.subscribers);
                 const sessionSubscribers = new Set(subscribers.get(sessionId) ?? []);

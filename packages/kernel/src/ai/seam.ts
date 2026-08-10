@@ -385,6 +385,8 @@ export const makePiAiProviderLayer = (
   idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS,
   thinkingLevel?: PiAiProviderLayerOptions["thinkingLevel"],
   apiKey?: string,
+  resolveRequestModel: (modelId: string) => Model<Api> | undefined = (modelId) =>
+    getModelRegistry().getModel(model.provider, modelId),
 ): Layer.Layer<Provider, ProviderError, ToolRegistry> => {
   if (!Number.isSafeInteger(idleTimeoutMs) || idleTimeoutMs < 1) {
     throw new RangeError("Provider idle timeout milliseconds must be a positive safe integer.");
@@ -407,6 +409,16 @@ export const makePiAiProviderLayer = (
             Effect.gen(function* () {
               const controller = new AbortController();
               let responseStatus: number | undefined;
+              const requestModel =
+                options.model === undefined || options.model === model.id
+                  ? model
+                  : resolveRequestModel(options.model);
+              if (requestModel === undefined) {
+                return yield* new ProviderError({
+                  message: `Unknown pi-ai model ${model.provider}/${options.model}.`,
+                  transient: false,
+                });
+              }
               const piAiContext = yield* Effect.try({
                 catch: (cause) =>
                   new ProviderError({
@@ -416,7 +428,7 @@ export const makePiAiProviderLayer = (
                         : "Provider context conversion failed.",
                     transient: false,
                   }),
-                try: () => toPiAiContext(context, model, declarations),
+                try: () => toPiAiContext(context, requestModel, declarations),
               });
               const source = yield* Effect.try({
                 catch: (cause) =>
@@ -426,11 +438,12 @@ export const makePiAiProviderLayer = (
                     transient: false,
                   }),
                 try: () => {
+                  const requestThinkingLevel = options.thinkingLevel ?? thinkingLevel;
                   const reasoning =
-                    thinkingLevel === undefined
+                    requestThinkingLevel === undefined
                       ? undefined
-                      : clampThinkingLevel(model, pinThinkingLevel(thinkingLevel));
-                  return runtime.streamSimple(model, piAiContext, {
+                      : clampThinkingLevel(requestModel, pinThinkingLevel(requestThinkingLevel));
+                  return runtime.streamSimple(requestModel, piAiContext, {
                     ...(reasoning === undefined || reasoning === "off" ? {} : { reasoning }),
                     ...(apiKey === undefined ? {} : { apiKey }),
                     onResponse: (response) => {
@@ -458,7 +471,7 @@ export const makePiAiProviderLayer = (
             Stream.withSpan("kernel.provider", {
               attributes: {
                 attempt: options.attempt,
-                modelId: model.id,
+                modelId: options.model ?? model.id,
                 provider: model.provider,
                 purpose: options.purpose ?? "turn",
                 ...(options.sliceIndex === undefined ? {} : { sliceIndex: options.sliceIndex }),
@@ -516,5 +529,6 @@ export const PiAiProviderLive = (
         options.idleTimeoutMs,
         options.thinkingLevel,
         options.apiKey ?? (options.provider === "lmstudio" ? "lm-studio" : undefined),
+        (modelId) => resolveModel({ ...options, modelId }),
       );
 };

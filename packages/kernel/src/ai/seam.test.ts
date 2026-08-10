@@ -999,6 +999,52 @@ test("real openai-completions adapter preserves context, tools, deltas, and sett
   });
 });
 
+test("per-request model and thinking level change the pi-ai wire request", async () => {
+  const chunks = [
+    {
+      choices: [{ delta: { content: "ok" }, finish_reason: "stop", index: 0 }],
+      id: "completion-options",
+      model: "wire-default",
+      object: "chat.completion.chunk",
+    },
+  ];
+
+  await withOpenAiSseServer(chunks, async (baseUrl, requests) => {
+    const providerLayer = PiAiProviderLive({
+      apiKey: "offline-key",
+      baseUrl,
+      modelId: "wire-default",
+      provider: "offline-openai",
+      reasoning: true,
+      thinkingLevel: "minimal",
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const provider = yield* Provider;
+        yield* Stream.runDrain(
+          provider.streamAssistant([{ content: "default", role: "user" }], {
+            attempt: 1,
+            turnOrdinal: 1,
+          }),
+        );
+        yield* Stream.runDrain(
+          provider.streamAssistant([{ content: "override", role: "user" }], {
+            attempt: 1,
+            model: "wire-override",
+            thinkingLevel: "high",
+            turnOrdinal: 2,
+          }),
+        );
+      }).pipe(Effect.provide(providerLayer), Effect.provide(ToolRegistryLive([]))),
+    );
+
+    expect(requests.map((request) => request.body)).toMatchObject([
+      { model: "wire-default", reasoning_effort: "minimal" },
+      { model: "wire-override", reasoning_effort: "high" },
+    ]);
+  });
+});
+
 test("API key policy distinguishes lmstudio, explicit keys, and known-provider proxy env keys", async () => {
   const chunks = [
     {

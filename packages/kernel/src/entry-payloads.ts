@@ -6,7 +6,19 @@
 import { EntryIdSchema } from "@peye/journal";
 import { Schema } from "effect";
 
-import { ASSISTANT_STOP_REASONS } from "./provider.js";
+import { ASSISTANT_STOP_REASONS, THINKING_LEVELS } from "./provider.js";
+
+export const ModelChangePayloadSchema = Schema.Struct({
+  model: Schema.NonEmptyString,
+});
+
+export type ModelChangePayload = Schema.Schema.Type<typeof ModelChangePayloadSchema>;
+
+export const ThinkingChangePayloadSchema = Schema.Struct({
+  thinkingLevel: Schema.Literal(...THINKING_LEVELS),
+});
+
+export type ThinkingChangePayload = Schema.Schema.Type<typeof ThinkingChangePayloadSchema>;
 
 export const AssistantDiagnosticSchema = Schema.Union(
   Schema.Struct({

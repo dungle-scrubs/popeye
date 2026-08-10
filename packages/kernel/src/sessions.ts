@@ -3,31 +3,47 @@
  * It exists so Session identity, Leaf position, and revision remain journal-derived at one seam.
  */
 
-import { type Entry, Journal, type JournalFailure, type SessionId } from "@peye/journal";
-import { Context, Effect, Layer } from "effect";
+import {
+  EntrySchema,
+  Journal,
+  type JournalFailure,
+  type SessionId,
+  SessionIdSchema,
+} from "@peye/journal";
+import { Context, Effect, Layer, Schema } from "effect";
 import { Mailbox, type MailboxFailure } from "./mailbox.js";
 import {
   applyRecoveryPlan,
   boundedRecoveryRecords,
   type RecoveryReport,
+  RecoveryReportSchema,
   recoverSession,
 } from "./recovery.js";
 import { ToolRegistry } from "./tool.js";
 
-export interface SessionInfo {
-  readonly id: SessionId;
-  readonly leaf: Entry;
-  readonly revision: number;
-}
+export const SessionInfoSchema = Schema.Struct({
+  id: SessionIdSchema,
+  leaf: EntrySchema,
+  revision: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
+});
 
-export interface SessionSummary {
-  readonly id: SessionId;
-  readonly revision: number;
-}
+export type SessionInfo = Schema.Schema.Type<typeof SessionInfoSchema>;
 
-export interface ResumedSessionInfo extends SessionInfo {
-  readonly recovery: RecoveryReport;
-}
+export const SessionSummarySchema = Schema.Struct({
+  id: SessionIdSchema,
+  revision: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
+});
+
+export type SessionSummary = Schema.Schema.Type<typeof SessionSummarySchema>;
+
+export const ResumedSessionInfoSchema = Schema.Struct({
+  id: SessionIdSchema,
+  leaf: EntrySchema,
+  recovery: RecoveryReportSchema,
+  revision: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
+});
+
+export type ResumedSessionInfo = Schema.Schema.Type<typeof ResumedSessionInfoSchema>;
 
 export type SessionsFailure = JournalFailure | MailboxFailure;
 
