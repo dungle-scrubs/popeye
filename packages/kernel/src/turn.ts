@@ -11,11 +11,23 @@ import {
   type JournalFailure,
   type SessionId,
 } from "@peye/journal";
-import { Cause, Context, Effect, Exit, Fiber, Layer, Ref, Schedule, Stream } from "effect";
+import {
+  Cause,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Ref,
+  Schedule,
+  Stream,
+} from "effect";
 
 import { BudgetExceeded, type ProviderError } from "./errors.js";
 import { Mailbox, type MailboxFailure } from "./mailbox.js";
-import { type Progress, ProgressHub, ProgressHubLive, type TurnPhase } from "./progress.js";
+import { type Progress, ProgressHub, type TurnPhase } from "./progress.js";
 import { type AssistantStopReason, Provider } from "./provider.js";
 
 export interface TurnOptions {
@@ -27,10 +39,18 @@ export interface TurnResult {
   readonly stopReason: AssistantStopReason;
 }
 
+export type AbortTurnResult =
+  | {
+      readonly aborted: false;
+      readonly reason: "none" | "settling";
+      readonly turnOrdinal: number | undefined;
+    }
+  | { readonly aborted: true; readonly turnOrdinal: number };
+
 export type TurnFailure = JournalFailure | MailboxFailure;
 
 export interface TurnsService {
-  readonly abortTurn: (sessionId: SessionId) => Effect.Effect<void>;
+  readonly abortTurn: (sessionId: SessionId) => Effect.Effect<AbortTurnResult>;
   readonly runTurn: (
     sessionId: SessionId,
     content: string,
@@ -40,6 +60,19 @@ export interface TurnsService {
 }
 
 export class Turns extends Context.Tag("@peye/kernel/Turns")<Turns, TurnsService>() {}
+
+interface ActiveTurn {
+  readonly fiber: Fiber.Fiber<TurnResult, BudgetExceeded | JournalFailure | ProviderError>;
+  readonly stage: Ref.Ref<"running" | "settling">;
+  readonly turnOrdinal: number;
+}
+
+type AssistantDiagnostic =
+  | {
+      readonly detail: string;
+      readonly reason: "budget_exceeded" | "journal_failure" | "turn_failure";
+    }
+  | { readonly attempts: number; readonly detail: string; readonly reason: "provider_error" };
 
 const DEFAULT_CONTEXT_BUDGET = 32_000;
 const DEFAULT_MAX_ATTEMPTS = 3;
@@ -60,144 +93,283 @@ const asContextItem = (entry: {
 const phaseChanged = (progress: ProgressHub["Type"], sessionId: SessionId, phase: TurnPhase) =>
   progress.publish(sessionId, { _tag: "phaseChanged", phase });
 
-export const TurnsLive = (): Layer.Layer<Turns, never, Journal | Mailbox | Provider> =>
+const causeDetail = (cause: Cause.Cause<unknown>): string => Cause.pretty(cause);
+
+const journalFailureDetail = (failure: JournalFailure, cause: Cause.Cause<unknown>): string =>
+  "message" in failure && typeof failure.message === "string"
+    ? failure.message
+    : causeDetail(cause);
+
+export const TurnsLive = (): Layer.Layer<
+  Turns,
+  never,
+  Journal | Mailbox | ProgressHub | Provider
+> =>
   Layer.effect(
     Turns,
     Effect.gen(function* () {
       const journal = yield* Journal;
       const mailbox = yield* Mailbox;
-      const provider = yield* Provider;
       const progress = yield* ProgressHub;
-      const active = yield* Ref.make<Map<SessionId, Fiber.Fiber<void, ProviderError>>>(new Map());
+      const provider = yield* Provider;
+      const active = yield* Ref.make<Map<SessionId, ActiveTurn>>(new Map());
       const execute = (
         sessionId: SessionId,
         content: string,
         options: TurnOptions,
-      ): Effect.Effect<TurnResult, JournalFailure> =>
+      ): Effect.Effect<TurnResult, BudgetExceeded | JournalFailure | ProviderError> =>
         Effect.gen(function* () {
           const priorBranch = yield* journal.readBranch(sessionId);
           const turnOrdinal =
             priorBranch.filter((entry) => asContextItem(entry)?.role === "assistant").length + 1;
-          const user = yield* journal.appendEntry(
-            sessionId,
-            EntryDraftSchema.make({ kind: "message", payload: { content, role: "user" } }),
-          );
-          yield* Effect.annotateCurrentSpan({ sessionId, turnOrdinal, userEntryId: user.id });
-          yield* phaseChanged(progress, sessionId, "ASSEMBLING");
-          const branch = yield* journal.readBranch(sessionId);
-          const context = yield* foldContext(branch, {
-            budget: options.contextBudget ?? DEFAULT_CONTEXT_BUDGET,
-            visibility: asContextItem,
-          }).pipe(
-            Effect.mapError((error) =>
-              error._tag === "ContextBudgetExceeded"
-                ? new BudgetExceeded({
-                    budget: error.budget,
-                    optionsDiagnostic: error.optionsDiagnostic,
-                    required: error.required,
-                  })
-                : error,
-            ),
-          );
-          yield* phaseChanged(progress, sessionId, "STREAMING");
           const attempts = yield* Ref.make(0);
-          const text = yield* Ref.make("");
+          const abortSettleFailure = yield* Ref.make<Cause.Cause<JournalFailure> | undefined>(
+            undefined,
+          );
+          const stage = yield* Ref.make<"running" | "settling">("running");
           const stopReason = yield* Ref.make<AssistantStopReason>("done");
-          const consume: Effect.Effect<void, ProviderError> = Effect.suspend(
-            (): Effect.Effect<void, ProviderError> =>
-              Ref.updateAndGet(attempts, (attempt) => attempt + 1).pipe(
-                Effect.flatMap((attempt) =>
-                  Effect.annotateCurrentSpan({ attempt }).pipe(
-                    Effect.zipRight(
-                      Stream.runForEach(
-                        provider.streamAssistant(context.items, { turnOrdinal }),
-                        (item) => {
-                          if (item._tag === "textDelta") {
-                            return Ref.update(text, (current) => current + item.text).pipe(
-                              Effect.zipRight(
-                                progress.publish(sessionId, {
-                                  _tag: "assistantText",
-                                  text: item.text,
-                                }),
-                              ),
-                            );
+          const text = yield* Ref.make("");
+
+          const settle = (
+            reason: AssistantStopReason,
+            diagnostic: AssistantDiagnostic | undefined,
+            contentOverride: string | undefined = undefined,
+          ): Effect.Effect<void, JournalFailure> =>
+            Effect.uninterruptible(
+              Effect.gen(function* () {
+                yield* Ref.set(stage, "settling");
+                yield* phaseChanged(progress, sessionId, "SETTLING");
+                const assistantContent = contentOverride ?? (yield* Ref.get(text));
+                const assistant = yield* journal.appendEntry(
+                  sessionId,
+                  EntryDraftSchema.make({
+                    kind: "message",
+                    payload:
+                      diagnostic === undefined
+                        ? {
+                            content: assistantContent,
+                            role: "assistant",
+                            stopReason: reason,
                           }
-                          if (item._tag === "thinkingDelta") {
-                            return progress.publish(sessionId, {
-                              _tag: "assistantThinking",
-                              text: item.text,
-                            });
-                          }
-                          return Ref.set(stopReason, item.stopReason);
-                        },
-                      ),
-                    ),
-                  ),
+                        : {
+                            content: assistantContent,
+                            diagnostic,
+                            role: "assistant",
+                            stopReason: reason,
+                          },
+                  }),
+                );
+                yield* Effect.annotateCurrentSpan({
+                  assistantEntryId: assistant.id,
+                  stopReason: reason,
+                });
+              }).pipe(
+                Effect.ensuring(
+                  Effect.gen(function* () {
+                    const revision = yield* journal
+                      .countDurableLines(sessionId)
+                      .pipe(Effect.catchAll(() => Effect.succeed(0)));
+                    yield* progress.publish(sessionId, {
+                      _tag: "turnSettled",
+                      revision,
+                      stopReason: reason,
+                    });
+                    yield* phaseChanged(progress, sessionId, "IDLE");
+                  }),
                 ),
               ),
-          );
-          const child = yield* Effect.fork(
-            Effect.interruptible(
-              consume.pipe(
-                Effect.retry(
-                  Schedule.recurs((options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS) - 1).pipe(
-                    Schedule.whileInput((error: ProviderError) => error.transient),
-                  ),
+            );
+
+          const consume = (
+            context: ReadonlyArray<ContextItem>,
+          ): Effect.Effect<void, ProviderError> =>
+            Effect.suspend(() =>
+              Effect.gen(function* () {
+                yield* Ref.set(stopReason, "done");
+                yield* Ref.set(text, "");
+                const attempt = yield* Ref.updateAndGet(attempts, (count) => count + 1);
+                const attemptProgress = yield* Ref.make<ReadonlyArray<Progress>>([]);
+                yield* Effect.annotateCurrentSpan({ attempt });
+                yield* Stream.runForEach(
+                  provider.streamAssistant(context, { turnOrdinal }),
+                  (item) => {
+                    if (item._tag === "textDelta") {
+                      const next: Progress = { _tag: "assistantText", text: item.text };
+                      return Ref.update(text, (current) => current + item.text).pipe(
+                        Effect.zipRight(
+                          Ref.update(attemptProgress, (current) => [...current, next]),
+                        ),
+                      );
+                    }
+                    if (item._tag === "thinkingDelta") {
+                      const next: Progress = { _tag: "assistantThinking", text: item.text };
+                      return Ref.update(attemptProgress, (current) => [...current, next]);
+                    }
+                    return Ref.set(stopReason, item.stopReason);
+                  },
+                );
+                const buffered = yield* Ref.get(attemptProgress);
+                yield* Effect.forEach(buffered, (item) => progress.publish(sessionId, item));
+              }),
+            );
+
+          const run = Effect.gen(function* () {
+            const user = yield* journal.appendEntry(
+              sessionId,
+              EntryDraftSchema.make({ kind: "message", payload: { content, role: "user" } }),
+            );
+            yield* Effect.annotateCurrentSpan({ sessionId, turnOrdinal, userEntryId: user.id });
+            yield* phaseChanged(progress, sessionId, "ASSEMBLING");
+            const branch = yield* journal.readBranch(sessionId);
+            const context = yield* foldContext(branch, {
+              budget: options.contextBudget ?? DEFAULT_CONTEXT_BUDGET,
+              visibility: asContextItem,
+            }).pipe(
+              Effect.mapError((error) =>
+                error._tag === "ContextBudgetExceeded"
+                  ? new BudgetExceeded({
+                      budget: error.budget,
+                      optionsDiagnostic: error.optionsDiagnostic,
+                      required: error.required,
+                    })
+                  : error,
+              ),
+            );
+            yield* phaseChanged(progress, sessionId, "STREAMING");
+            yield* consume(context.items).pipe(
+              Effect.retry(
+                Schedule.recurs((options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS) - 1).pipe(
+                  Schedule.whileInput((error: ProviderError) => error.transient),
+                ),
+              ),
+            );
+            const reason = yield* Ref.get(stopReason);
+            yield* settle(reason, undefined);
+            return { stopReason: reason };
+          }).pipe(
+            Effect.onInterrupt(() =>
+              settle("aborted", undefined).pipe(
+                Effect.exit,
+                Effect.flatMap((exit) =>
+                  Exit.isFailure(exit) ? Ref.set(abortSettleFailure, exit.cause) : Effect.void,
                 ),
               ),
             ),
+            Effect.catchAllCause((cause) =>
+              Ref.get(stage).pipe(
+                Effect.flatMap((currentStage) => {
+                  if (currentStage === "settling") {
+                    return Ref.get(abortSettleFailure).pipe(
+                      Effect.flatMap((abortFailure) =>
+                        abortFailure === undefined
+                          ? Effect.failCause(cause)
+                          : Effect.failCause(abortFailure),
+                      ),
+                    );
+                  }
+                  if (Cause.isInterruptedOnly(cause)) {
+                    return Effect.failCause(cause);
+                  }
+                  const failure = Option.getOrUndefined(Cause.failureOption(cause));
+                  if (failure?._tag === "ProviderError") {
+                    return Effect.logError("Provider stream failed", cause).pipe(
+                      Effect.zipRight(
+                        Ref.get(attempts).pipe(
+                          Effect.flatMap((attemptCount) =>
+                            settle("error", {
+                              attempts: attemptCount,
+                              detail: failure.message,
+                              reason: "provider_error",
+                            }),
+                          ),
+                        ),
+                      ),
+                      Effect.zipRight(Effect.failCause(cause)),
+                    );
+                  }
+                  if (failure?._tag === "BudgetExceeded") {
+                    return settle(
+                      "error",
+                      {
+                        detail: failure.optionsDiagnostic,
+                        reason: "budget_exceeded",
+                      },
+                      failure.optionsDiagnostic,
+                    ).pipe(Effect.zipRight(Effect.failCause(cause)));
+                  }
+                  if (
+                    failure?._tag === "JournalDraftRejected" ||
+                    failure?._tag === "JournalError" ||
+                    failure?._tag === "JournalNotFound"
+                  ) {
+                    return Effect.logError("Turn journal operation failed", cause).pipe(
+                      Effect.zipRight(
+                        settle("error", {
+                          detail: journalFailureDetail(failure, cause),
+                          reason: "journal_failure",
+                        }),
+                      ),
+                      Effect.zipRight(Effect.failCause(cause)),
+                    );
+                  }
+                  return Effect.logError("Turn failed with a defect", cause).pipe(
+                    Effect.zipRight(
+                      settle("error", { detail: causeDetail(cause), reason: "turn_failure" }),
+                    ),
+                    Effect.zipRight(Effect.failCause(cause)),
+                  );
+                }),
+              ),
+            ),
           );
-          yield* Ref.update(active, (current) => new Map(current).set(sessionId, child));
-          const streamExit = yield* Fiber.await(child);
+
+          const start = yield* Deferred.make<void>();
+          const child = yield* Effect.fork(
+            Deferred.await(start).pipe(Effect.zipRight(Effect.interruptible(run))),
+          );
+          yield* Ref.update(active, (current) =>
+            new Map(current).set(sessionId, { fiber: child, stage, turnOrdinal }),
+          );
+          yield* Deferred.succeed(start, undefined);
+          const exit = yield* Fiber.await(child);
           yield* Ref.update(active, (current) => {
             const next = new Map(current);
             next.delete(sessionId);
             return next;
           });
-          const interrupted =
-            Exit.isFailure(streamExit) && Cause.isInterruptedOnly(streamExit.cause);
-          const reason = interrupted
-            ? "aborted"
-            : Exit.isFailure(streamExit)
-              ? "error"
-              : yield* Ref.get(stopReason);
-          yield* phaseChanged(progress, sessionId, "SETTLING");
-          const assistant = yield* journal.appendEntry(
-            sessionId,
-            EntryDraftSchema.make({
-              kind: "message",
-              payload: { content: yield* Ref.get(text), role: "assistant", stopReason: reason },
-            }),
-          );
-          const revision = yield* journal.countDurableLines(sessionId);
-          yield* progress.publish(sessionId, { _tag: "turnSettled", revision, stopReason: reason });
-          yield* phaseChanged(progress, sessionId, "IDLE");
-          yield* Effect.annotateCurrentSpan({ assistantEntryId: assistant.id, stopReason: reason });
-          return { stopReason: reason };
-        }).pipe(
-          Effect.catchTag("BudgetExceeded", (error) =>
-            phaseChanged(progress, sessionId, "SETTLING").pipe(
-              Effect.zipRight(
-                journal.appendEntry(
-                  sessionId,
-                  EntryDraftSchema.make({
-                    kind: "message",
-                    payload: { content: error.message, role: "assistant", stopReason: "error" },
-                  }),
-                ),
-              ),
-              Effect.zipRight(phaseChanged(progress, sessionId, "IDLE")),
-              Effect.as({ stopReason: "error" as const }),
-            ),
-          ),
-        );
+          return yield* exit;
+        });
 
       return {
         abortTurn: (sessionId: SessionId) =>
           Ref.get(active).pipe(
             Effect.flatMap((current) => {
-              const child = current.get(sessionId);
-              return child === undefined ? Effect.void : Fiber.interrupt(child).pipe(Effect.asVoid);
+              const turn = current.get(sessionId);
+              if (turn === undefined) {
+                const result: AbortTurnResult = {
+                  aborted: false,
+                  reason: "none",
+                  turnOrdinal: undefined,
+                };
+                return Effect.succeed(result);
+              }
+              return Ref.get(turn.stage).pipe(
+                Effect.flatMap(
+                  (stage): Effect.Effect<AbortTurnResult> =>
+                    stage === "settling"
+                      ? Effect.succeed<AbortTurnResult>({
+                          aborted: false,
+                          reason: "settling",
+                          turnOrdinal: turn.turnOrdinal,
+                        })
+                      : Fiber.interrupt(turn.fiber).pipe(
+                          Effect.as<AbortTurnResult>({
+                            aborted: true,
+                            turnOrdinal: turn.turnOrdinal,
+                          }),
+                        ),
+                ),
+              );
             }),
           ),
         runTurn: (sessionId: SessionId, content: string, options: TurnOptions = {}) =>
@@ -207,10 +379,21 @@ export const TurnsLive = (): Layer.Layer<Turns, never, Journal | Mailbox | Provi
               run: () =>
                 execute(sessionId, content, options).pipe(
                   Effect.withSpan("kernel.turn", { attributes: { sessionId } }),
+                  Effect.catchTag("BudgetExceeded", () =>
+                    Effect.succeed({ stopReason: "error" as const }),
+                  ),
+                  Effect.catchTag("ProviderError", () =>
+                    Effect.succeed({ stopReason: "error" as const }),
+                  ),
+                  Effect.catchAllCause((cause) =>
+                    Cause.isInterruptedOnly(cause)
+                      ? Effect.succeed({ stopReason: "aborted" as const })
+                      : Effect.failCause(cause),
+                  ),
                 ),
             })
             .pipe(Effect.map((result) => result.value)),
         subscribeProgress: (sessionId: SessionId) => progress.subscribe(sessionId),
       } satisfies TurnsService;
     }),
-  ).pipe(Layer.provide(ProgressHubLive()));
+  );

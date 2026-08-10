@@ -27,12 +27,7 @@ export const PROGRESS_CAPACITY = 64;
 
 interface Subscriber {
   readonly dropped: Ref.Ref<number>;
-  readonly queue: Queue.Queue<QueuedProgress>;
-}
-
-interface QueuedProgress {
-  readonly dropped: number;
-  readonly progress: Progress;
+  readonly queue: Queue.Queue<Progress>;
 }
 
 interface ProgressState {
@@ -94,12 +89,10 @@ export const ProgressHubLive = (capacity = PROGRESS_CAPACITY): Layer.Layer<Progr
             Queue.size(subscriber.queue).pipe(
               Effect.flatMap((size) =>
                 (size >= capacity
-                  ? Ref.updateAndGet(subscriber.dropped, (count) => count + 1)
-                  : Ref.get(subscriber.dropped)
+                  ? Ref.update(subscriber.dropped, (count) => count + 1)
+                  : Effect.void
                 ).pipe(
-                  Effect.flatMap((dropped) =>
-                    Queue.offer(subscriber.queue, { dropped, progress }).pipe(Effect.asVoid),
-                  ),
+                  Effect.zipRight(Queue.offer(subscriber.queue, progress).pipe(Effect.asVoid)),
                 ),
               ),
             ),
@@ -111,7 +104,7 @@ export const ProgressHubLive = (capacity = PROGRESS_CAPACITY): Layer.Layer<Progr
             Effect.gen(function* () {
               const subscriber: Subscriber = {
                 dropped: yield* Ref.make(0),
-                queue: yield* Queue.sliding<QueuedProgress>(capacity),
+                queue: yield* Queue.sliding<Progress>(capacity),
               };
               const phase = yield* Ref.get(state).pipe(
                 Effect.map((current) => current.phases.get(sessionId) ?? "IDLE"),
@@ -123,10 +116,7 @@ export const ProgressHubLive = (capacity = PROGRESS_CAPACITY): Layer.Layer<Progr
                 subscribers.set(sessionId, sessionSubscribers);
                 return { ...current, subscribers };
               });
-              yield* Queue.offer(subscriber.queue, {
-                dropped: 0,
-                progress: { _tag: "phaseChanged", phase },
-              });
+              yield* Queue.offer(subscriber.queue, { _tag: "phaseChanged", phase });
               return subscriber;
             }),
             (subscriber) =>
@@ -136,8 +126,10 @@ export const ProgressHubLive = (capacity = PROGRESS_CAPACITY): Layer.Layer<Progr
           ).pipe(
             Effect.map((subscriber) =>
               Stream.fromQueue(subscriber.queue).pipe(
-                Stream.mapEffect((queued) =>
-                  Ref.set(subscriber.dropped, 0).pipe(Effect.as(queued)),
+                Stream.mapEffect((progress) =>
+                  Ref.getAndSet(subscriber.dropped, 0).pipe(
+                    Effect.map((dropped) => ({ dropped, progress })),
+                  ),
                 ),
                 Stream.flatMap((queued) =>
                   queued.dropped === 0

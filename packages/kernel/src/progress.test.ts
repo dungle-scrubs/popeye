@@ -4,7 +4,7 @@ import { expect, test } from "vitest";
 
 import { type Progress, ProgressHub, ProgressHubLive } from "./progress.js";
 
-test("phase transitions surface as structured progress while slow subscribers report dropped items", async () => {
+test("a slow subscriber reports exactly the drops since its previous delivery", async () => {
   const observed: Array<Progress> = [];
   await Effect.runPromise(
     Effect.gen(function* () {
@@ -25,14 +25,16 @@ test("phase transitions surface as structured progress while slow subscribers re
         ),
       );
       yield* Deferred.await(ready);
-      yield* progress.publish(sessionId, { _tag: "phaseChanged", phase: "ASSEMBLING" });
-      yield* progress.publish(sessionId, { _tag: "phaseChanged", phase: "STREAMING" });
-      yield* progress.publish(sessionId, { _tag: "phaseChanged", phase: "SETTLING" });
+      yield* Effect.forEach(["1", "2", "3", "4", "5", "6"], (text) =>
+        progress.publish(sessionId, { _tag: "assistantText", text }),
+      );
       yield* Effect.sleep("150 millis");
       yield* Fiber.interrupt(subscriber);
-    }).pipe(Effect.provide(ProgressHubLive(1))),
+    }).pipe(Effect.provide(ProgressHubLive(4))),
   );
 
-  expect(observed).toContainEqual({ _tag: "phaseChanged", phase: "SETTLING" });
-  expect(observed).toContainEqual({ _tag: "progressDropped", count: 2 });
+  expect(observed.filter((item) => item._tag === "progressDropped")).toEqual([
+    { _tag: "progressDropped", count: 2 },
+  ]);
+  expect(observed.at(-1)).toEqual({ _tag: "assistantText", text: "6" });
 });
