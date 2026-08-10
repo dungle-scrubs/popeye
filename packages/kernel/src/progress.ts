@@ -68,6 +68,7 @@ interface ProgressState {
 }
 
 export interface ProgressService {
+  readonly currentPhase: (sessionId: SessionId) => Effect.Effect<TurnPhase>;
   readonly publish: (sessionId: SessionId, progress: Progress) => Effect.Effect<void>;
   readonly subscribe: (sessionId: SessionId) => Stream.Stream<Progress>;
 }
@@ -130,6 +131,8 @@ export const ProgressHubLive = (capacity = PROGRESS_CAPACITY): Layer.Layer<Progr
             ),
           );
         });
+      const currentPhase = (sessionId: SessionId): Effect.Effect<TurnPhase> =>
+        Ref.get(state).pipe(Effect.map((current) => current.phases.get(sessionId) ?? "IDLE"));
       const subscribe = (sessionId: SessionId): Stream.Stream<Progress> =>
         Stream.unwrapScoped(
           Effect.acquireRelease(
@@ -175,7 +178,7 @@ export const ProgressHubLive = (capacity = PROGRESS_CAPACITY): Layer.Layer<Progr
             ),
           ),
         );
-      return { publish, subscribe } satisfies ProgressService;
+      return { currentPhase, publish, subscribe } satisfies ProgressService;
     }),
   );
 };

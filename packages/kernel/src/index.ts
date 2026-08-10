@@ -18,6 +18,14 @@ export {
   resolveCompactionPolicyOptions,
 } from "./compaction-policy.js";
 export {
+  Driver,
+  type DriverFailure,
+  DriverLive,
+  type DriverService,
+  type DriverSnapshot,
+  DriverSnapshotSchema,
+} from "./driver.js";
+export {
   BudgetExceeded,
   CompactionDisabled,
   DuplicateToolName,
@@ -60,6 +68,8 @@ export {
   Provider,
   type ProviderService,
   type ProviderStreamOptions,
+  THINKING_LEVELS,
+  type ThinkingLevel,
 } from "./provider.js";
 export {
   appendOperationFinished,

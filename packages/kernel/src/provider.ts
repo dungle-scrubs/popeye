@@ -17,6 +17,10 @@ export const ASSISTANT_STOP_REASONS = [
 
 export type AssistantStopReason = (typeof ASSISTANT_STOP_REASONS)[number];
 
+export const THINKING_LEVELS = ["high", "low", "max", "medium", "minimal", "xhigh"] as const;
+
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
 export interface ContextToolCall {
   readonly argumentsJson: string;
   readonly id: string;
@@ -84,8 +88,10 @@ export type AssistantItem =
 
 export interface ProviderStreamOptions {
   readonly attempt: number;
+  readonly model?: string;
   readonly purpose?: "compaction" | "turn";
   readonly sliceIndex?: number;
+  readonly thinkingLevel?: ThinkingLevel;
   readonly turnOrdinal: number;
 }
 

@@ -35,7 +35,12 @@ import type { AssistantDiagnostic } from "./entry-payloads.js";
 import { BudgetExceeded, type ProviderError, TurnQueueFull } from "./errors.js";
 import { Mailbox, type MailboxFailure } from "./mailbox.js";
 import { type Progress, ProgressHub, type TurnPhase } from "./progress.js";
-import { type AssistantStopReason, type ContextItem, Provider } from "./provider.js";
+import {
+  type AssistantStopReason,
+  type ContextItem,
+  Provider,
+  type ThinkingLevel,
+} from "./provider.js";
 import {
   DEFAULT_MAX_ATTEMPTS,
   DEFAULT_MAX_PROVIDER_ROUNDS,
@@ -61,6 +66,8 @@ export interface TurnOptions {
   readonly maxProviderRounds?: number;
   /** @deprecated Use maxProviderRounds. */
   readonly maxToolRounds?: number;
+  readonly model?: string;
+  readonly thinkingLevel?: ThinkingLevel;
   readonly toolConcurrency?: number;
 }
 
@@ -737,7 +744,15 @@ export const TurnsLive = (): Layer.Layer<
                   const attemptProgress = yield* Ref.make<ReadonlyArray<Progress>>([]);
                   yield* Effect.annotateCurrentSpan({ attempt });
                   yield* Stream.runForEach(
-                    provider.streamAssistant(context, { attempt, purpose: "turn", turnOrdinal }),
+                    provider.streamAssistant(context, {
+                      attempt,
+                      ...(options.model === undefined ? {} : { model: options.model }),
+                      purpose: "turn",
+                      ...(options.thinkingLevel === undefined
+                        ? {}
+                        : { thinkingLevel: options.thinkingLevel }),
+                      turnOrdinal,
+                    }),
                     (item) => {
                       if (item._tag === "textDelta") {
                         const next: Progress = { _tag: "assistantText", text: item.text };
