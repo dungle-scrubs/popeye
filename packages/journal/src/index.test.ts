@@ -23,4 +23,5 @@ test("exports the Journal seam and memory adapter without exporting its contract
   expect(JournalNotFound).toBeDefined();
   expect(RecordSchema).toBeDefined();
   expect(journal).not.toHaveProperty("describeJournalContract");
+  expect(journal).not.toHaveProperty("createJsonlJournalHarness");
 });

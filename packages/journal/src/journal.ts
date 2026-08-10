@@ -53,12 +53,6 @@ export class Journal extends Context.Tag("@peye/journal/Journal")<Journal, Journ
 
 export const isEntry = (line: JournalLine): line is EntryLine => line.type === "entry";
 
-export const entriesFor = (lines: ReadonlyArray<JournalLine>): ReadonlyArray<Entry> =>
-  lines.flatMap((line) => (isEntry(line) ? [line.item] : []));
-
-export const recordsFor = (lines: ReadonlyArray<JournalLine>): ReadonlyArray<Record> =>
-  lines.flatMap((line) => (isEntry(line) ? [] : [line.item]));
-
 const strict: { readonly onExcessProperty: "error" } = { onExcessProperty: "error" };
 const decodeLeafMovedPayload = Schema.decodeUnknown(LeafMovedRecordPayloadSchema, strict);
 const decodeSessionRoot = Schema.decodeUnknown(SessionRootEntrySchema, strict);
@@ -150,24 +144,3 @@ export const leafFor = (
   lines: ReadonlyArray<JournalLine>,
 ): Effect.Effect<Entry | undefined, JournalError> =>
   deriveSession(lines).pipe(Effect.map((session) => session?.leaf));
-
-export const branchFor = (
-  lines: ReadonlyArray<JournalLine>,
-): Effect.Effect<ReadonlyArray<Entry>, JournalError> =>
-  deriveSession(lines).pipe(
-    Effect.map((session) => {
-      if (session === undefined) {
-        return [];
-      }
-
-      const branch: Array<Entry> = [];
-      let entry: Entry | undefined = session.leaf;
-
-      while (entry !== undefined) {
-        branch.push(entry);
-        entry = entry.parentId === null ? undefined : session.entries.get(entry.parentId);
-      }
-
-      return branch.reverse();
-    }),
-  );

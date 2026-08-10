@@ -1,38 +1,37 @@
 /**
  * Owns the JSONL Journal adapter and recovery of one unacknowledged torn tail.
  * It exists so durable acknowledgement, file validation, and diagnostics stay behind the Journal seam.
+ *
+ * This is a single-writer design: one in-process layer owns a journal directory at a time. The
+ * kernel owns individual sessions, but cross-process locking is intentionally out of scope.
  */
 import { randomBytes } from "node:crypto";
-import { mkdir, open, readdir, readFile, rename } from "node:fs/promises";
+import {
+  type FileHandle,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+} from "node:fs/promises";
 import { basename, join } from "node:path";
 
-import { Effect, Layer, Ref, Schema, TSemaphore } from "effect";
+import { Effect, Layer, Schema } from "effect";
 
 import {
-  JournalDraftRejected,
-  JournalError,
-  type JournalFailure,
-  JournalNotFound,
-} from "./errors.js";
-import { type CreatedSession, type DerivedSession, deriveSession, Journal } from "./journal.js";
+  availableSession,
+  createJournalAdapter,
+  type JournalAdapterState,
+  type JournalIoObservation,
+  type JournalPersistence,
+  rejectedSession,
+} from "./adapter-core.js";
+import { JournalError } from "./errors.js";
+import { type DerivedSession, deriveSession, Journal } from "./journal.js";
 import { createLineCodec, type LineCodec } from "./line-codec.js";
-import {
-  type Entry,
-  type EntryDraft,
-  EntryDraftSchema,
-  type EntryId,
-  EntryIdSchema,
-  type JournalLine,
-  JournalLineSchema,
-  type Record,
-  type RecordDraft,
-  RecordDraftSchema,
-  type RecordId,
-  RecordIdSchema,
-  type SessionId,
-  SessionIdSchema,
-  type SessionRootEntry,
-} from "./shapes.js";
+import { type JournalLine, JournalLineSchema, type SessionId, SessionIdSchema } from "./shapes.js";
 
 const JournalHeaderSchema = Schema.Struct({
   format: Schema.Literal("peye_journal"),
@@ -42,9 +41,7 @@ const JournalHeaderSchema = Schema.Struct({
 });
 
 type JournalHeader = Schema.Schema.Type<typeof JournalHeaderSchema>;
-
 const JournalFileLineSchema = Schema.Union(JournalHeaderSchema, JournalLineSchema);
-
 type JournalFileLine = Schema.Schema.Type<typeof JournalFileLineSchema>;
 
 export const JournalDiagnosticSchema = Schema.Struct({
@@ -67,41 +64,34 @@ export const JournalDiagnosticSchema = Schema.Struct({
 
 export type JournalDiagnostic = Schema.Schema.Type<typeof JournalDiagnosticSchema>;
 
+export interface JsonlIoEvent extends JournalIoObservation {
+  readonly file: string;
+}
+
+export interface JsonlJournalIo {
+  readonly observe?: (event: JsonlIoEvent) => Effect.Effect<void>;
+  readonly sync?: (handle: FileHandle, file: string) => Promise<void>;
+}
+
 export interface JsonlJournalOptions {
   readonly diagnosticSink?: (diagnostic: JournalDiagnostic) => Effect.Effect<void>;
-}
-
-interface SessionState extends DerivedSession {
-  readonly semaphore: TSemaphore.TSemaphore;
-}
-
-interface JsonlJournalState {
-  readonly sessions: ReadonlyMap<SessionId, SessionState>;
+  readonly io?: JsonlJournalIo;
 }
 
 interface JsonlJournalBacking {
   readonly codec: LineCodec<JournalFileLine>;
   readonly diagnosticSink: (diagnostic: JournalDiagnostic) => Effect.Effect<void>;
   readonly directory: string;
+  readonly io: JsonlJournalIo;
 }
 
-const strict: { readonly onExcessProperty: "error" } = { onExcessProperty: "error" };
-const decodeEntryDraft = Schema.decodeUnknown(EntryDraftSchema, strict);
-const decodeRecordDraft = Schema.decodeUnknown(RecordDraftSchema, strict);
+interface LoadedSession {
+  readonly derived: DerivedSession;
+  readonly recovered: boolean;
+}
 
+const openDirectories = new Set<string>();
 const createId = (): string => randomBytes(12).toString("base64url");
-
-const createEntryId = (): EntryId => EntryIdSchema.make(createId());
-
-const createRecordId = (): RecordId => RecordIdSchema.make(createId());
-
-const createSessionId = (): SessionId => SessionIdSchema.make(createId());
-
-const missingSession = (sessionId: SessionId): JournalNotFound =>
-  new JournalNotFound({ id: sessionId, what: "session" });
-
-const rejectedDraft = (kind: string, cause: unknown): JournalDraftRejected =>
-  new JournalDraftRejected({ cause, kind, reason: "invalid_payload" });
 
 const fileFailure = (file: string, operation: string, cause: unknown): JournalError =>
   new JournalError({
@@ -131,6 +121,9 @@ const emitDiagnostic = (
   diagnostic: JournalDiagnostic,
 ): Effect.Effect<void> => backing.diagnosticSink(diagnostic);
 
+const emitIo = (backing: JsonlJournalBacking, event: JsonlIoEvent): Effect.Effect<void> =>
+  backing.io.observe?.(event) ?? Effect.void;
+
 const sessionFile = (directory: string, sessionId: SessionId): string =>
   join(directory, `${sessionId}.jsonl`);
 
@@ -140,14 +133,21 @@ const createCodec = (): Effect.Effect<LineCodec<JournalFileLine>, JournalError> 
     versions: [{ payloadSchema: JournalFileLineSchema, version: 1 }],
   });
 
-const closeIgnoringFailure = (handle: Awaited<ReturnType<typeof open>>): Effect.Effect<void> =>
-  Effect.tryPromise({
-    catch: () => undefined,
-    try: () => handle.close(),
-  }).pipe(Effect.ignore);
+const closeIgnoringFailure = (handle: FileHandle): Effect.Effect<void> =>
+  // A close failure cannot change the completed write or make its acknowledged bytes unsafe.
+  Effect.ignore(Effect.tryPromise({ catch: () => undefined, try: () => handle.close() }));
+
+const sync = (
+  backing: JsonlJournalBacking,
+  file: string,
+  handle: FileHandle,
+): Effect.Effect<void, JournalError> =>
+  fileEffect(file, "sync", () => backing.io.sync?.(handle, file) ?? handle.sync());
 
 const writeAndSync = (
+  backing: JsonlJournalBacking,
   file: string,
+  sessionId: SessionId,
   text: string,
   flags: "a" | "w" | "wx",
 ): Effect.Effect<void, JournalError> =>
@@ -156,17 +156,40 @@ const writeAndSync = (
     (handle) =>
       Effect.gen(function* () {
         yield* fileEffect(file, "write", () => handle.writeFile(text));
-        yield* fileEffect(file, "sync", () => handle.sync());
+        yield* emitIo(backing, { file, operation: "write", sessionId });
+        yield* sync(backing, file, handle);
+        yield* emitIo(backing, { file, operation: "sync", sessionId });
       }),
     closeIgnoringFailure,
   );
 
-const atomicallyRewrite = (file: string, text: string): Effect.Effect<void, JournalError> => {
+const syncDirectory = (
+  backing: JsonlJournalBacking,
+  sessionId: SessionId,
+): Effect.Effect<void, JournalError> =>
+  Effect.acquireUseRelease(
+    fileEffect(backing.directory, "open directory", () => open(backing.directory, "r")),
+    (handle) =>
+      Effect.gen(function* () {
+        yield* sync(backing, backing.directory, handle);
+        yield* emitIo(backing, { file: backing.directory, operation: "sync", sessionId });
+      }),
+    closeIgnoringFailure,
+  );
+
+const atomicallyRewrite = (
+  backing: JsonlJournalBacking,
+  file: string,
+  sessionId: SessionId,
+  text: string,
+): Effect.Effect<void, JournalError> => {
   const temporary = `${file}.${createId()}.tmp`;
   return Effect.gen(function* () {
-    yield* writeAndSync(temporary, text, "wx");
+    yield* writeAndSync(backing, temporary, sessionId, text, "wx");
     yield* fileEffect(file, "replace", () => rename(temporary, file));
-  });
+    // A rename or new directory entry is not durable until the directory inode is synced.
+    yield* syncDirectory(backing, sessionId);
+  }).pipe(Effect.uninterruptible);
 };
 
 const encodeFileLine = (
@@ -175,23 +198,21 @@ const encodeFileLine = (
   line: JournalFileLine,
 ): Effect.Effect<string, JournalError> => backing.codec.encodeLine(line, { file });
 
-const appendFileLine = (
-  backing: JsonlJournalBacking,
-  file: string,
-  line: JournalFileLine,
-): Effect.Effect<void, JournalError> =>
-  Effect.gen(function* () {
-    const encoded = yield* encodeFileLine(backing, file, line);
-    // Acknowledgement gates recovery: only an fsync-confirmed line is preserved after a crash.
-    yield* writeAndSync(file, `${encoded}\n`, "a");
-  });
-
 const invalidSequence = (file: string, detail: string): JournalError =>
   new JournalError({ corruptionClass: "invalid_record_sequence", file, message: detail });
 
-const linesFrom = (text: string): ReadonlyArray<string> => {
-  const lines = text.split("\n");
-  return text.endsWith("\n") ? lines.slice(0, -1) : lines;
+const linesFrom = (text: string): ReadonlyArray<string> =>
+  text === "" ? [] : text.slice(0, -1).split("\n");
+
+const acknowledgedPrefix = (
+  text: string,
+): { readonly recovered: boolean; readonly text: string } => {
+  if (text.endsWith("\n")) {
+    return { recovered: false, text };
+  }
+  const boundary = text.lastIndexOf("\n");
+  // A completed append always ends in a newline, so an unterminated tail cannot be acknowledged content.
+  return { recovered: true, text: boundary < 0 ? "" : text.slice(0, boundary + 1) };
 };
 
 const decodeStoredLines = (
@@ -199,53 +220,26 @@ const decodeStoredLines = (
   file: string,
   text: string,
 ): Effect.Effect<
-  { readonly lines: ReadonlyArray<JournalLine>; readonly recovered: boolean },
+  {
+    readonly header: JournalHeader;
+    readonly lines: ReadonlyArray<JournalLine>;
+    readonly recovered: boolean;
+  },
   JournalError
 > =>
   Effect.gen(function* () {
-    const physicalLines = linesFrom(text);
+    const prefix = acknowledgedPrefix(text);
     const decoded: Array<JournalFileLine> = [];
-    let recovered = false;
-
-    for (let index = 0; index < physicalLines.length; index += 1) {
-      const physicalLine = physicalLines[index];
-      if (physicalLine === undefined) {
-        continue;
-      }
-      const decodedLine = yield* backing.codec
-        .decodeLine(physicalLine, { file, line: index + 1 })
-        .pipe(
-          Effect.catchTag("JournalError", (error) => {
-            const isFinalLine = index === physicalLines.length - 1;
-            if (!text.endsWith("\n") && isFinalLine && error.corruptionClass === "malformed_json") {
-              return Effect.succeed(undefined);
-            }
-            return Effect.fail(error);
-          }),
-        );
-      if (decodedLine === undefined) {
-        const prefixEnd = text.lastIndexOf("\n");
-        const prefix = prefixEnd < 0 ? "" : text.slice(0, prefixEnd + 1);
-        yield* atomicallyRewrite(file, prefix);
-        yield* emitDiagnostic(backing, {
-          action: "recovered_torn_tail",
-          detail: `Discarded partial line ${index + 1}.`,
-          file,
-        });
-        recovered = true;
-        break;
-      }
-      decoded.push(decodedLine);
+    for (const [index, physicalLine] of linesFrom(prefix.text).entries()) {
+      decoded.push(yield* backing.codec.decodeLine(physicalLine, { file, line: index + 1 }));
     }
-
     const header = decoded[0];
     if (header === undefined || header.type !== "journal_header") {
       return yield* Effect.fail(
         invalidSequence(file, "A journal file must begin with its header."),
       );
     }
-    const fileSessionId = basename(file, ".jsonl");
-    if (header.sessionId !== fileSessionId) {
+    if (header.sessionId !== basename(file, ".jsonl")) {
       return yield* Effect.fail(
         invalidSequence(file, "The journal header does not match its file name."),
       );
@@ -259,17 +253,20 @@ const decodeStoredLines = (
         invalidSequence(file, "Every journal line must name the session in its header."),
       );
     }
-    return { lines: lines as ReadonlyArray<JournalLine>, recovered };
+    return { header, lines: lines as ReadonlyArray<JournalLine>, recovered: prefix.recovered };
   });
 
-const openSession = (
+const loadSession = (
   backing: JsonlJournalBacking,
-  file: string,
-): Effect.Effect<readonly [SessionId, SessionState], JournalError> =>
+  sessionId: SessionId,
+): Effect.Effect<LoadedSession, JournalError> =>
   Effect.gen(function* () {
+    const file = sessionFile(backing.directory, sessionId);
     const text = yield* fileEffect(file, "read", () => readFile(file, "utf8"));
+    // Validate the entire surviving prefix before changing a byte. This prevents a torn tail from
+    // concealing earlier acknowledged corruption.
     const decoded = yield* decodeStoredLines(backing, file, text);
-    const session = yield* deriveSession(decoded.lines).pipe(
+    const derived = yield* deriveSession(decoded.lines).pipe(
       Effect.mapError(
         (error) =>
           new JournalError({
@@ -280,272 +277,154 @@ const openSession = (
           }),
       ),
     );
-    if (session === undefined) {
+    if (derived === undefined) {
       return yield* Effect.fail(
         invalidSequence(file, "A journal file must contain a session_root entry."),
       );
     }
-    const id = SessionIdSchema.make(basename(file, ".jsonl"));
-    if (!decoded.recovered) {
-      yield* emitDiagnostic(backing, { action: "opened", file });
+    if (decoded.recovered) {
+      yield* atomicallyRewrite(backing, file, sessionId, acknowledgedPrefix(text).text);
+      yield* emitDiagnostic(backing, {
+        action: "recovered_torn_tail",
+        detail: "Discarded an unterminated final line.",
+        file,
+      });
     }
-    return [id, { ...session, semaphore: TSemaphore.unsafeMake(1) }] as const;
+    yield* emitDiagnostic(backing, { action: "opened", file });
+    return { derived, recovered: decoded.recovered };
   });
+
+const sweepTemporaryFiles = (backing: JsonlJournalBacking): Effect.Effect<void, JournalError> =>
+  fileEffect(backing.directory, "list directory", () => readdir(backing.directory)).pipe(
+    Effect.flatMap((names) =>
+      Effect.forEach(
+        names.filter((name) => name.endsWith(".tmp")),
+        (name) =>
+          fileEffect(join(backing.directory, name), "remove temporary", () =>
+            rm(join(backing.directory, name), { force: true }),
+          ),
+        { concurrency: "unbounded", discard: true },
+      ),
+    ),
+  );
 
 const openJournalState = (
   backing: JsonlJournalBacking,
-): Effect.Effect<JsonlJournalState, JournalError> =>
+): Effect.Effect<JournalAdapterState, JournalError> =>
   Effect.gen(function* () {
-    yield* fileEffect(backing.directory, "create directory", () =>
-      mkdir(backing.directory, { recursive: true }),
-    );
+    yield* sweepTemporaryFiles(backing);
     const names = yield* fileEffect(backing.directory, "list directory", () =>
       readdir(backing.directory),
     );
-    const files = names
-      .filter((name) => name.endsWith(".jsonl"))
-      .map((name) => join(backing.directory, name));
-    const opened = yield* Effect.all(
-      files.map((file) => openSession(backing, file)),
-      {
-        concurrency: "unbounded",
-      },
-    ).pipe(
-      Effect.catchTag("JournalError", (error) =>
-        emitDiagnostic(backing, {
+    const sessions = new Map<
+      SessionId,
+      ReturnType<typeof availableSession> | ReturnType<typeof rejectedSession>
+    >();
+    for (const name of names.filter((entry) => entry.endsWith(".jsonl"))) {
+      const id = SessionIdSchema.make(basename(name, ".jsonl"));
+      const file = join(backing.directory, name);
+      const result = yield* loadSession(backing, id).pipe(Effect.either);
+      if (result._tag === "Right") {
+        sessions.set(id, availableSession(result.right.derived));
+      } else {
+        const error = result.left;
+        yield* emitDiagnostic(backing, {
           action: "rejected",
           corruptionClass: error.corruptionClass,
           detail: error.message,
-          file: error.file ?? backing.directory,
-        }).pipe(Effect.andThen(Effect.fail(error))),
-      ),
-    );
-    return { sessions: new Map(opened) };
-  });
-
-const updateSession = (
-  stateRef: Ref.Ref<JsonlJournalState>,
-  sessionId: SessionId,
-  update: (session: SessionState) => SessionState,
-): Effect.Effect<void> =>
-  Ref.update(stateRef, (state) => {
-    const previous = state.sessions.get(sessionId);
-    if (previous === undefined) {
-      return state;
+          file: error.file ?? file,
+        });
+        sessions.set(id, rejectedSession(error));
+      }
     }
-    const sessions = new Map(state.sessions);
-    sessions.set(sessionId, update(previous));
     return { sessions };
   });
 
-const withSession = <TOutput>(
-  stateRef: Ref.Ref<JsonlJournalState>,
-  sessionId: SessionId,
-  operation: (session: SessionState) => Effect.Effect<TOutput, JournalFailure>,
-): Effect.Effect<TOutput, JournalFailure> =>
-  Effect.gen(function* () {
-    const state = yield* Ref.get(stateRef);
-    const initial = state.sessions.get(sessionId);
-    if (initial === undefined) {
-      return yield* Effect.fail(missingSession(sessionId));
-    }
-    // The critical section includes file I/O so concurrent writers cannot choose the same parent leaf.
-    return yield* Effect.gen(function* () {
-      const current = (yield* Ref.get(stateRef)).sessions.get(sessionId);
-      if (current === undefined) {
-        return yield* Effect.fail(missingSession(sessionId));
-      }
-      return yield* operation(current);
-    }).pipe(TSemaphore.withPermit(initial.semaphore));
-  });
-
-const createJournalJsonl = (
-  backing: JsonlJournalBacking,
-  stateRef: Ref.Ref<JsonlJournalState>,
-) => ({
-  appendEntry: (sessionId: SessionId, input: EntryDraft) =>
-    withSession(stateRef, sessionId, (session) =>
-      Effect.gen(function* () {
-        const entry = yield* decodeEntryDraft(input).pipe(
-          Effect.mapError((cause) => rejectedDraft(input.kind, cause)),
-        );
-        if (entry.kind === "session_root") {
-          return yield* Effect.fail(
-            new JournalDraftRejected({ kind: entry.kind, reason: "reserved_kind" }),
-          );
-        }
-        const appended: Entry = {
-          id: createEntryId(),
-          kind: entry.kind,
-          parentId: session.leaf.id,
-          payload: entry.payload,
-        };
-        yield* appendFileLine(backing, sessionFile(backing.directory, sessionId), {
-          item: appended,
-          sessionId,
-          type: "entry",
-        });
-        yield* updateSession(stateRef, sessionId, (current) => ({
-          ...current,
-          entries: new Map([...current.entries, [appended.id, appended]]),
-          leaf: appended,
-        }));
-        return appended;
-      }),
-    ),
-  appendRecord: (sessionId: SessionId, input: RecordDraft) =>
-    withSession(stateRef, sessionId, (_session) =>
-      Effect.gen(function* () {
-        const record = yield* decodeRecordDraft(input).pipe(
-          Effect.mapError((cause) => rejectedDraft(input.kind, cause)),
-        );
-        if (record.kind === "leaf_moved") {
-          return yield* Effect.fail(
-            new JournalDraftRejected({ kind: record.kind, reason: "reserved_kind" }),
-          );
-        }
-        const appended: Record = {
-          id: createRecordId(),
-          kind: record.kind,
-          payload: record.payload,
-        };
-        yield* appendFileLine(backing, sessionFile(backing.directory, sessionId), {
-          item: appended,
-          sessionId,
-          type: "record",
-        });
-        yield* updateSession(stateRef, sessionId, (current) => ({
-          ...current,
-          records: [...current.records, appended],
-        }));
-        return appended;
-      }),
-    ),
-  createSession: () =>
+const jsonlPersistence = (backing: JsonlJournalBacking): JournalPersistence => ({
+  initializeSession: (sessionId, rootEntry) =>
     Effect.gen(function* () {
-      const id = createSessionId();
-      const rootEntry: SessionRootEntry = {
-        id: createEntryId(),
-        kind: "session_root",
-        parentId: null,
-        payload: {},
-      };
-      const file = sessionFile(backing.directory, id);
+      const file = sessionFile(backing.directory, sessionId);
       const header: JournalHeader = {
         format: "peye_journal",
-        sessionId: id,
+        sessionId,
         type: "journal_header",
         version: 1,
       };
       const encodedHeader = yield* encodeFileLine(backing, file, header);
       const encodedRoot = yield* encodeFileLine(backing, file, {
         item: rootEntry,
-        sessionId: id,
+        sessionId,
         type: "entry",
       });
-      yield* atomicallyRewrite(file, `${encodedHeader}\n${encodedRoot}\n`);
-      const initial: SessionState = {
-        entries: new Map([[rootEntry.id, rootEntry]]),
-        leaf: rootEntry,
-        records: [],
-        rootEntry,
-        semaphore: TSemaphore.unsafeMake(1),
-      };
-      yield* Ref.update(stateRef, (state) => ({
-        sessions: new Map([...state.sessions, [id, initial]]),
-      }));
+      yield* atomicallyRewrite(backing, file, sessionId, `${encodedHeader}\n${encodedRoot}\n`);
       yield* emitDiagnostic(backing, { action: "opened", file });
-      return { id, rootEntry };
     }),
-  getLeaf: (sessionId: SessionId) =>
-    withSession(stateRef, sessionId, (session) => Effect.succeed(session.leaf)),
-  listSessions: () =>
-    Ref.get(stateRef).pipe(
-      Effect.map((state) =>
-        Array.from(
-          state.sessions,
-          ([id, session]): CreatedSession => ({ id, rootEntry: session.rootEntry }),
-        ),
-      ),
-    ),
-  moveLeaf: (sessionId: SessionId, toEntryId: EntryId) =>
-    withSession(stateRef, sessionId, (session) =>
-      Effect.gen(function* () {
-        if (!session.entries.has(toEntryId)) {
-          return yield* Effect.fail(new JournalNotFound({ id: toEntryId, what: "entry" }));
-        }
-        const record: Record = {
-          id: createRecordId(),
-          kind: "leaf_moved",
-          payload: { toEntryId },
-        };
-        yield* appendFileLine(backing, sessionFile(backing.directory, sessionId), {
-          item: record,
-          sessionId,
-          type: "record",
-        });
-        const leaf = session.entries.get(toEntryId);
-        if (leaf === undefined) {
-          return yield* Effect.die("Session entry vanished while its semaphore was held.");
-        }
-        yield* updateSession(stateRef, sessionId, (current) => ({
-          ...current,
-          leaf,
-          records: [...current.records, record],
-        }));
-        return record;
-      }),
-    ),
-  readBranch: (sessionId: SessionId) =>
-    withSession(stateRef, sessionId, (session) => {
-      const branch: Array<Entry> = [];
-      let entry: Entry | undefined = session.leaf;
-      while (entry !== undefined) {
-        branch.push(entry);
-        entry = entry.parentId === null ? undefined : session.entries.get(entry.parentId);
-      }
-      return Effect.succeed(branch.reverse());
+  loadSession: (sessionId) =>
+    loadSession(backing, sessionId).pipe(Effect.map((loaded) => loaded.derived)),
+  observe: ({ operation, sessionId }) =>
+    emitIo(backing, { file: sessionFile(backing.directory, sessionId), operation, sessionId }),
+  persistLine: (sessionId, line) =>
+    Effect.gen(function* () {
+      const file = sessionFile(backing.directory, sessionId);
+      const encoded = yield* encodeFileLine(backing, file, line);
+      yield* writeAndSync(backing, file, sessionId, `${encoded}\n`, "a");
     }),
-  readRecords: (sessionId: SessionId) =>
-    withSession(stateRef, sessionId, (session) => Effect.succeed(session.records)),
 });
+
+const acquireBacking = (
+  directory: string,
+  options: JsonlJournalOptions,
+): Effect.Effect<JsonlJournalBacking, JournalError> =>
+  Effect.gen(function* () {
+    yield* fileEffect(directory, "create directory", () => mkdir(directory, { recursive: true }));
+    const codec = yield* createCodec();
+    const canonicalDirectory = yield* fileEffect(directory, "canonicalize directory", () =>
+      realpath(directory),
+    );
+    if (openDirectories.has(canonicalDirectory)) {
+      return yield* Effect.fail(
+        new JournalError({
+          corruptionClass: "io_failure",
+          file: canonicalDirectory,
+          message: `Journal directory is already open in this process: ${canonicalDirectory}`,
+        }),
+      );
+    }
+    openDirectories.add(canonicalDirectory);
+    return {
+      codec,
+      diagnosticSink: options.diagnosticSink ?? defaultDiagnosticSink,
+      directory: canonicalDirectory,
+      io: options.io ?? {},
+    };
+  });
 
 export const JournalJsonl = (
   directory: string,
   options: JsonlJournalOptions = {},
 ): Layer.Layer<Journal, JournalError> =>
-  Layer.effect(
+  Layer.scoped(
     Journal,
     Effect.gen(function* () {
-      const backing: JsonlJournalBacking = {
-        codec: yield* createCodec(),
-        diagnosticSink: options.diagnosticSink ?? defaultDiagnosticSink,
-        directory,
-      };
+      const backing = yield* Effect.acquireRelease(acquireBacking(directory, options), (acquired) =>
+        Effect.sync(() => openDirectories.delete(acquired.directory)),
+      );
       const state = yield* openJournalState(backing);
-      const stateRef = yield* Ref.make(state);
-      return createJournalJsonl(backing, stateRef);
+      return yield* createJournalAdapter(state, jsonlPersistence(backing));
     }),
   );
 
+// Test-only helper. It stays module-private so production consumers cannot depend on test harnesses.
 export const createJsonlJournalHarness = (directory: string) => ({
   layer: JournalJsonl(directory),
   reopen: () => JournalJsonl(directory),
-  snapshotLines: (): Effect.Effect<ReadonlyArray<unknown>> =>
+  snapshotLines: (): Effect.Effect<ReadonlyArray<unknown>, JournalError> =>
     fileEffect(directory, "list directory", () => readdir(directory)).pipe(
       Effect.flatMap((names) =>
-        Effect.all(
-          names
-            .filter((name) => name.endsWith(".jsonl"))
-            .sort()
-            .map((name) =>
-              fileEffect(join(directory, name), "read", () =>
-                readFile(join(directory, name), "utf8"),
-              ),
-            ),
+        Effect.forEach(names.filter((name) => name.endsWith(".jsonl")).sort(), (name) =>
+          fileEffect(join(directory, name), "read", () => readFile(join(directory, name), "utf8")),
         ),
       ),
       Effect.map((files) => files.flatMap((file) => linesFrom(file))),
-      Effect.orDie,
     ),
 });

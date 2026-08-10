@@ -17,7 +17,7 @@ import {
 export interface JournalContractHarness {
   readonly layer: Layer.Layer<Journal, JournalError>;
   readonly reopen: () => Layer.Layer<Journal, JournalError>;
-  readonly snapshotLines: () => Effect.Effect<ReadonlyArray<unknown>>;
+  readonly snapshotLines: () => Effect.Effect<ReadonlyArray<unknown>, JournalError>;
 }
 
 export type MakeJournalLayer = () => JournalContractHarness;
