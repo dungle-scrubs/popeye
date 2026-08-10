@@ -7,6 +7,7 @@ export const kernelPackage = "@peye/kernel";
 export {
   BudgetExceeded,
   GateRejected,
+  MailboxClosed,
   MailboxFull,
   MailboxSessionNotFound,
   ProviderError,
@@ -16,9 +17,9 @@ export {
   MAILBOX_CAPACITY,
   Mailbox,
   type MailboxCommand,
-  type MailboxCommandOutput,
   type MailboxFailure,
   MailboxLive,
+  type MailboxOptions,
   type MailboxResult,
   type MailboxService,
 } from "./mailbox.js";
@@ -26,6 +27,7 @@ export {
   type SessionInfo,
   type SessionSummary,
   Sessions,
+  type SessionsFailure,
   SessionsLive,
   type SessionsService,
 } from "./sessions.js";

@@ -2,6 +2,8 @@
  * Owns kernel failures so turn coordination can preserve actionable causes in typed channels.
  * It exists to prevent provider, tool, gate, and budget concerns from leaking into heads.
  */
+
+import type { SessionId } from "@peye/journal";
 import { Data } from "effect";
 
 export class ProviderError extends Data.TaggedError("ProviderError")<{
@@ -29,9 +31,13 @@ export class BudgetExceeded extends Data.TaggedError("BudgetExceeded")<{
 
 export class MailboxFull extends Data.TaggedError("MailboxFull")<{
   readonly capacity: number;
-  readonly sessionId: string;
+  readonly sessionId: SessionId;
 }> {}
 
 export class MailboxSessionNotFound extends Data.TaggedError("MailboxSessionNotFound")<{
-  readonly sessionId: string;
+  readonly sessionId: SessionId;
+}> {}
+
+export class MailboxClosed extends Data.TaggedError("MailboxClosed")<{
+  readonly sessionId: SessionId;
 }> {}

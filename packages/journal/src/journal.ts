@@ -43,6 +43,8 @@ export interface JournalService {
     record: RecordDraft,
   ) => Effect.Effect<Record, JournalFailure>;
   readonly createSession: () => Effect.Effect<CreatedSession, JournalFailure>;
+  /** Returns every acknowledged durable line for a session, including its root entry. */
+  readonly countDurableLines: (sessionId: SessionId) => Effect.Effect<number, JournalFailure>;
   readonly getLeaf: (sessionId: SessionId) => Effect.Effect<Entry, JournalFailure>;
   readonly listSessions: () => Effect.Effect<ReadonlyArray<CreatedSession>>;
   readonly moveLeaf: (
