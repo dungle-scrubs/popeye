@@ -117,12 +117,12 @@ Source: `implementation.md` (M9); D-016
 ### M10: Steering, follow-up, abort semantics
 Source: `implementation.md` (M10); Normative Contracts (state machine)
 
-- [ ] `steer` during EXECUTING drains after the tool batch, before the next provider request
-- [ ] `steer` during a tool-free turn drains at SETTLING (never lost)
-- [ ] `prompt` during a running turn never throws; delivery mode `steer` steers, default queues as follow-up
-- [ ] Follow-up opens the next turn after settle
-- [ ] Abort discards queued steering and retains follow-ups
-- [ ] Steering while IDLE is rejected as phase-invalid (steering requires a running turn)
+- [x] `steer` during EXECUTING drains after the tool batch, before the next provider request
+- [x] `steer` during a tool-free turn drains at SETTLING (never lost)
+- [x] `prompt` during a running turn never throws; delivery mode `steer` steers, default queues as follow-up
+- [x] Follow-up opens the next turn after settle
+- [x] Abort discards queued steering and retains follow-ups
+- [x] Steering while IDLE is rejected as phase-invalid (steering requires a running turn)
 
 ### M11: Records and crash recovery
 Source: `implementation.md` (M11); D-022
@@ -319,5 +319,5 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 - Completed: 67
 - Remaining: 110
 - Current cutoff blockers: 110
-- Accepted/deferred follow-up: 11
+- Accepted/deferred follow-up: 5
 - Superseded/obsolete checklist debt: 0
