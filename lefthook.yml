@@ -1,0 +1,9 @@
+pre-commit:
+  parallel: true
+  commands:
+    lint:
+      glob: "*.{js,mjs,ts,json,jsonc,yml,yaml}"
+      run: pnpm lint
+    typecheck:
+      glob: "*.ts"
+      run: pnpm typecheck
