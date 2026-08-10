@@ -2,13 +2,20 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Journal, JournalJsonl, type JournalService, type SessionId } from "@peye/journal";
+import {
+  EntryDraftSchema,
+  Journal,
+  JournalJsonl,
+  type JournalService,
+  type SessionId,
+} from "@peye/journal";
 import { Effect, Exit, Layer, Schema, Stream } from "effect";
 import { expect, test } from "vitest";
 
 import { MailboxLive } from "./mailbox.js";
 import { ProgressHubLive } from "./progress.js";
-import { Provider, type ProviderService } from "./provider.js";
+import { type ContextItem, Provider, type ProviderService } from "./provider.js";
+import { appendOperationStarted, appendToolStarted, OperationIdSchema } from "./records.js";
 import type { RecoveryReport } from "./recovery.js";
 import { Sessions, SessionsLive } from "./sessions.js";
 import { defineTool, ToolRegistryLive } from "./tool.js";
@@ -139,7 +146,55 @@ test("JSONL kill after operation_started reopens to an interrupted assistant and
   }
 });
 
-test("JSONL kill after the assistant Tool-call Entry recovers without inventing a Tool start", async () => {
+test("JSONL kill after the user Entry closes the orphaned trailing prompt on resume", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m11-orphaned-prompt-"));
+  let sessionId: SessionId | undefined;
+  try {
+    const crashed = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions;
+        const turns = yield* Turns;
+        const session = yield* sessions.create();
+        sessionId = session.id;
+        return yield* turns.runTurn(session.id, "crash before operation start");
+      }).pipe(Effect.provide(kernelLayer(faultInjectedJournal(directory, 2), doneProvider))),
+    );
+    expect(Exit.isFailure(crashed)).toBe(true);
+
+    const journalLayer = JournalJsonl(directory);
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const journal = yield* Journal;
+        const sessions = yield* Sessions;
+        const resumed = yield* sessions.resume(sessionId as SessionId);
+        return {
+          branch: yield* journal.readBranch(sessionId as SessionId),
+          records: yield* journal.readRecords(sessionId as SessionId),
+          resumed,
+        };
+      }).pipe(Effect.provide(Layer.merge(journalLayer, kernelLayer(journalLayer, doneProvider)))),
+    );
+
+    expect(result.resumed.recovery).toMatchObject({
+      actions: [{ action: "orphaned_prompt_closed", promptEntryId: expect.any(String) }],
+      entriesAppended: [expect.any(String)],
+      operationIdFound: undefined,
+    });
+    expect(result.branch.slice(-2).map((entry) => entry.payload)).toMatchObject([
+      { content: "crash before operation start", role: "user" },
+      {
+        diagnostic: { detail: "interrupted by crash", reason: "turn_failure" },
+        role: "assistant",
+        stopReason: "error",
+      },
+    ]);
+    expect(result.records).toEqual([]);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test("JSONL kill after the assistant Tool-call Entry synthesizes its missing Tool result", async () => {
   const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m11-assistant-entry-"));
   let sessionId: SessionId | undefined;
   let requests = 0;
@@ -199,10 +254,22 @@ test("JSONL kill after the assistant Tool-call Entry recovers without inventing 
       "operation_started",
       "operation_finished",
     ]);
-    expect(result.resumed.recovery.actions).toEqual([]);
-    expect(result.branch.at(-2)?.payload).toMatchObject({
+    expect(result.resumed.recovery.actions).toMatchObject([
+      {
+        action: "synthesized_interrupted",
+        replay: "never",
+        toolCallId: "not-started-call",
+        toolName: "read_file",
+      },
+    ]);
+    expect(result.branch.at(-3)?.payload).toMatchObject({
       role: "assistant",
       stopReason: "toolCalls",
+    });
+    expect(result.branch.at(-2)?.payload).toMatchObject({
+      isError: true,
+      role: "toolResult",
+      toolCallId: "not-started-call",
     });
     expect(result.branch.at(-1)?.payload).toMatchObject({
       diagnostic: { detail: "interrupted by crash" },
@@ -298,10 +365,141 @@ test("JSONL kill after tool_started recovers according to never and safe replay 
           const payload = entry.payload as { readonly role?: unknown };
           return payload.role === "toolResult";
         }),
-      ).toHaveLength(replay === "never" ? 1 : 0);
+      ).toHaveLength(1);
+      expect(result.branch.at(-1)?.payload).toMatchObject({
+        role: "assistant",
+        stopReason: "error",
+      });
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
+  }
+});
+
+test("safe-replay recovery closes before another crashed Turn and leaves no dangling Context call", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m11-safe-replay-twice-"));
+  let sessionId: SessionId | undefined;
+  const readFile = defineTool({
+    description: "Would read a file.",
+    execute: () => Effect.succeed({ content: "not reached" }),
+    name: "read_file",
+    parameters: Schema.Struct({}),
+    replay: "safe" as const,
+  });
+  const toolLayer = ToolRegistryLive([readFile]);
+  const crashingProvider = (toolCallId: string): ProviderService => ({
+    streamAssistant: () =>
+      Stream.fromIterable([
+        { _tag: "toolCall", argumentsJson: "{}", id: toolCallId, name: "read_file" },
+        { _tag: "done", stopReason: "toolCalls" },
+      ]),
+  });
+  try {
+    const firstCrash = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions;
+        const turns = yield* Turns;
+        const session = yield* sessions.create();
+        sessionId = session.id;
+        return yield* turns.runTurn(session.id, "first crash");
+      }).pipe(
+        Effect.provide(
+          kernelLayer(
+            faultInjectedJournal(directory, 5),
+            crashingProvider("first-safe-call"),
+            () => Effect.void,
+            toolLayer,
+          ),
+        ),
+      ),
+    );
+    expect(Exit.isFailure(firstCrash)).toBe(true);
+
+    const firstJournalLayer = JournalJsonl(directory);
+    const firstResume = await Effect.runPromise(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions;
+        return yield* sessions.resume(sessionId as SessionId);
+      }).pipe(
+        Effect.provide(kernelLayer(firstJournalLayer, doneProvider, () => Effect.void, toolLayer)),
+      ),
+    );
+    expect(firstResume.recovery).toMatchObject({
+      actions: [{ action: "safe_replay", toolCallId: "first-safe-call" }],
+      safeReplay: [{ toolCallId: "first-safe-call" }],
+    });
+
+    const secondCrash = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions;
+        const turns = yield* Turns;
+        yield* sessions.resume(sessionId as SessionId);
+        return yield* turns.runTurn(sessionId as SessionId, "second crash");
+      }).pipe(
+        Effect.provide(
+          kernelLayer(
+            faultInjectedJournal(directory, 4),
+            crashingProvider("second-safe-call"),
+            () => Effect.void,
+            toolLayer,
+          ),
+        ),
+      ),
+    );
+    expect(Exit.isFailure(secondCrash)).toBe(true);
+
+    const contexts: Array<ReadonlyArray<ContextItem>> = [];
+    const contextProvider: ProviderService = {
+      streamAssistant: (context) => {
+        contexts.push(context);
+        return Stream.fromIterable([{ _tag: "done", stopReason: "done" }]);
+      },
+    };
+    const finalJournalLayer = JournalJsonl(directory);
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const journal = yield* Journal;
+        const sessions = yield* Sessions;
+        const turns = yield* Turns;
+        const resumed = yield* sessions.resume(sessionId as SessionId);
+        yield* turns.runTurn(sessionId as SessionId, "after both crashes");
+        return {
+          records: yield* journal.readRecords(sessionId as SessionId),
+          resumed,
+        };
+      }).pipe(
+        Effect.provide(
+          kernelLayer(finalJournalLayer, contextProvider, () => Effect.void, toolLayer),
+        ),
+      ),
+    );
+
+    expect(result.resumed.recovery.safeReplay).toEqual([
+      expect.objectContaining({ toolCallId: "second-safe-call" }),
+    ]);
+    expect(result.records.map((record) => record.kind)).toEqual([
+      "operation_started",
+      "tool_started",
+      "operation_finished",
+      "operation_started",
+      "tool_started",
+      "operation_finished",
+      "operation_started",
+      "operation_finished",
+    ]);
+    const recoveredContext = contexts[0] ?? [];
+    const called = recoveredContext.flatMap((item) =>
+      item.role === "assistant" && "toolCalls" in item ? item.toolCalls.map((call) => call.id) : [],
+    );
+    const answered = new Set(
+      recoveredContext.flatMap((item) =>
+        item.role === "toolResult" && "toolCallId" in item ? [item.toolCallId] : [],
+      ),
+    );
+    expect(called).toEqual(["first-safe-call", "second-safe-call"]);
+    expect(called.every((toolCallId) => answered.has(toolCallId))).toBe(true);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
   }
 });
 
@@ -397,5 +595,114 @@ test("JSONL kills after partial and complete Tool results recover without duplic
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
+  }
+});
+
+test("recovery dedupes by operationId and toolCallId after a kill during application", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m11-application-kill-"));
+  let sessionId: SessionId | undefined;
+  let promptId: string | undefined;
+  try {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const journal = yield* Journal;
+        const session = yield* journal.createSession();
+        sessionId = session.id;
+        yield* journal.appendEntry(
+          session.id,
+          EntryDraftSchema.make({
+            kind: "message",
+            payload: {
+              content: "historical result",
+              isError: false,
+              role: "toolResult",
+              toolCallId: "reused-call",
+            },
+          }),
+        );
+        const prompt = yield* journal.appendEntry(
+          session.id,
+          EntryDraftSchema.make({
+            kind: "message",
+            payload: { content: "recover both", role: "user" },
+          }),
+        );
+        promptId = prompt.id;
+        const operationId = OperationIdSchema.make("operation-application-kill");
+        yield* appendOperationStarted(journal, session.id, {
+          intent: "turn",
+          operationId,
+          promptEntryId: prompt.id,
+          turnOrdinal: 1,
+        });
+        yield* journal.appendEntry(
+          session.id,
+          EntryDraftSchema.make({
+            kind: "message",
+            payload: {
+              content: "",
+              role: "assistant",
+              stopReason: "toolCalls",
+              toolCalls: [
+                { argumentsJson: "{}", id: "reused-call", name: "first_tool" },
+                { argumentsJson: "{}", id: "second-call", name: "second_tool" },
+              ],
+            },
+          }),
+        );
+        yield* appendToolStarted(journal, session.id, {
+          operationId,
+          replay: "never",
+          toolCallId: "reused-call",
+          toolName: "first_tool",
+        });
+        yield* appendToolStarted(journal, session.id, {
+          operationId,
+          replay: "never",
+          toolCallId: "second-call",
+          toolName: "second_tool",
+        });
+      }).pipe(Effect.provide(JournalJsonl(directory))),
+    );
+
+    const killedApplication = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions;
+        return yield* sessions.resume(sessionId as SessionId);
+      }).pipe(
+        Effect.provide(
+          kernelLayer(faultInjectedJournal(directory, 1), doneProvider, () => Effect.void),
+        ),
+      ),
+    );
+    expect(Exit.isFailure(killedApplication)).toBe(true);
+
+    const journalLayer = JournalJsonl(directory);
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const journal = yield* Journal;
+        const sessions = yield* Sessions;
+        const resumed = yield* sessions.resume(sessionId as SessionId);
+        return { branch: yield* journal.readBranch(sessionId as SessionId), resumed };
+      }).pipe(Effect.provide(Layer.merge(journalLayer, kernelLayer(journalLayer, doneProvider)))),
+    );
+
+    const promptIndex = result.branch.findIndex((entry) => entry.id === promptId);
+    const recoveredToolCallIds = result.branch.slice(promptIndex).flatMap((entry) => {
+      if (typeof entry.payload !== "object" || entry.payload === null) {
+        return [];
+      }
+      const payload = entry.payload as { readonly role?: unknown; readonly toolCallId?: unknown };
+      return payload.role === "toolResult" && typeof payload.toolCallId === "string"
+        ? [payload.toolCallId]
+        : [];
+    });
+    expect(recoveredToolCallIds).toEqual(["reused-call", "second-call"]);
+    expect(result.resumed.recovery.actions).toMatchObject([
+      { action: "already_resolved", toolCallId: "reused-call" },
+      { action: "synthesized_interrupted", toolCallId: "second-call" },
+    ]);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
   }
 });

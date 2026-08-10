@@ -110,6 +110,35 @@ const failToolStartedRecord = () => {
   ).pipe(Layer.provide(base));
 };
 
+const pauseAfterOperationStarted = (
+  entered: Deferred.Deferred<void>,
+  release: Deferred.Deferred<void>,
+) => {
+  const base = JournalMemory(createMemoryJournalBacking());
+  return Layer.effect(
+    Journal,
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      return {
+        ...journal,
+        appendRecord: (sessionId, record) =>
+          journal
+            .appendRecord(sessionId, record)
+            .pipe(
+              Effect.flatMap((appended) =>
+                record.kind === "operation_started"
+                  ? Deferred.succeed(entered, undefined).pipe(
+                      Effect.zipRight(Deferred.await(release)),
+                      Effect.as(appended),
+                    )
+                  : Effect.succeed(appended),
+              ),
+            ),
+      };
+    }),
+  ).pipe(Layer.provide(base));
+};
+
 const pauseBranchRead = (
   readNumber: number,
   entered: Deferred.Deferred<void>,
@@ -1194,7 +1223,7 @@ test("a recovered session accepts and settles a new prompt normally", async () =
       );
       yield* appendOperationStarted(journal, session.id, {
         intent: "turn",
-        operationId: createOperationId(),
+        operationId: yield* createOperationId(),
         promptEntryId: interruptedPrompt.id,
         turnOrdinal: 1,
       });
@@ -1774,6 +1803,48 @@ test("abort during ASSEMBLING settles an empty assistant entry before the provid
   expect(result.settled).toEqual({ stopReason: "aborted" });
   expect(result.branch.at(-1)).toMatchObject({
     payload: { content: "", role: "assistant", stopReason: "aborted" },
+  });
+});
+
+test("abort after operation_started lands records a finished operation before resume", async () => {
+  const entered = await Effect.runPromise(Deferred.make<void>());
+  const release = await Effect.runPromise(Deferred.make<void>());
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const running = yield* Effect.fork(turns.runTurn(session.id, "Abort at operation start"));
+      yield* Deferred.await(entered);
+      const aborting = yield* Effect.fork(turns.abortTurn(session.id));
+      yield* Effect.yieldNow();
+      yield* Deferred.succeed(release, undefined);
+      const aborted = yield* Fiber.join(aborting);
+      const settled = yield* Fiber.join(running);
+      const recordsBeforeResume = yield* journal.readRecords(session.id);
+      const resumed = yield* sessions.resume(session.id);
+      return { aborted, recordsBeforeResume, resumed, settled };
+    }).pipe(
+      Effect.provide(
+        testLayer(
+          scriptedProvider([{ _tag: "done", stopReason: "done" }]),
+          pauseAfterOperationStarted(entered, release),
+        ),
+      ),
+    ),
+  );
+
+  expect(result.aborted).toEqual({ aborted: true, turnOrdinal: 1 });
+  expect(result.settled).toEqual({ stopReason: "aborted" });
+  expect(result.recordsBeforeResume.map((record) => record.kind)).toEqual([
+    "operation_started",
+    "operation_finished",
+  ]);
+  expect(result.resumed.recovery).toMatchObject({
+    actions: [],
+    entriesAppended: [],
+    operationIdFound: undefined,
   });
 });
 

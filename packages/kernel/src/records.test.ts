@@ -11,11 +11,21 @@ import {
   appendOperationFinished,
   appendOperationStarted,
   appendToolStarted,
+  createOperationId,
   OperationFinishedPayloadSchema,
   OperationIdSchema,
   OperationStartedPayloadSchema,
   ToolStartedPayloadSchema,
 } from "./records.js";
+
+test("operation id randomness runs inside Effect", async () => {
+  const operationIdEffect = createOperationId();
+
+  expect(Effect.isEffect(operationIdEffect)).toBe(true);
+  await expect(Effect.runPromise(operationIdEffect)).resolves.toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+  );
+});
 
 test("operation-started writer persists its recovery identity through the Journal seam", async () => {
   const backing = createMemoryJournalBacking();

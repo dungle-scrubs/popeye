@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -14,7 +14,12 @@ import { Effect, type Exit, Layer, Schema, Tracer } from "effect";
 import { expect, test } from "vitest";
 
 import { MailboxLive } from "./mailbox.js";
-import { appendOperationStarted, appendToolStarted, OperationIdSchema } from "./records.js";
+import {
+  appendOperationFinished,
+  appendOperationStarted,
+  appendToolStarted,
+  OperationIdSchema,
+} from "./records.js";
 import type { RecoveryReport } from "./recovery.js";
 import { Sessions, SessionsLive } from "./sessions.js";
 import { defineTool, ToolRegistryLive } from "./tool.js";
@@ -162,6 +167,53 @@ test("resume of a nonexistent session fails with the Journal's typed not-found f
   expect(error).toMatchObject({ _tag: "JournalNotFound", id: "missing-session", what: "session" });
 });
 
+test("resume rejects a corrupt payload in the active recovery Record slice", async () => {
+  const backing = createMemoryJournalBacking();
+  const journalLayer = JournalMemory(backing);
+  const mailboxLayer = MailboxLive().pipe(Layer.provide(journalLayer));
+  const sessionsLayer = SessionsLive({ recoveryDiagnosticSink: () => Effect.void }).pipe(
+    Layer.provide(Layer.mergeAll(journalLayer, mailboxLayer, ToolRegistryLive([]))),
+  );
+  const session = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const created = yield* journal.createSession();
+      const prompt = yield* journal.appendEntry(
+        created.id,
+        EntryDraftSchema.make({
+          kind: "message",
+          payload: { content: "active corruption", role: "user" },
+        }),
+      );
+      yield* journal.appendRecord(
+        created.id,
+        RecordDraftSchema.make({
+          kind: "operation_started",
+          payload: {
+            intent: "turn",
+            operationId: "operation-active-corruption",
+            promptEntryId: prompt.id,
+            turnOrdinal: 0,
+          },
+        }),
+      );
+      return created;
+    }).pipe(Effect.provide(journalLayer)),
+  );
+
+  const error = await Effect.runPromise(
+    Effect.gen(function* () {
+      const sessions = yield* Sessions;
+      return yield* Effect.flip(sessions.resume(session.id));
+    }).pipe(Effect.provide(sessionsLayer)),
+  );
+
+  expect(error).toMatchObject({
+    _tag: "JournalError",
+    corruptionClass: "schema_mismatch",
+  });
+});
+
 test("JSONL lifecycle derives revision after appends and removes its temporary directory", async () => {
   const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m7-"));
   const makeLayer = () =>
@@ -269,6 +321,9 @@ test("resume applies crash recovery through the mailbox and emits its structured
     safeReplay: [],
   });
   expect(reports).toEqual([result.resumed.recovery]);
+  expect(result.resumed.recovery.entriesAppended).toEqual(
+    result.branch.slice(-2).map((entry) => entry.id),
+  );
   expect(result.branch.at(-2)?.payload).toMatchObject({
     role: "toolResult",
     toolCallId: "resume-call",
@@ -280,7 +335,7 @@ test("resume applies crash recovery through the mailbox and emits its structured
   });
 });
 
-test("resume returns a registered replay-safe Tool call for later driver execution", async () => {
+test("resume returns replay-safe advice after durably closing the Tool call", async () => {
   const backing = createMemoryJournalBacking();
   const prepared = await Effect.runPromise(
     Effect.gen(function* () {
@@ -359,14 +414,14 @@ test("resume returns a registered replay-safe Tool call for later driver executi
       },
     ],
   });
-  expect(result.resumedAgain.recovery.safeReplay).toEqual(result.resumed.recovery.safeReplay);
-  expect(result.records.some((record) => record.kind === "operation_finished")).toBe(false);
+  expect(result.resumedAgain.recovery.safeReplay).toEqual([]);
+  expect(result.records.some((record) => record.kind === "operation_finished")).toBe(true);
   expect(
     result.branch.some((entry) => {
       const payload = entry.payload as { readonly role?: unknown };
       return payload.role === "toolResult";
     }),
-  ).toBe(false);
+  ).toBe(true);
 });
 
 test("resume traces recovery with session, operation, action, append, and safe-replay annotations", async () => {
@@ -385,6 +440,24 @@ test("resume traces recovery with session, operation, action, append, and safe-r
         operationId,
         promptEntryId: prompt.id,
         turnOrdinal: 1,
+      });
+      yield* journal.appendEntry(
+        session.id,
+        EntryDraftSchema.make({
+          kind: "message",
+          payload: {
+            content: "",
+            role: "assistant",
+            stopReason: "toolCalls",
+            toolCalls: [{ argumentsJson: "{}", id: "observed-call", name: "write_file" }],
+          },
+        }),
+      );
+      yield* appendToolStarted(journal, session.id, {
+        operationId,
+        replay: "never",
+        toolCallId: "observed-call",
+        toolName: "write_file",
       });
       return session;
     }).pipe(Effect.provide(JournalMemory(backing))),
@@ -407,11 +480,85 @@ test("resume traces recovery with session, operation, action, append, and safe-r
   expect(recoverySpan?.attributes).toEqual(
     new Map<string, unknown>([
       ["sessionId", prepared.id],
-      ["actionCount", 0],
-      ["entriesAppendedCount", 1],
+      ["actionCount", 1],
+      ["entriesAppendedCount", 2],
       ["operationIdFound", "operation-observed"],
       ["safeReplayCount", 0],
     ]),
   );
   expect(recoverySpan?.exit?._tag).toBe("Success");
+});
+
+test("resume ignores a corrupt payload in an operation closed before the recovery slice", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m11-bounded-corruption-"));
+  try {
+    const session = await Effect.runPromise(
+      Effect.gen(function* () {
+        const journal = yield* Journal;
+        const created = yield* journal.createSession();
+        const prompt = yield* journal.appendEntry(
+          created.id,
+          EntryDraftSchema.make({
+            kind: "message",
+            payload: { content: "closed", role: "user" },
+          }),
+        );
+        const operationId = OperationIdSchema.make("operation-closed-before-corruption");
+        yield* appendOperationStarted(journal, created.id, {
+          intent: "turn",
+          operationId,
+          promptEntryId: prompt.id,
+          turnOrdinal: 1,
+        });
+        yield* journal.appendEntry(
+          created.id,
+          EntryDraftSchema.make({
+            kind: "message",
+            payload: { content: "done", role: "assistant", stopReason: "done" },
+          }),
+        );
+        yield* appendOperationFinished(journal, created.id, {
+          operationId,
+          outcome: "done",
+        });
+        return created;
+      }).pipe(Effect.provide(JournalJsonl(directory))),
+    );
+    const file = join(directory, `${session.id}.jsonl`);
+    const lines = (await readFile(file, "utf8")).trimEnd().split("\n");
+    const corrupted = lines.map((line) => {
+      const decoded = JSON.parse(line) as {
+        payload?: { item?: { kind?: string; payload?: Record<string, unknown> } };
+      };
+      if (decoded.payload?.item?.kind === "operation_started") {
+        decoded.payload.item.payload = {
+          ...decoded.payload.item.payload,
+          turnOrdinal: 0,
+        };
+      }
+      return JSON.stringify(decoded);
+    });
+    await writeFile(file, `${corrupted.join("\n")}\n`);
+
+    const journalLayer = JournalJsonl(directory);
+    const mailboxLayer = MailboxLive().pipe(Layer.provide(journalLayer));
+    const sessionsLayer = SessionsLive({ recoveryDiagnosticSink: () => Effect.void }).pipe(
+      Layer.provide(Layer.mergeAll(journalLayer, mailboxLayer, ToolRegistryLive([]))),
+    );
+    const resumed = await Effect.runPromise(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions;
+        return yield* sessions.resume(session.id);
+      }).pipe(Effect.provide(sessionsLayer)),
+    );
+
+    expect(resumed.recovery).toEqual({
+      actions: [],
+      entriesAppended: [],
+      operationIdFound: undefined,
+      safeReplay: [],
+    });
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
 });

@@ -1,7 +1,9 @@
 /**
  * Owns crash recovery planning and resume-time application for one Session.
- * It exists because recovery is a pure function of a bounded Record slice, which makes every
- * durable action inspectable and repeatable without hidden Journal reads.
+ * D-033 requires every recovery path to close its open operation. This preserves Context
+ * well-formedness and ensures that a second crash cannot make the next resume fail.
+ * Recovery remains a pure function of a bounded Record slice, so every durable action is
+ * inspectable and repeatable without hidden Journal reads.
  */
 
 import {
@@ -17,7 +19,12 @@ import {
 } from "@peye/journal";
 import { Effect, Schema } from "effect";
 
-import { asContextToolCalls, type ContextToolCall } from "./provider.js";
+import {
+  type AssistantDiagnostic,
+  type MessageEntryPayload,
+  MessageEntryPayloadSchema,
+  type MessageToolCall,
+} from "./entry-payloads.js";
 import type {
   OperationFinishedPayload,
   OperationId,
@@ -32,7 +39,7 @@ import {
   ToolStartedPayloadSchema,
 } from "./records.js";
 
-export interface RecoveryAction {
+export interface ToolRecoveryAction {
   readonly action:
     | "already_resolved"
     | "safe_replay"
@@ -42,6 +49,18 @@ export interface RecoveryAction {
   readonly toolCallId: string;
   readonly toolName: string;
 }
+
+export type RecoveryAction =
+  | ToolRecoveryAction
+  | {
+      readonly action: "orphaned_prompt_closed";
+      readonly promptEntryId: EntryId;
+    }
+  | {
+      readonly action: "unrecoverable-on-this-branch";
+      readonly operationId: OperationId;
+      readonly promptEntryId: EntryId;
+    };
 
 export interface SafeReplayCall {
   readonly argumentsJson: string;
@@ -89,6 +108,7 @@ const strict: { readonly onExcessProperty: "error" } = { onExcessProperty: "erro
 const decodeOperationFinished = Schema.decodeUnknown(OperationFinishedPayloadSchema, strict);
 const decodeOperationStarted = Schema.decodeUnknown(OperationStartedPayloadSchema, strict);
 const decodeToolStarted = Schema.decodeUnknown(ToolStartedPayloadSchema, strict);
+const decodeMessageEntryPayload = Schema.decodeUnknown(MessageEntryPayloadSchema, strict);
 
 const schemaMismatch = (record: Record, cause: unknown): JournalError =>
   new JournalError({
@@ -97,12 +117,17 @@ const schemaMismatch = (record: Record, cause: unknown): JournalError =>
     message: `Record ${record.id} payload does not match ${record.kind}: ${String(cause)}`,
   });
 
-const interruptedAssistant = (operationId: OperationId): EntryDraft =>
+const interruptedDiagnostic = {
+  detail: "interrupted by crash",
+  reason: "turn_failure",
+} satisfies AssistantDiagnostic;
+
+const interruptedAssistant = (): EntryDraft =>
   EntryDraftSchema.make({
     kind: "message",
     payload: {
       content: "Turn interrupted by crash.",
-      diagnostic: { detail: "interrupted by crash", operationId, reason: "turn_failure" },
+      diagnostic: interruptedDiagnostic,
       role: "assistant",
       stopReason: "error",
     },
@@ -119,22 +144,40 @@ const interruptedToolResult = (toolCallId: string): EntryDraft =>
     },
   });
 
-const toolResultCallId = (payload: unknown): string | undefined => {
-  if (typeof payload !== "object" || payload === null) {
-    return undefined;
-  }
-  const result = payload as { readonly role?: unknown; readonly toolCallId?: unknown };
-  return result.role === "toolResult" && typeof result.toolCallId === "string"
-    ? result.toolCallId
-    : undefined;
-};
+const entrySchemaMismatch = (entry: Entry, cause: unknown): JournalError =>
+  new JournalError({
+    cause,
+    corruptionClass: "schema_mismatch",
+    message: `Entry ${entry.id} payload does not match ${entry.kind}: ${String(cause)}`,
+  });
 
-const completedToolCallIds = (entries: ReadonlyArray<Entry>): ReadonlySet<string> => {
+interface DecodedMessageEntry {
+  readonly entry: Entry;
+  readonly payload: MessageEntryPayload;
+}
+
+const decodeMessageEntries = (
+  entries: ReadonlyArray<Entry>,
+): Effect.Effect<ReadonlyArray<DecodedMessageEntry>, JournalError> =>
+  Effect.gen(function* () {
+    const decoded: Array<DecodedMessageEntry> = [];
+    for (const entry of entries) {
+      if (entry.kind !== "message") {
+        continue;
+      }
+      const payload = yield* decodeMessageEntryPayload(entry.payload).pipe(
+        Effect.mapError((cause) => entrySchemaMismatch(entry, cause)),
+      );
+      decoded.push({ entry, payload });
+    }
+    return decoded;
+  });
+
+const completedToolCallIds = (entries: ReadonlyArray<DecodedMessageEntry>): ReadonlySet<string> => {
   const completed = new Set<string>();
-  for (const entry of entries) {
-    const toolCallId = toolResultCallId(entry.payload);
-    if (toolCallId !== undefined) {
-      completed.add(toolCallId);
+  for (const { payload } of entries) {
+    if (payload.role === "toolResult") {
+      completed.add(payload.toolCallId);
     }
   }
   return completed;
@@ -149,18 +192,14 @@ const entriesForOperation = (
 };
 
 const assistantToolCallsById = (
-  entries: ReadonlyArray<Entry>,
-): ReadonlyMap<string, ContextToolCall> => {
-  const indexed = new Map<string, ContextToolCall>();
-  for (const entry of entries) {
-    if (typeof entry.payload !== "object" || entry.payload === null) {
-      continue;
-    }
-    const payload = entry.payload as { readonly role?: unknown; readonly toolCalls?: unknown };
+  entries: ReadonlyArray<DecodedMessageEntry>,
+): ReadonlyMap<string, MessageToolCall> => {
+  const indexed = new Map<string, MessageToolCall>();
+  for (const { payload } of entries) {
     if (payload.role !== "assistant") {
       continue;
     }
-    for (const call of asContextToolCalls(payload.toolCalls) ?? []) {
+    for (const call of payload.toolCalls ?? []) {
       if (!indexed.has(call.id)) {
         indexed.set(call.id, call);
       }
@@ -172,39 +211,44 @@ const assistantToolCallsById = (
 const invalidSequence = (message: string): JournalError =>
   new JournalError({ corruptionClass: "invalid_record_sequence", message });
 
-const recoveredOperationIds = (entries: ReadonlyArray<Entry>): ReadonlySet<string> => {
-  const recovered = new Set<string>();
-  for (const entry of entries) {
-    if (typeof entry.payload !== "object" || entry.payload === null) {
-      continue;
-    }
-    const payload = entry.payload as {
-      readonly diagnostic?: { readonly operationId?: unknown };
-      readonly role?: unknown;
-    };
-    if (payload.role === "assistant" && typeof payload.diagnostic?.operationId === "string") {
-      recovered.add(payload.diagnostic.operationId);
-    }
-  }
-  return recovered;
-};
+const hasInterruptedAssistant = (entries: ReadonlyArray<DecodedMessageEntry>): boolean =>
+  entries.some(
+    ({ payload }) =>
+      payload.role === "assistant" &&
+      payload.stopReason === "error" &&
+      payload.diagnostic?.reason === "turn_failure" &&
+      payload.diagnostic.detail === interruptedDiagnostic.detail,
+  );
 
-const finishedOperationIds = (records: ReadonlyArray<Record>): ReadonlySet<string> => {
-  const finished = new Set<string>();
-  for (const record of records) {
-    if (
-      record.kind === "operation_finished" &&
-      typeof record.payload === "object" &&
-      record.payload !== null
-    ) {
-      const payload = record.payload as { readonly operationId?: unknown };
-      if (typeof payload.operationId === "string") {
-        finished.add(payload.operationId);
-      }
+const isLatestOperationFinished = (
+  records: ReadonlyArray<Record>,
+  operationId: OperationId,
+): Effect.Effect<boolean, JournalError> =>
+  Effect.gen(function* () {
+    const startedIndex = records.findLastIndex(
+      (candidate) => candidate.kind === "operation_started",
+    );
+    const startedRecord = records[startedIndex];
+    if (startedRecord === undefined) {
+      return false;
     }
-  }
-  return finished;
-};
+    const started = yield* decodeOperationStarted(startedRecord.payload).pipe(
+      Effect.mapError((cause) => schemaMismatch(startedRecord, cause)),
+    );
+    if (started.operationId !== operationId) {
+      return false;
+    }
+    const finishedRecord = records
+      .slice(startedIndex + 1)
+      .find((candidate) => candidate.kind === "operation_finished");
+    if (finishedRecord === undefined) {
+      return false;
+    }
+    const finished = yield* decodeOperationFinished(finishedRecord.payload).pipe(
+      Effect.mapError((cause) => schemaMismatch(finishedRecord, cause)),
+    );
+    return finished.operationId === operationId;
+  });
 
 interface OpenOperation {
   readonly started: OperationStartedPayload;
@@ -289,10 +333,7 @@ export const boundedRecoveryRecords = (records: ReadonlyArray<Record>): Readonly
     );
     return firstOperationRecord < 0 ? [] : records.slice(firstOperationRecord);
   }
-  const boundaryStart = records.findLastIndex(
-    (record, index) => index <= lastFinished && record.kind === "operation_started",
-  );
-  return records.slice(boundaryStart < 0 ? lastFinished : boundaryStart);
+  return records.slice(lastFinished + 1);
 };
 
 export const recoverSession = (
@@ -302,17 +343,48 @@ export const recoverSession = (
   Effect.gen(function* () {
     const open = yield* parseOpenOperation(records);
     if (open === undefined) {
-      return idlePlan;
+      const trailing = entries.at(-1);
+      if (trailing?.kind !== "message") {
+        return idlePlan;
+      }
+      const payload = yield* decodeMessageEntryPayload(trailing.payload).pipe(
+        Effect.mapError((cause) => entrySchemaMismatch(trailing, cause)),
+      );
+      if (payload.role !== "user") {
+        return idlePlan;
+      }
+      return {
+        actions: [{ action: "orphaned_prompt_closed", promptEntryId: trailing.id }],
+        assistantEntry: interruptedAssistant(),
+        finish: undefined,
+        operationId: undefined,
+        promptEntryId: trailing.id,
+        safeReplay: [],
+        toolResults: [],
+      } satisfies RecoveryPlan;
     }
     const operationEntries = entriesForOperation(entries, open.started.promptEntryId);
     if (operationEntries === undefined) {
-      return yield* invalidSequence(
-        `operation_started ${open.started.operationId} names missing prompt Entry ${open.started.promptEntryId}.`,
-      );
+      return {
+        actions: [
+          {
+            action: "unrecoverable-on-this-branch",
+            operationId: open.started.operationId,
+            promptEntryId: open.started.promptEntryId,
+          },
+        ],
+        assistantEntry: undefined,
+        finish: { operationId: open.started.operationId, outcome: "error" },
+        operationId: open.started.operationId,
+        promptEntryId: open.started.promptEntryId,
+        safeReplay: [],
+        toolResults: [],
+      } satisfies RecoveryPlan;
     }
-    const completed = completedToolCallIds(operationEntries);
-    const assistantCalls = assistantToolCallsById(operationEntries);
-    const safeReplay: Array<SafeReplayCall> = [];
+    const decodedEntries = yield* decodeMessageEntries(operationEntries);
+    const completed = completedToolCallIds(decodedEntries);
+    const assistantCalls = assistantToolCallsById(decodedEntries);
+    const startedByCallId = new Map(open.tools.map((tool) => [tool.toolCallId, tool]));
     for (const tool of open.tools) {
       const call = assistantCalls.get(tool.toolCallId);
       if (call === undefined || call.name !== tool.toolName) {
@@ -320,7 +392,30 @@ export const recoverSession = (
           `tool_started ${tool.toolCallId} does not match an assistant Tool call.`,
         );
       }
-      if (!completed.has(tool.toolCallId) && tool.replay === "safe") {
+    }
+    const actions: Array<RecoveryAction> = [];
+    const safeReplay: Array<SafeReplayCall> = [];
+    const toolResults: Array<EntryDraft> = [];
+    for (const call of assistantCalls.values()) {
+      const started = startedByCallId.get(call.id);
+      const replay = started?.replay ?? "never";
+      if (completed.has(call.id)) {
+        actions.push({
+          action: "already_resolved",
+          replay,
+          toolCallId: call.id,
+          toolName: call.name,
+        });
+        continue;
+      }
+      actions.push({
+        action: replay === "safe" ? "safe_replay" : "synthesized_interrupted",
+        replay,
+        toolCallId: call.id,
+        toolName: call.name,
+      });
+      toolResults.push(interruptedToolResult(call.id));
+      if (replay === "safe") {
         safeReplay.push({
           argumentsJson: call.argumentsJson,
           name: call.name,
@@ -329,25 +424,14 @@ export const recoverSession = (
         });
       }
     }
-    const unresolvedTools = open.tools.filter((tool) => !completed.has(tool.toolCallId));
-    const interrupted = unresolvedTools.filter((tool) => tool.replay === "never");
     return {
-      actions: open.tools.map((tool) => ({
-        action: completed.has(tool.toolCallId)
-          ? "already_resolved"
-          : tool.replay === "never"
-            ? "synthesized_interrupted"
-            : "safe_replay",
-        replay: tool.replay,
-        toolCallId: tool.toolCallId,
-        toolName: tool.toolName,
-      })),
-      assistantEntry: interruptedAssistant(open.started.operationId),
+      actions,
+      assistantEntry: interruptedAssistant(),
       finish: { operationId: open.started.operationId, outcome: "error" },
       operationId: open.started.operationId,
       promptEntryId: open.started.promptEntryId,
       safeReplay,
-      toolResults: interrupted.map((tool) => interruptedToolResult(tool.toolCallId)),
+      toolResults,
     } satisfies RecoveryPlan;
   });
 
@@ -358,16 +442,11 @@ export const applyRecoveryPlan = (
   options: RecoveryApplicationOptions = {},
 ): Effect.Effect<RecoveryReport, JournalFailure> =>
   Effect.gen(function* () {
-    if (plan.operationId === undefined) {
-      return {
-        actions: [],
-        entriesAppended: [],
-        operationIdFound: undefined,
-        safeReplay: [],
-      } satisfies RecoveryReport;
-    }
     const records = options.snapshot?.records ?? (yield* journal.readRecords(sessionId));
-    if (finishedOperationIds(records).has(plan.operationId)) {
+    if (
+      plan.operationId !== undefined &&
+      (yield* isLatestOperationFinished(records, plan.operationId))
+    ) {
       return {
         actions: [],
         entriesAppended: [],
@@ -381,61 +460,57 @@ export const applyRecoveryPlan = (
       (plan.promptEntryId === undefined
         ? undefined
         : entriesForOperation(entries, plan.promptEntryId)) ?? [];
-    const completed = new Set(completedToolCallIds(operationEntries));
-    const recovered = recoveredOperationIds(entries);
+    const decodedEntries = yield* decodeMessageEntries(operationEntries);
+    const completed = new Set(completedToolCallIds(decodedEntries));
+    const recovered = hasInterruptedAssistant(decodedEntries);
     const appended: Array<EntryId> = [];
-    const actionsByToolCallId = new Map(plan.actions.map((action) => [action.toolCallId, action]));
-    const actions: Array<RecoveryAction> = plan.actions.filter(
-      (action) => action.action === "already_resolved",
-    );
     for (const result of plan.toolResults) {
-      const toolCallId = toolResultCallId(result.payload);
-      if (toolCallId === undefined || completed.has(toolCallId)) {
+      const payload = yield* decodeMessageEntryPayload(result.payload).pipe(
+        Effect.mapError(
+          (cause) =>
+            new JournalError({
+              cause,
+              corruptionClass: "schema_mismatch",
+              message: `Recovery Entry payload does not match message: ${String(cause)}`,
+            }),
+        ),
+      );
+      if (payload.role !== "toolResult" || completed.has(payload.toolCallId)) {
         continue;
       }
       const entry = yield* journal.appendEntry(sessionId, result);
       appended.push(entry.id);
-      completed.add(toolCallId);
-      const action = actionsByToolCallId.get(toolCallId);
-      if (action !== undefined) {
-        actions.push(action);
-      }
+      completed.add(payload.toolCallId);
     }
 
     const safeReplay: Array<SafeReplayCall> = [];
+    const missingSafeToolCallIds = new Set<string>();
     for (const call of plan.safeReplay) {
-      const planned = actionsByToolCallId.get(call.toolCallId);
-      if (options.availableToolNames?.has(call.name) === true) {
+      if (options.availableToolNames === undefined || options.availableToolNames.has(call.name)) {
         safeReplay.push(call);
-        if (planned !== undefined) {
-          actions.push(planned);
-        }
         continue;
       }
-      if (!completed.has(call.toolCallId)) {
-        const entry = yield* journal.appendEntry(sessionId, interruptedToolResult(call.toolCallId));
-        appended.push(entry.id);
-        completed.add(call.toolCallId);
-      }
-      actions.push({
-        action: "synthesized_missing_tool",
-        replay: "safe",
-        toolCallId: call.toolCallId,
-        toolName: call.name,
-      });
+      missingSafeToolCallIds.add(call.toolCallId);
     }
 
-    if (
-      plan.assistantEntry !== undefined &&
-      safeReplay.length === 0 &&
-      !recovered.has(plan.operationId)
-    ) {
+    if (plan.assistantEntry !== undefined && !recovered) {
       const assistant = yield* journal.appendEntry(sessionId, plan.assistantEntry);
       appended.push(assistant.id);
     }
-    if (plan.finish !== undefined && safeReplay.length === 0) {
+    if (plan.finish !== undefined) {
       yield* appendOperationFinished(journal, sessionId, plan.finish);
     }
+    const actions = plan.actions.map((action): RecoveryAction => {
+      if (action.action === "safe_replay" && missingSafeToolCallIds.has(action.toolCallId)) {
+        return {
+          action: "synthesized_missing_tool",
+          replay: "safe",
+          toolCallId: action.toolCallId,
+          toolName: action.toolName,
+        };
+      }
+      return action;
+    });
     return {
       actions,
       entriesAppended: appended,

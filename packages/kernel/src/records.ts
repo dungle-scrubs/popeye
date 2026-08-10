@@ -9,8 +9,6 @@
  * no toolResult Entry for that durable Tool call identity exists.
  */
 
-import { randomBytes } from "node:crypto";
-
 import {
   type EntryId,
   EntryIdSchema,
@@ -29,8 +27,8 @@ export const OperationIdSchema = Schema.NonEmptyString.pipe(Schema.brand("Operat
 
 export type OperationId = Schema.Schema.Type<typeof OperationIdSchema>;
 
-export const createOperationId = (): OperationId =>
-  OperationIdSchema.make(randomBytes(12).toString("base64url"));
+export const createOperationId = (): Effect.Effect<OperationId> =>
+  Effect.sync(() => OperationIdSchema.make(crypto.randomUUID()));
 
 export const OperationStartedPayloadSchema = Schema.Struct({
   intent: Schema.Literal("turn"),

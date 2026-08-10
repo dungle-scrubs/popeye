@@ -181,7 +181,17 @@ test("recovery returns an unresolved replay-safe Tool call for later driver exec
         toolCallId: "call-safe",
       },
     ],
-    toolResults: [],
+    toolResults: [
+      {
+        kind: "message",
+        payload: {
+          content: "Tool execution interrupted by crash.",
+          isError: true,
+          role: "toolResult",
+          toolCallId: "call-safe",
+        },
+      },
+    ],
   });
 });
 
@@ -252,7 +262,33 @@ test("recovery validates kernel Record payload schemas when reading", async () =
   });
 });
 
-test("recovery rejects Record relationships with a missing prompt or assistant Tool call", async () => {
+test("recovery validates message Entry payload schemas when reading", async () => {
+  const prompt = EntrySchema.make({
+    id: EntryIdSchema.make("malformed-message-prompt"),
+    kind: "message",
+    parentId: null,
+    payload: { content: 42, role: "user" },
+  });
+  const started = RecordSchema.make({
+    id: RecordIdSchema.make("malformed-message-start"),
+    kind: "operation_started",
+    payload: {
+      intent: "turn",
+      operationId: "operation-malformed-message",
+      promptEntryId: prompt.id,
+      turnOrdinal: 1,
+    },
+  });
+
+  const error = await Effect.runPromise(Effect.flip(recoverSession([started], [prompt])));
+
+  expect(error).toMatchObject({
+    _tag: "JournalError",
+    corruptionClass: "schema_mismatch",
+  });
+});
+
+test("recovery degrades an off-branch prompt and rejects a missing assistant Tool call", async () => {
   const started = RecordSchema.make({
     id: RecordIdSchema.make("relationship-start"),
     kind: "operation_started",
@@ -280,15 +316,27 @@ test("recovery rejects Record relationships with a missing prompt or assistant T
     payload: { content: "write", role: "user" },
   });
 
-  for (const entries of [[], [prompt]]) {
-    const error = await Effect.runPromise(
-      Effect.flip(recoverSession([started, toolStarted], entries)),
-    );
-    expect(error).toMatchObject({
-      _tag: "JournalError",
-      corruptionClass: "invalid_record_sequence",
-    });
-  }
+  const offBranch = await Effect.runPromise(recoverSession([started, toolStarted], []));
+  expect(offBranch).toMatchObject({
+    actions: [
+      {
+        action: "unrecoverable-on-this-branch",
+        operationId: "operation-relationship",
+        promptEntryId: "relationship-prompt",
+      },
+    ],
+    assistantEntry: undefined,
+    finish: { operationId: "operation-relationship", outcome: "error" },
+    toolResults: [],
+  });
+
+  const error = await Effect.runPromise(
+    Effect.flip(recoverSession([started, toolStarted], [prompt])),
+  );
+  expect(error).toMatchObject({
+    _tag: "JournalError",
+    corruptionClass: "invalid_record_sequence",
+  });
 });
 
 test("recovery application is idempotent when the same plan is applied twice", async () => {
@@ -355,11 +403,13 @@ test("recovery application is idempotent when the same plan is applied twice", a
   });
   const recoveredAssistants = result.branch.filter((entry) => {
     const payload = entry.payload as {
-      readonly diagnostic?: { readonly operationId?: unknown };
+      readonly diagnostic?: { readonly detail?: unknown; readonly reason?: unknown };
       readonly role?: unknown;
     };
     return (
-      payload.role === "assistant" && payload.diagnostic?.operationId === "operation-idempotent"
+      payload.role === "assistant" &&
+      payload.diagnostic?.detail === "interrupted by crash" &&
+      payload.diagnostic.reason === "turn_failure"
     );
   });
   const finished = result.records.filter((record) => {
@@ -374,7 +424,7 @@ test("recovery application is idempotent when the same plan is applied twice", a
   expect(result.second.entriesAppended).toEqual([]);
 });
 
-test("recovery is a pure function of Records bounded at the last finished operation", async () => {
+test("recovery parses only Records strictly after the last finished operation", async () => {
   const record = (id: string, kind: string, payload: unknown) =>
     RecordSchema.make({ id: RecordIdSchema.make(id), kind, payload });
   const boundaryOperationId = OperationIdSchema.make("operation-boundary");
@@ -421,12 +471,68 @@ test("recovery is a pure function of Records bounded at the last finished operat
     ]),
   );
 
-  expect(bounded.map((item) => item.id)).toEqual([
-    "boundary-start",
-    "boundary-finish",
-    "open-start",
-  ]);
+  expect(bounded.map((item) => item.id)).toEqual(["open-start"]);
   expect(plan.operationId).toBe("operation-after-boundary");
+});
+
+test("recovery closes an open operation after its prompt moves off the current Branch", async () => {
+  const backing = createMemoryJournalBacking();
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const session = yield* journal.createSession();
+      const prompt = yield* journal.appendEntry(
+        session.id,
+        EntryDraftSchema.make({
+          kind: "message",
+          payload: { content: "first branch", role: "user" },
+        }),
+      );
+      const operationId = OperationIdSchema.make("operation-off-branch");
+      yield* appendOperationStarted(journal, session.id, {
+        intent: "turn",
+        operationId,
+        promptEntryId: prompt.id,
+        turnOrdinal: 1,
+      });
+      yield* journal.moveLeaf(session.id, session.rootEntry.id);
+      yield* journal.appendEntry(
+        session.id,
+        EntryDraftSchema.make({
+          kind: "message",
+          payload: { content: "second branch", role: "user" },
+        }),
+      );
+      const branchBefore = yield* journal.readBranch(session.id);
+      const plan = yield* recoverSession(
+        boundedRecoveryRecords(yield* journal.readRecords(session.id)),
+        branchBefore,
+      );
+      const report = yield* applyRecoveryPlan(journal, session.id, plan);
+      return {
+        branchAfter: yield* journal.readBranch(session.id),
+        branchBefore,
+        records: yield* journal.readRecords(session.id),
+        report,
+      };
+    }).pipe(Effect.provide(JournalMemory(backing))),
+  );
+
+  expect(result.report).toMatchObject({
+    actions: [
+      {
+        action: "unrecoverable-on-this-branch",
+        operationId: "operation-off-branch",
+      },
+    ],
+    entriesAppended: [],
+    operationIdFound: "operation-off-branch",
+  });
+  expect(result.branchAfter).toEqual(result.branchBefore);
+  expect(result.records.at(-1)).toMatchObject({
+    kind: "operation_finished",
+    payload: { operationId: "operation-off-branch", outcome: "error" },
+  });
 });
 
 test("recovery synthesizes a safe Tool result when that Tool is absent from the registry", async () => {

@@ -25,7 +25,7 @@ import {
   Schedule,
   Stream,
 } from "effect";
-
+import type { AssistantDiagnostic } from "./entry-payloads.js";
 import { BudgetExceeded, type ProviderError, TurnQueueFull } from "./errors.js";
 import { Mailbox, type MailboxFailure } from "./mailbox.js";
 import { type Progress, ProgressHub, type TurnPhase } from "./progress.js";
@@ -135,13 +135,6 @@ interface FollowUpItem {
 interface TurnRegistration {
   readonly token: symbol;
 }
-
-type AssistantDiagnostic =
-  | {
-      readonly detail: string;
-      readonly reason: "budget_exceeded" | "journal_failure" | "turn_failure";
-    }
-  | { readonly attempts: number; readonly detail: string; readonly reason: "provider_error" };
 
 const DEFAULT_CONTEXT_BUDGET = 32_000;
 const DEFAULT_MAX_ATTEMPTS = 3;
@@ -441,7 +434,7 @@ export const TurnsLive = (): Layer.Layer<
           const executingCalls = yield* Ref.make<ReadonlyArray<ToolCall> | undefined>(undefined);
           const persistedToolCallIds = yield* Ref.make<Set<string>>(new Set());
           const persistenceMutex = yield* Effect.makeSemaphore(1);
-          const operationId = createOperationId();
+          const operationId = yield* createOperationId();
           const operationFinished = yield* Ref.make(false);
           const operationRecorded = yield* Ref.make(false);
 
@@ -957,13 +950,14 @@ export const TurnsLive = (): Layer.Layer<
               sessionId,
               EntryDraftSchema.make({ kind: "message", payload: { content, role: "user" } }),
             );
-            yield* appendOperationStarted(journal, sessionId, {
-              intent: "turn",
-              operationId,
-              promptEntryId: user.id,
-              turnOrdinal,
-            });
-            yield* Ref.set(operationRecorded, true);
+            yield* Effect.uninterruptible(
+              appendOperationStarted(journal, sessionId, {
+                intent: "turn",
+                operationId,
+                promptEntryId: user.id,
+                turnOrdinal,
+              }).pipe(Effect.zipRight(Ref.set(operationRecorded, true))),
+            );
             yield* Effect.annotateCurrentSpan({ sessionId, turnOrdinal, userEntryId: user.id });
             let reason = yield* request();
             while (
