@@ -154,13 +154,13 @@ Source: `implementation.md` (M12); D-001, D-014, D-026; spike A-001
 ### M13: Retry and overflow policies
 Source: `implementation.md` (M13); Normative Contracts
 
-- [ ] Transient `ProviderError` retries on exponential backoff up to the configured cap
-- [ ] Permanent `ProviderError` never retries
-- [ ] Retry exhaustion persists an error entry and settles the turn
-- [ ] Context overflow triggers compact-then-retry exactly once per turn
-- [ ] Compaction summarization requests are bounded slices (never the full overflowing context)
-- [ ] Unsummarizable overflow yields `BudgetExceeded` with the options diagnostic
-- [ ] Retry and compaction-trigger diagnostics surface as structured progress
+- [x] Transient `ProviderError` retries on exponential backoff up to the configured cap
+- [x] Permanent `ProviderError` never retries
+- [x] Retry exhaustion persists an error entry and settles the turn
+- [x] Context overflow triggers compact-then-retry exactly once per turn
+- [x] Compaction summarization requests are bounded slices (never the full overflowing context)
+- [x] Unsummarizable overflow yields `BudgetExceeded` with the options diagnostic
+- [x] Retry and compaction-trigger diagnostics surface as structured progress
 
 ### M14: Driver head
 Source: `implementation.md` (M14); D-021
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 86
-- Remaining: 91
-- Current cutoff blockers: 91
+- Completed: 93
+- Remaining: 84
+- Current cutoff blockers: 84
 - Accepted/deferred follow-up: 5
 - Superseded/obsolete checklist debt: 0
