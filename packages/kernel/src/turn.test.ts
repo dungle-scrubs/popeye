@@ -5,13 +5,26 @@ import {
   JournalError,
   JournalMemory,
 } from "@peye/journal";
-import { Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Stream, Tracer } from "effect";
+import {
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  type Scope,
+  Stream,
+  Tracer,
+} from "effect";
 import { expect, test } from "vitest";
 import { ProviderError } from "./errors.js";
 import { MailboxLive } from "./mailbox.js";
 import { type Progress, ProgressHubLive } from "./progress.js";
 import { type AssistantItem, Provider, type ProviderService } from "./provider.js";
 import { Sessions, SessionsLive } from "./sessions.js";
+import { type Tool, ToolRegistryLive } from "./tool.js";
 import { Turns, TurnsLive } from "./turn.js";
 
 const providerLayer = (service: ProviderService): Layer.Layer<Provider> =>
@@ -20,6 +33,7 @@ const providerLayer = (service: ProviderService): Layer.Layer<Provider> =>
 const testLayer = (
   service: ProviderService,
   journalLayer = JournalMemory(createMemoryJournalBacking()),
+  toolLayer = ToolRegistryLive([]),
 ) => {
   const mailboxLayer = MailboxLive().pipe(Layer.provide(journalLayer));
   const sessionsLayer = SessionsLive.pipe(Layer.provide(Layer.merge(journalLayer, mailboxLayer)));
@@ -28,6 +42,7 @@ const testLayer = (
     mailboxLayer,
     ProgressHubLive(),
     providerLayer(service),
+    toolLayer,
   );
   return Layer.mergeAll(dependencies, sessionsLayer, TurnsLive().pipe(Layer.provide(dependencies)));
 };
@@ -218,6 +233,79 @@ test("assistant text and thinking deltas stream only during STREAMING and persis
   expect(branch.at(-1)).toMatchObject({
     payload: { content: "It works.", role: "assistant", stopReason: "done" },
   });
+});
+
+test("tool calls append results in call order while completion order appears only in progress", async () => {
+  const fastCompleted = await Effect.runPromise(Deferred.make<void>());
+  const observed: Array<Progress> = [];
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      return requests === 1
+        ? Stream.fromIterable([
+            { _tag: "toolCall", argumentsJson: '{"value":"slow"}', id: "slow-call", name: "slow" },
+            { _tag: "toolCall", argumentsJson: '{"value":"fast"}', id: "fast-call", name: "fast" },
+            { _tag: "done", stopReason: "toolCalls" },
+          ])
+        : Stream.fromIterable([{ _tag: "done", stopReason: "done" }]);
+    },
+  };
+  const slow: Tool<{ readonly value: string }> = {
+    description: "Completes after fast.",
+    execute: () => Deferred.await(fastCompleted).pipe(Effect.as({ content: "slow result" })),
+    name: "slow",
+    parameters: Schema.Struct({ value: Schema.String }),
+  };
+  const fast: Tool<{ readonly value: string }> = {
+    description: "Completes first.",
+    execute: () =>
+      Deferred.succeed(fastCompleted, undefined).pipe(Effect.as({ content: "fast result" })),
+    name: "fast",
+    parameters: Schema.Struct({ value: Schema.String }),
+  };
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const progress = yield* Effect.fork(
+        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+          Effect.sync(() => observed.push(item)),
+        ),
+      );
+      yield* Effect.yieldNow();
+      const settled = yield* turns.runTurn(session.id, "Use the tools");
+      yield* Fiber.interrupt(progress);
+      return { branch: yield* journal.readBranch(session.id), settled };
+    }).pipe(Effect.provide(testLayer(provider, undefined, ToolRegistryLive([slow, fast])))),
+  );
+
+  expect(result.settled).toEqual({ stopReason: "done" });
+  expect(observed.filter((item) => item._tag === "toolStarted")).toEqual([
+    { _tag: "toolStarted", name: "slow", toolCallId: "slow-call" },
+    { _tag: "toolStarted", name: "fast", toolCallId: "fast-call" },
+  ]);
+  expect(observed.filter((item) => item._tag === "toolCompleted")).toEqual([
+    { _tag: "toolCompleted", isError: false, toolCallId: "fast-call" },
+    { _tag: "toolCompleted", isError: false, toolCallId: "slow-call" },
+  ]);
+  expect(result.branch.map((entry) => entry.payload)).toMatchObject([
+    {},
+    { content: "Use the tools", role: "user" },
+    {
+      role: "assistant",
+      stopReason: "toolCalls",
+      toolCalls: [
+        { argumentsJson: '{"value":"slow"}', id: "slow-call", name: "slow" },
+        { argumentsJson: '{"value":"fast"}', id: "fast-call", name: "fast" },
+      ],
+    },
+    { content: "slow result", role: "toolResult", toolCallId: "slow-call" },
+    { content: "fast result", role: "toolResult", toolCallId: "fast-call" },
+    { role: "assistant", stopReason: "done" },
+  ]);
 });
 
 test("provider failure after retries exhaust persists an error assistant entry and settles", async () => {
@@ -469,6 +557,75 @@ test("abort mid-stream persists the partial assistant entry with stop reason abo
     kind: "message",
     payload: { content: "Partial reply.", role: "assistant", stopReason: "aborted" },
   });
+});
+
+test("abort during a tool batch interrupts execution and persists one result per call before settling", async () => {
+  const started = await Effect.runPromise(Deferred.make<void>());
+  const finalized = await Effect.runPromise(Ref.make(false));
+  const provider: ProviderService = {
+    streamAssistant: () =>
+      Stream.fromIterable([
+        { _tag: "toolCall", argumentsJson: '{"value":"first"}', id: "first-call", name: "wait" },
+        { _tag: "toolCall", argumentsJson: '{"value":"second"}', id: "second-call", name: "wait" },
+        { _tag: "done", stopReason: "toolCalls" },
+      ]),
+  };
+  const tool: Tool<{ readonly value: string }, Scope.Scope> = {
+    description: "Waits until the turn is aborted.",
+    execute: () =>
+      Effect.addFinalizer(() => Ref.set(finalized, true)).pipe(
+        Effect.zipRight(Deferred.succeed(started, undefined)),
+        Effect.zipRight(Effect.never),
+      ),
+    executionMode: "sequential",
+    name: "wait",
+    parameters: Schema.Struct({ value: Schema.String }),
+  };
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const running = yield* Effect.fork(turns.runTurn(session.id, "Run tools"));
+      yield* Deferred.await(started);
+      const aborted = yield* turns.abortTurn(session.id);
+      return {
+        aborted,
+        branch: yield* journal.readBranch(session.id),
+        finalized: yield* Ref.get(finalized),
+        settled: yield* Fiber.join(running),
+      };
+    }).pipe(Effect.provide(testLayer(provider, undefined, ToolRegistryLive([tool])))),
+  );
+
+  expect(result.aborted).toEqual({ aborted: true, turnOrdinal: 1 });
+  expect(result.finalized).toBe(true);
+  expect(result.settled).toEqual({ stopReason: "aborted" });
+  expect(result.branch.map((entry) => entry.payload)).toMatchObject([
+    {},
+    { content: "Run tools", role: "user" },
+    {
+      role: "assistant",
+      stopReason: "toolCalls",
+      toolCalls: [
+        { argumentsJson: '{"value":"first"}', id: "first-call", name: "wait" },
+        { argumentsJson: '{"value":"second"}', id: "second-call", name: "wait" },
+      ],
+    },
+    {
+      content: "Tool execution interrupted.",
+      isError: true,
+      role: "toolResult",
+      toolCallId: "first-call",
+    },
+    {
+      content: "Tool execution interrupted.",
+      isError: true,
+      role: "toolResult",
+      toolCallId: "second-call",
+    },
+  ]);
 });
 
 test("abort after assistant settlement begins leaves the active turn untouched", async () => {

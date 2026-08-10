@@ -29,10 +29,13 @@ import { BudgetExceeded, type ProviderError } from "./errors.js";
 import { Mailbox, type MailboxFailure } from "./mailbox.js";
 import { type Progress, ProgressHub, type TurnPhase } from "./progress.js";
 import { type AssistantStopReason, Provider } from "./provider.js";
+import { ToolRegistry } from "./tool.js";
+import { executeToolBatch, type ToolBatchResult, type ToolCall } from "./tool-batch.js";
 
 export interface TurnOptions {
   readonly contextBudget?: number;
   readonly maxAttempts?: number;
+  readonly toolConcurrency?: number;
 }
 
 export interface TurnResult {
@@ -103,7 +106,7 @@ const journalFailureDetail = (failure: JournalFailure, cause: Cause.Cause<unknow
 export const TurnsLive = (): Layer.Layer<
   Turns,
   never,
-  Journal | Mailbox | ProgressHub | Provider
+  Journal | Mailbox | ProgressHub | Provider | ToolRegistry
 > =>
   Layer.effect(
     Turns,
@@ -112,6 +115,7 @@ export const TurnsLive = (): Layer.Layer<
       const mailbox = yield* Mailbox;
       const progress = yield* ProgressHub;
       const provider = yield* Provider;
+      const toolRegistry = yield* ToolRegistry;
       const active = yield* Ref.make<Map<SessionId, ActiveTurn>>(new Map());
       const execute = (
         sessionId: SessionId,
@@ -129,40 +133,45 @@ export const TurnsLive = (): Layer.Layer<
           const stage = yield* Ref.make<"running" | "settling">("running");
           const stopReason = yield* Ref.make<AssistantStopReason>("done");
           const text = yield* Ref.make("");
+          const toolCalls = yield* Ref.make<ReadonlyArray<ToolCall>>([]);
+          const executingCalls = yield* Ref.make<ReadonlyArray<ToolCall> | undefined>(undefined);
 
           const settle = (
             reason: AssistantStopReason,
             diagnostic: AssistantDiagnostic | undefined,
             contentOverride: string | undefined = undefined,
+            appendAssistant = true,
           ): Effect.Effect<void, JournalFailure> =>
             Effect.uninterruptible(
               Effect.gen(function* () {
                 yield* Ref.set(stage, "settling");
                 yield* phaseChanged(progress, sessionId, "SETTLING");
                 const assistantContent = contentOverride ?? (yield* Ref.get(text));
-                const assistant = yield* journal.appendEntry(
-                  sessionId,
-                  EntryDraftSchema.make({
-                    kind: "message",
-                    payload:
-                      diagnostic === undefined
-                        ? {
-                            content: assistantContent,
-                            role: "assistant",
-                            stopReason: reason,
-                          }
-                        : {
-                            content: assistantContent,
-                            diagnostic,
-                            role: "assistant",
-                            stopReason: reason,
-                          },
-                  }),
-                );
-                yield* Effect.annotateCurrentSpan({
-                  assistantEntryId: assistant.id,
-                  stopReason: reason,
-                });
+                if (appendAssistant) {
+                  const assistant = yield* journal.appendEntry(
+                    sessionId,
+                    EntryDraftSchema.make({
+                      kind: "message",
+                      payload:
+                        diagnostic === undefined
+                          ? {
+                              content: assistantContent,
+                              role: "assistant",
+                              stopReason: reason,
+                            }
+                          : {
+                              content: assistantContent,
+                              diagnostic,
+                              role: "assistant",
+                              stopReason: reason,
+                            },
+                    }),
+                  );
+                  yield* Effect.annotateCurrentSpan({
+                    assistantEntryId: assistant.id,
+                    stopReason: reason,
+                  });
+                }
               }).pipe(
                 Effect.ensuring(
                   Effect.gen(function* () {
@@ -187,6 +196,7 @@ export const TurnsLive = (): Layer.Layer<
               Effect.gen(function* () {
                 yield* Ref.set(stopReason, "done");
                 yield* Ref.set(text, "");
+                yield* Ref.set(toolCalls, []);
                 const attempt = yield* Ref.updateAndGet(attempts, (count) => count + 1);
                 const attemptProgress = yield* Ref.make<ReadonlyArray<Progress>>([]);
                 yield* Effect.annotateCurrentSpan({ attempt });
@@ -205,11 +215,138 @@ export const TurnsLive = (): Layer.Layer<
                       const next: Progress = { _tag: "assistantThinking", text: item.text };
                       return Ref.update(attemptProgress, (current) => [...current, next]);
                     }
+                    if (item._tag === "toolCall") {
+                      return Ref.update(toolCalls, (current) => [
+                        ...current,
+                        {
+                          argumentsJson: item.argumentsJson,
+                          id: item.id,
+                          name: item.name,
+                        },
+                      ]);
+                    }
+                    if (item._tag === "toolCallDelta") {
+                      return Ref.update(toolCalls, (current) => {
+                        const prior = current.find((call) => call.id === item.id);
+                        if (prior === undefined && item.name === undefined) {
+                          return current;
+                        }
+                        const next: ToolCall = {
+                          argumentsJson: (prior?.argumentsJson ?? "") + item.argumentsJsonDelta,
+                          id: item.id,
+                          name: item.name ?? prior?.name ?? "",
+                        };
+                        return prior === undefined
+                          ? [...current, next]
+                          : current.map((call) => (call.id === item.id ? next : call));
+                      });
+                    }
                     return Ref.set(stopReason, item.stopReason);
                   },
                 );
                 const buffered = yield* Ref.get(attemptProgress);
                 yield* Effect.forEach(buffered, (item) => progress.publish(sessionId, item));
+              }),
+            );
+
+          const request = (): Effect.Effect<
+            AssistantStopReason,
+            BudgetExceeded | JournalFailure | ProviderError
+          > =>
+            Effect.suspend(() =>
+              Effect.gen(function* () {
+                yield* phaseChanged(progress, sessionId, "ASSEMBLING");
+                const branch = yield* journal.readBranch(sessionId);
+                const context = yield* foldContext(branch, {
+                  budget: options.contextBudget ?? DEFAULT_CONTEXT_BUDGET,
+                  visibility: asContextItem,
+                }).pipe(
+                  Effect.mapError((error) =>
+                    error._tag === "ContextBudgetExceeded"
+                      ? new BudgetExceeded({
+                          budget: error.budget,
+                          optionsDiagnostic: error.optionsDiagnostic,
+                          required: error.required,
+                        })
+                      : error,
+                  ),
+                );
+                yield* phaseChanged(progress, sessionId, "STREAMING");
+                yield* consume(context.items).pipe(
+                  Effect.retry(
+                    Schedule.recurs((options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS) - 1).pipe(
+                      Schedule.whileInput((error: ProviderError) => error.transient),
+                    ),
+                  ),
+                );
+                const reason = yield* Ref.get(stopReason);
+                if (reason !== "toolCalls") {
+                  return reason;
+                }
+                const calls = yield* Ref.get(toolCalls);
+                const assistant = yield* journal.appendEntry(
+                  sessionId,
+                  EntryDraftSchema.make({
+                    kind: "message",
+                    payload: {
+                      content: yield* Ref.get(text),
+                      role: "assistant",
+                      stopReason: "toolCalls",
+                      toolCalls: calls,
+                    },
+                  }),
+                );
+                yield* Effect.annotateCurrentSpan({
+                  assistantEntryId: assistant.id,
+                  stopReason: reason,
+                });
+                yield* phaseChanged(progress, sessionId, "EXECUTING");
+                yield* Ref.set(executingCalls, calls);
+                const onToolCompleted = (result: ToolBatchResult): Effect.Effect<void> =>
+                  progress.publish(sessionId, {
+                    _tag: "toolCompleted",
+                    isError: result.isError === true,
+                    toolCallId: result.toolCallId,
+                  });
+                const onToolStarted = (call: ToolCall): Effect.Effect<void> =>
+                  progress.publish(sessionId, {
+                    _tag: "toolStarted",
+                    name: call.name,
+                    toolCallId: call.id,
+                  });
+                const batchOptions =
+                  options.toolConcurrency === undefined
+                    ? {
+                        onToolCompleted,
+                        onToolStarted,
+                      }
+                    : {
+                        concurrency: options.toolConcurrency,
+                        onToolCompleted,
+                        onToolStarted,
+                      };
+                const batch = yield* executeToolBatch(calls, { sessionId }, batchOptions).pipe(
+                  Effect.provideService(ToolRegistry, toolRegistry),
+                );
+                yield* Effect.forEach(
+                  batch.results,
+                  (result) =>
+                    journal.appendEntry(
+                      sessionId,
+                      EntryDraftSchema.make({
+                        kind: "message",
+                        payload: {
+                          content: result.content,
+                          isError: result.isError === true,
+                          role: "toolResult",
+                          toolCallId: result.toolCallId,
+                        },
+                      }),
+                    ),
+                  { concurrency: 1 },
+                );
+                yield* Ref.set(executingCalls, undefined);
+                return yield* request();
               }),
             );
 
@@ -219,41 +356,56 @@ export const TurnsLive = (): Layer.Layer<
               EntryDraftSchema.make({ kind: "message", payload: { content, role: "user" } }),
             );
             yield* Effect.annotateCurrentSpan({ sessionId, turnOrdinal, userEntryId: user.id });
-            yield* phaseChanged(progress, sessionId, "ASSEMBLING");
-            const branch = yield* journal.readBranch(sessionId);
-            const context = yield* foldContext(branch, {
-              budget: options.contextBudget ?? DEFAULT_CONTEXT_BUDGET,
-              visibility: asContextItem,
-            }).pipe(
-              Effect.mapError((error) =>
-                error._tag === "ContextBudgetExceeded"
-                  ? new BudgetExceeded({
-                      budget: error.budget,
-                      optionsDiagnostic: error.optionsDiagnostic,
-                      required: error.required,
-                    })
-                  : error,
-              ),
-            );
-            yield* phaseChanged(progress, sessionId, "STREAMING");
-            yield* consume(context.items).pipe(
-              Effect.retry(
-                Schedule.recurs((options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS) - 1).pipe(
-                  Schedule.whileInput((error: ProviderError) => error.transient),
-                ),
-              ),
-            );
-            const reason = yield* Ref.get(stopReason);
+            const reason = yield* request();
             yield* settle(reason, undefined);
             return { stopReason: reason };
           }).pipe(
             Effect.onInterrupt(() =>
-              settle("aborted", undefined).pipe(
-                Effect.exit,
-                Effect.flatMap((exit) =>
-                  Exit.isFailure(exit) ? Ref.set(abortSettleFailure, exit.cause) : Effect.void,
+              Ref.get(executingCalls)
+                .pipe(
+                  Effect.flatMap((calls) =>
+                    calls === undefined
+                      ? settle("aborted", undefined)
+                      : Effect.uninterruptible(
+                          Effect.forEach(
+                            calls,
+                            (call) =>
+                              journal
+                                .appendEntry(
+                                  sessionId,
+                                  EntryDraftSchema.make({
+                                    kind: "message",
+                                    payload: {
+                                      content: "Tool execution interrupted.",
+                                      isError: true,
+                                      role: "toolResult",
+                                      toolCallId: call.id,
+                                    },
+                                  }),
+                                )
+                                .pipe(
+                                  Effect.zipRight(
+                                    progress.publish(sessionId, {
+                                      _tag: "toolCompleted",
+                                      isError: true,
+                                      toolCallId: call.id,
+                                    }),
+                                  ),
+                                ),
+                            { concurrency: 1 },
+                          ).pipe(
+                            Effect.zipRight(Effect.annotateCurrentSpan({ interrupted: true })),
+                            Effect.zipRight(settle("aborted", undefined, undefined, false)),
+                          ),
+                        ),
+                  ),
+                )
+                .pipe(
+                  Effect.exit,
+                  Effect.flatMap((exit) =>
+                    Exit.isFailure(exit) ? Ref.set(abortSettleFailure, exit.cause) : Effect.void,
+                  ),
                 ),
-              ),
             ),
             Effect.catchAllCause((cause) =>
               Ref.get(stage).pipe(

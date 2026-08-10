@@ -6,7 +6,13 @@
 import type { SessionId } from "@peye/journal";
 import { Context, Effect, Layer, Queue, Ref, Schema, Stream } from "effect";
 
-export const TurnPhaseSchema = Schema.Literal("ASSEMBLING", "IDLE", "SETTLING", "STREAMING");
+export const TurnPhaseSchema = Schema.Literal(
+  "ASSEMBLING",
+  "EXECUTING",
+  "IDLE",
+  "SETTLING",
+  "STREAMING",
+);
 
 export type TurnPhase = Schema.Schema.Type<typeof TurnPhaseSchema>;
 
@@ -15,6 +21,14 @@ export const ProgressSchema = Schema.Union(
   Schema.TaggedStruct("assistantThinking", { text: Schema.String }),
   Schema.TaggedStruct("phaseChanged", { phase: TurnPhaseSchema }),
   Schema.TaggedStruct("progressDropped", { count: Schema.Number }),
+  Schema.TaggedStruct("toolCompleted", {
+    isError: Schema.Boolean,
+    toolCallId: Schema.String,
+  }),
+  Schema.TaggedStruct("toolStarted", {
+    name: Schema.String,
+    toolCallId: Schema.String,
+  }),
   Schema.TaggedStruct("turnSettled", {
     revision: Schema.Number,
     stopReason: Schema.Literal("aborted", "done", "error", "toolCalls"),

@@ -13,7 +13,19 @@ export type AssistantStopReason = "aborted" | "done" | "error" | "toolCalls";
 export type AssistantItem =
   | { readonly _tag: "done"; readonly stopReason: AssistantStopReason }
   | { readonly _tag: "textDelta"; readonly text: string }
-  | { readonly _tag: "thinkingDelta"; readonly text: string };
+  | { readonly _tag: "thinkingDelta"; readonly text: string }
+  | {
+      readonly _tag: "toolCall";
+      readonly argumentsJson: string;
+      readonly id: string;
+      readonly name: string;
+    }
+  | {
+      readonly _tag: "toolCallDelta";
+      readonly argumentsJsonDelta: string;
+      readonly id: string;
+      readonly name: string | undefined;
+    };
 
 export interface ProviderStreamOptions {
   readonly turnOrdinal: number;

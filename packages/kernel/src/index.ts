@@ -49,6 +49,24 @@ export {
   type SessionsService,
 } from "./sessions.js";
 export {
+  type RegisteredTool,
+  type Tool,
+  type ToolExecutionContext,
+  type ToolExecutionMode,
+  ToolRegistry,
+  ToolRegistryLive,
+  type ToolRegistryService,
+  type ToolResult,
+} from "./tool.js";
+export {
+  DEFAULT_TOOL_CONCURRENCY,
+  executeToolBatch,
+  type ToolBatchOptions,
+  type ToolBatchResult,
+  type ToolBatchResults,
+  type ToolCall,
+} from "./tool-batch.js";
+export {
   type TurnFailure,
   type TurnOptions,
   type TurnResult,
