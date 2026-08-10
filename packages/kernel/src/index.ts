@@ -24,6 +24,23 @@ export {
   type MailboxService,
 } from "./mailbox.js";
 export {
+  PROGRESS_CAPACITY,
+  type Progress,
+  ProgressHub,
+  ProgressHubLive,
+  ProgressSchema,
+  type ProgressService,
+  type TurnPhase,
+  TurnPhaseSchema,
+} from "./progress.js";
+export {
+  type AssistantItem,
+  type AssistantStopReason,
+  Provider,
+  type ProviderService,
+  type ProviderStreamOptions,
+} from "./provider.js";
+export {
   type SessionInfo,
   type SessionSummary,
   Sessions,
@@ -31,3 +48,11 @@ export {
   SessionsLive,
   type SessionsService,
 } from "./sessions.js";
+export {
+  type TurnFailure,
+  type TurnOptions,
+  type TurnResult,
+  Turns,
+  TurnsLive,
+  type TurnsService,
+} from "./turn.js";
