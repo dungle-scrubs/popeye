@@ -1,0 +1,12 @@
+pre-commit:
+  parallel: true
+  commands:
+    lint:
+      glob: "*.{js,mjs,ts,json,jsonc}"
+      run: pnpm lint
+    typecheck:
+      glob: "*.ts"
+      run: pnpm typecheck
+    check-boundaries:
+      glob: "*.{cts,js,mjs,mts,ts,tsx}"
+      run: pnpm check-boundaries

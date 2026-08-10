@@ -1,0 +1,32 @@
+{
+  "name": "@peye/journal",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./conformance": {
+      "types": "./dist/conformance/index.d.ts",
+      "default": "./dist/conformance/index.js"
+    }
+  },
+  "peerDependencies": {
+    "effect": "^3.22.1",
+    "vitest": "^3.2.7"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "effect": "3.22.1",
+    "vitest": "3.2.7"
+  }
+}

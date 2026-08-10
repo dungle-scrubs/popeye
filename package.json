@@ -1,0 +1,24 @@
+{
+  "name": "peye-coding-agent",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.5.2",
+  "scripts": {
+    "build": "tsc --build",
+    "check-boundaries": "node scripts/check-boundaries.mjs",
+    "lint": "biome check . --error-on-warnings",
+    "prepare": "lefthook install",
+    "test": "vitest run",
+    "typecheck": "tsc --build && tsc -p tsconfig.typecheck.json"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.7",
+    "@types/node": "26.2.0",
+    "lefthook": "2.1.10",
+    "typescript": "7.0.2",
+    "vitest": "3.2.7"
+  }
+}

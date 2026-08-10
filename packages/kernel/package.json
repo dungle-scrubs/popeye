@@ -1,0 +1,25 @@
+{
+  "name": "@peye/kernel",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@peye/journal": "workspace:*",
+    "@peye/protocol": "workspace:*"
+  },
+  "peerDependencies": {
+    "effect": "^3.22.1"
+  },
+  "devDependencies": {
+    "effect": "3.22.1"
+  }
+}

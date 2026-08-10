@@ -5,77 +5,77 @@
 > file as features are implemented - never mark a milestone complete
 > until every current-cutoff checkbox under it is checked.
 
-> Current focus: Phase 1 - Foundations
+> Current focus: Phase 2 - Kernel, ai seam, driver head
 
 ## Phase 1: Foundations
 
 ### M1: Workspace scaffold
 Source: `implementation.md` (M1); D-023, D-008
 
-- [ ] pnpm workspace builds five packages (`@peye/journal`, `@peye/kernel`, `@peye/plugins`, `@peye/protocol`, `@peye/cli`) via tsc project references
-- [ ] `pnpm lint` runs Biome across all packages
-- [ ] `pnpm test` runs vitest across all packages
-- [ ] Lefthook pre-commit runs lint + typecheck
-- [ ] Node engines field enforces >= 24
-- [ ] Import-boundary check fails CI when a head imports kernel internals
-- [ ] Import-boundary check fails CI when any module other than the ai seam imports `@earendil-works/pi-ai`
-- [ ] Import-boundary check fails CI when a feature module imports kernel internals (dogfood rule)
-- [ ] A deliberately violating fixture proves each boundary check fires
+- [x] pnpm workspace builds five packages (`@peye/journal`, `@peye/kernel`, `@peye/plugins`, `@peye/protocol`, `@peye/cli`) via tsc project references
+- [x] `pnpm lint` runs Biome across all packages
+- [x] `pnpm test` runs vitest across all packages
+- [x] Lefthook pre-commit runs lint + typecheck
+- [x] Node engines field enforces >= 24
+- [x] Import-boundary check fails CI when a head imports kernel internals
+- [x] Import-boundary check fails CI when any module other than the ai seam imports `@earendil-works/pi-ai`
+- [x] Import-boundary check fails CI when a feature module imports kernel internals (dogfood rule)
+- [x] A deliberately violating fixture proves each boundary check fires
 
 ### M2: Failure taxonomy and versioned line codec
 Source: `implementation.md` (M2); Normative Contracts (failure taxonomy)
 
-- [ ] Every taxonomy error (`ProviderError`, `ToolError`, `GateRejected`, `StaleRevision`, `PluginLoadError`, `JournalError`, `ProtocolError`, `BudgetExceeded`, `InteractionTimeout`) constructs with its declared fields and round-trips them
-- [ ] Encoded journal lines carry a schema version envelope
-- [ ] Decoding a current-version line yields the typed value
-- [ ] Decoding an older-version line runs its registered migration chain
-- [ ] Decoding an older-version line with a missing migration fails with the typed migration error naming both versions
-- [ ] Decoding malformed JSON or a schema mismatch fails typed, never throws
+- [x] Every taxonomy error (`ProviderError`, `ToolError`, `GateRejected`, `StaleRevision`, `PluginLoadError`, `JournalError`, `ProtocolError`, `BudgetExceeded`, `InteractionTimeout`) constructs with its declared fields and round-trips them
+- [x] Encoded journal lines carry a schema version envelope
+- [x] Decoding a current-version line yields the typed value
+- [x] Decoding an older-version line runs its registered migration chain
+- [x] A migration gap in the registry fails typed naming the missing version (enforced at codec creation, which is stronger than the original decode-time wording; M2 review)
+- [x] Decoding malformed JSON or a schema mismatch fails typed, never throws
 
 ### M3: Journal service and in-memory layer
 Source: `implementation.md` (M3); Normative Contracts (journal rules)
 
-- [ ] Creating a session appends a root entry and reports it as the leaf
-- [ ] Appending an entry parents it to the current leaf and moves the leaf
-- [ ] Appending a record does not move the entry leaf
-- [ ] Moving the leaf to an earlier entry appends a leaf-moved record (no rewrite)
-- [ ] Branch read returns the root-to-leaf entry path for the current leaf
-- [ ] Records never appear in branch-entry reads
-- [ ] Leaf position reconstructs from records alone after close/reopen
-- [ ] Two sessions in one journal directory stay isolated
-- [ ] Entry ids are unique and stable across reopen
+- [x] Creating a session appends a root entry and reports it as the leaf
+- [x] Appending an entry parents it to the current leaf and moves the leaf
+- [x] Appending a record does not move the entry leaf
+- [x] Moving the leaf to an earlier entry appends a leaf-moved record (no rewrite)
+- [x] Branch read returns the root-to-leaf entry path for the current leaf
+- [x] Records never appear in branch-entry reads
+- [x] Leaf position reconstructs from records alone after close/reopen
+- [x] Two sessions in one journal directory stay isolated
+- [x] Entry ids are unique and stable across reopen
 
 ### M4: JSONL journal layer
 Source: `implementation.md` (M4); Normative Contracts (journal rules)
 
-- [ ] Appends are acknowledged only after durable write
-- [ ] A torn (partial) unacknowledged tail line is truncated on open and the journal opens clean
-- [ ] Acknowledged lines are byte-identical after any recovery
-- [ ] An acknowledged record sequence violating single-writer invariants opens as `JournalError` with a named corruption class
-- [ ] Corruption is never repaired silently (assert no file mutation on reject)
-- [ ] Open/recovery emits structured diagnostics (file, action taken, corruption class if any)
-- [ ] JSONL layer passes every M3 behavior via the shared interface
+- [x] Appends are acknowledged only after durable write
+- [x] A torn (partial) unacknowledged tail line is truncated on open and the journal opens clean
+- [x] Acknowledged lines are byte-identical after any recovery
+- [x] An acknowledged record sequence violating single-writer invariants opens as `JournalError` with a named corruption class
+- [x] Corruption is never repaired silently (assert no file mutation on reject)
+- [x] Open/recovery emits structured diagnostics (file, action taken, corruption class if any)
+- [x] JSONL layer passes every M3 behavior via the shared interface
 
 ### M5: Journal conformance suite
 Source: `implementation.md` (M5)
 
-- [ ] Conformance suite exports as a package export parameterized by a `Journal` layer
-- [ ] In-memory layer passes the full suite
-- [ ] JSONL layer passes the full suite
-- [ ] A deliberately broken fixture layer fails with actionable assertion output
+- [x] Conformance suite exports as a package export parameterized by a `Journal` layer
+- [x] In-memory layer passes the full suite
+- [x] JSONL layer passes the full suite
+- [x] A deliberately broken fixture layer fails with actionable assertion output
 
 ### M6: Compaction semantics and context fold
 Source: `implementation.md` (M6); Normative Contracts (journal rules)
 
-- [ ] Compaction entry records summarized span (first/last ids), summary, and retained-tail ids
-- [ ] Fold with a compaction on the branch uses summary + retained tail + later entries only
-- [ ] Fold never reads entries older than the newest compaction on the branch (assert access)
-- [ ] Compaction-of-compaction folds correctly (newer covers older)
-- [ ] A branch created from an entry inside a summarized span folds without the other branch's compaction
-- [ ] Non-model-visible entry kinds are excluded by the single visibility boundary and nowhere else
-- [ ] Fold respects the token budget parameter
-- [ ] Budget unfittable even after compaction yields `BudgetExceeded` with the options diagnostic
-- [ ] Fold of an empty session (root only) yields an empty message sequence
+- [x] Compaction entry records summarized span (first/last ids), summary, and retained-tail ids
+- [x] Fold with a compaction on the branch uses summary + retained tail + later entries only
+- [x] Fold never reads entries older than the newest compaction on the branch (assert access)
+- [x] Compaction-of-compaction folds correctly (newer covers older)
+- [x] A branch created from an entry inside a summarized span folds without the other branch's compaction
+- [x] Non-model-visible entry kinds are excluded by the single visibility boundary and nowhere else
+- [x] Fold respects the token budget parameter
+- [x] Budget unfittable even after compaction yields `BudgetExceeded` with the options diagnostic
+- [x] Fold of an empty session (root only) yields an empty message sequence
 
 ## Phase 2: Kernel, ai seam, driver head
 
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 0
-- Remaining: 177
-- Current cutoff blockers: 177
+- Completed: 44
+- Remaining: 133
+- Current cutoff blockers: 133
 - Accepted/deferred follow-up: 11
 - Superseded/obsolete checklist debt: 0

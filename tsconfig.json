@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/protocol" },
+    { "path": "./packages/journal" },
+    { "path": "./packages/kernel" },
+    { "path": "./packages/plugins" },
+    { "path": "./packages/cli" }
+  ]
+}

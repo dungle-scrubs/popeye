@@ -719,14 +719,16 @@ implementation or declaring convergence.
 ## Validation Commands
 
 ```bash
-pnpm install
-pnpm build          # tsc project references
-pnpm lint           # Biome + import-boundary check
-pnpm test           # vitest, all packages
-pnpm test:conformance  # journal + seam suites (from Phase 1/2 onward)
+pnpm install            # also installs lefthook hooks via prepare
+pnpm build              # tsc project references
+pnpm typecheck          # build + noEmit check of tests/scripts/configs
+pnpm lint               # biome check . --error-on-warnings
+pnpm test               # vitest, all packages (includes boundary tests)
+pnpm check-boundaries   # import-boundary rules, standalone CLI
 ```
 
-(Names fixed at M1; this table is updated there if scaffold differs.)
+(Updated at M1 to match the actual scaffold. Journal/seam conformance
+suites join `pnpm test` from Phase 1/2 milestones onward.)
 
 ---
 
