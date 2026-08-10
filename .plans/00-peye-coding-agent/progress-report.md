@@ -82,13 +82,13 @@ Source: `implementation.md` (M6); Normative Contracts (journal rules)
 ### M7: Single-writer mailbox and session lifecycle
 Source: `implementation.md` (M7); D-016
 
-- [ ] All mutating commands for a session execute on one fiber in dequeue order
-- [ ] Concurrent commands from two callers serialize with no interleaving anomalies (stress test)
-- [ ] `expectedRevision` mismatch rejects with typed `StaleRevision` and does not queue
-- [ ] Matching `expectedRevision` proceeds; omitted `expectedRevision` proceeds
-- [ ] create/resume/list session commands work against the journal
-- [ ] Resuming a session restores leaf position and revision from the journal
-- [ ] Protocol command spans include sessionId and revision
+- [x] All mutating commands for a session execute on one fiber in dequeue order
+- [x] Concurrent commands from two callers serialize with no interleaving anomalies (stress test)
+- [x] `expectedRevision` mismatch rejects with typed `StaleRevision` and does not queue
+- [x] Matching `expectedRevision` proceeds; omitted `expectedRevision` proceeds
+- [x] create/resume/list session commands work against the journal
+- [x] Resuming a session restores leaf position and revision from the journal
+- [x] Protocol command spans include sessionId and revision
 
 ### M8: Turn execution against fake provider
 Source: `implementation.md` (M8); Normative Contracts (state machine)
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 44
-- Remaining: 133
-- Current cutoff blockers: 133
+- Completed: 51
+- Remaining: 126
+- Current cutoff blockers: 126
 - Accepted/deferred follow-up: 11
 - Superseded/obsolete checklist debt: 0
