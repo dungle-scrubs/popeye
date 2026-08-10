@@ -12,15 +12,15 @@
 ### M1: Workspace scaffold
 Source: `implementation.md` (M1); D-023, D-008
 
-- [ ] pnpm workspace builds five packages (`@peye/journal`, `@peye/kernel`, `@peye/plugins`, `@peye/protocol`, `@peye/cli`) via tsc project references
-- [ ] `pnpm lint` runs Biome across all packages
-- [ ] `pnpm test` runs vitest across all packages
-- [ ] Lefthook pre-commit runs lint + typecheck
-- [ ] Node engines field enforces >= 24
-- [ ] Import-boundary check fails CI when a head imports kernel internals
-- [ ] Import-boundary check fails CI when any module other than the ai seam imports `@earendil-works/pi-ai`
-- [ ] Import-boundary check fails CI when a feature module imports kernel internals (dogfood rule)
-- [ ] A deliberately violating fixture proves each boundary check fires
+- [x] pnpm workspace builds five packages (`@peye/journal`, `@peye/kernel`, `@peye/plugins`, `@peye/protocol`, `@peye/cli`) via tsc project references
+- [x] `pnpm lint` runs Biome across all packages
+- [x] `pnpm test` runs vitest across all packages
+- [x] Lefthook pre-commit runs lint + typecheck
+- [x] Node engines field enforces >= 24
+- [x] Import-boundary check fails CI when a head imports kernel internals
+- [x] Import-boundary check fails CI when any module other than the ai seam imports `@earendil-works/pi-ai`
+- [x] Import-boundary check fails CI when a feature module imports kernel internals (dogfood rule)
+- [x] A deliberately violating fixture proves each boundary check fires
 
 ### M2: Failure taxonomy and versioned line codec
 Source: `implementation.md` (M2); Normative Contracts (failure taxonomy)
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 0
-- Remaining: 177
-- Current cutoff blockers: 177
+- Completed: 9
+- Remaining: 168
+- Current cutoff blockers: 168
 - Accepted/deferred follow-up: 11
 - Superseded/obsolete checklist debt: 0
