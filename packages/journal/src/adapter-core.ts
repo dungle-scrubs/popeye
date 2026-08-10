@@ -20,6 +20,8 @@ import {
   type JournalService,
 } from "./journal.js";
 import {
+  type CompactionPayload,
+  CompactionPayloadSchema,
   type Entry,
   EntryDraftSchema,
   type EntryId,
@@ -37,6 +39,7 @@ import {
 const strict: { readonly onExcessProperty: "error" } = { onExcessProperty: "error" };
 const decodeEntryDraft = Schema.decodeUnknown(EntryDraftSchema, strict);
 const decodeRecordDraft = Schema.decodeUnknown(RecordDraftSchema, strict);
+const decodeCompactionPayload = Schema.decodeUnknown(CompactionPayloadSchema, strict);
 
 const createId = (): string => randomBytes(12).toString("base64url");
 const createEntryId = (): EntryId => EntryIdSchema.make(createId());
@@ -48,6 +51,50 @@ const missingSession = (sessionId: SessionId): JournalNotFound =>
 
 const rejectedDraft = (kind: string, cause: unknown): JournalDraftRejected =>
   new JournalDraftRejected({ cause, kind, reason: "invalid_payload" });
+
+const rejectedCompaction = (message: string): JournalDraftRejected =>
+  new JournalDraftRejected({ kind: "compaction", message, reason: "invalid_payload" });
+
+const branchToLeaf = (session: DerivedSession): ReadonlyArray<Entry> => {
+  const branch: Array<Entry> = [];
+  let entry: Entry | undefined = session.leaf;
+  while (entry !== undefined) {
+    branch.push(entry);
+    entry = entry.parentId === null ? undefined : session.entries.get(entry.parentId);
+  }
+  return branch.reverse();
+};
+
+const validateCompaction = (
+  session: DerivedSession,
+  payload: CompactionPayload,
+): JournalDraftRejected | undefined => {
+  const branch = branchToLeaf(session);
+  const firstIndex = branch.findIndex((entry) => entry.id === payload.firstSummarizedId);
+  const lastIndex = branch.findIndex((entry) => entry.id === payload.lastSummarizedId);
+
+  if (firstIndex < 0 || lastIndex < 0 || firstIndex > lastIndex) {
+    return rejectedCompaction(
+      "Compaction span must be a first-to-last contiguous ancestor path of the current branch.",
+    );
+  }
+
+  const retainedTailIds = new Set(payload.retainedTailIds);
+  if (retainedTailIds.size !== payload.retainedTailIds.length) {
+    return rejectedCompaction("Compaction retainedTailIds must not contain duplicate entry ids.");
+  }
+
+  for (const retainedTailId of payload.retainedTailIds) {
+    const retainedIndex = branch.findIndex((entry) => entry.id === retainedTailId);
+    if (retainedIndex < firstIndex) {
+      return rejectedCompaction(
+        "Compaction retainedTailIds must name existing entries within or after the summarized span on the current branch.",
+      );
+    }
+  }
+
+  return undefined;
+};
 
 export interface JournalIoObservation {
   readonly operation: "ack" | "sync" | "write";
@@ -178,13 +225,45 @@ export const createJournalAdapter = (
     const stateRef = yield* Ref.make(initialState);
 
     return Journal.of({
+      appendCompaction: (sessionId, input) =>
+        withSession(persistence, stateRef, sessionId, (session) =>
+          Effect.gen(function* () {
+            const payload = yield* decodeCompactionPayload(input).pipe(
+              Effect.mapError((cause) => rejectedDraft("compaction", cause)),
+            );
+            const invalid = validateCompaction(session, payload);
+            if (invalid !== undefined) {
+              return yield* Effect.fail(invalid);
+            }
+            const appended: Entry = {
+              id: createEntryId(),
+              kind: "compaction",
+              parentId: session.leaf.id,
+              payload,
+            };
+            yield* persist(persistence, stateRef, sessionId, {
+              item: appended,
+              sessionId,
+              type: "entry",
+            });
+            yield* updateSession(stateRef, sessionId, (current) => ({
+              ...current,
+              derived: {
+                ...session,
+                entries: new Map([...session.entries, [appended.id, appended]]),
+                leaf: appended,
+              },
+            }));
+            return appended;
+          }),
+        ),
       appendEntry: (sessionId, input) =>
         withSession(persistence, stateRef, sessionId, (session) =>
           Effect.gen(function* () {
             const entry = yield* decodeEntryDraft(input).pipe(
               Effect.mapError((cause) => rejectedDraft(input.kind, cause)),
             );
-            if (entry.kind === "session_root") {
+            if (entry.kind === "session_root" || entry.kind === "compaction") {
               return yield* Effect.fail(
                 new JournalDraftRejected({ kind: entry.kind, reason: "reserved_kind" }),
               );
@@ -302,15 +381,9 @@ export const createJournalAdapter = (
           }),
         ),
       readBranch: (sessionId) =>
-        withSession(persistence, stateRef, sessionId, (session) => {
-          const branch: Array<Entry> = [];
-          let entry: Entry | undefined = session.leaf;
-          while (entry !== undefined) {
-            branch.push(entry);
-            entry = entry.parentId === null ? undefined : session.entries.get(entry.parentId);
-          }
-          return Effect.succeed(branch.reverse());
-        }),
+        withSession(persistence, stateRef, sessionId, (session) =>
+          Effect.succeed(branchToLeaf(session)),
+        ),
       readRecords: (sessionId) =>
         withSession(persistence, stateRef, sessionId, (session) => Effect.succeed(session.records)),
     });

@@ -7,6 +7,8 @@ import { Context, Effect, Schema } from "effect";
 
 import { JournalError, type JournalFailure } from "./errors.js";
 import {
+  type CompactionPayload,
+  CompactionPayloadSchema,
   type Entry,
   type EntryDraft,
   type EntryId,
@@ -26,6 +28,10 @@ export interface CreatedSession {
 }
 
 export interface JournalService {
+  readonly appendCompaction: (
+    sessionId: SessionId,
+    payload: CompactionPayload,
+  ) => Effect.Effect<Entry, JournalFailure>;
   readonly appendEntry: (
     sessionId: SessionId,
     entry: EntryDraft,
@@ -56,6 +62,7 @@ export const isEntry = (line: JournalLine): line is EntryLine => line.type === "
 const strict: { readonly onExcessProperty: "error" } = { onExcessProperty: "error" };
 const decodeLeafMovedPayload = Schema.decodeUnknown(LeafMovedRecordPayloadSchema, strict);
 const decodeSessionRoot = Schema.decodeUnknown(SessionRootEntrySchema, strict);
+const decodeCompactionPayload = Schema.decodeUnknown(CompactionPayloadSchema, strict);
 
 const schemaMismatch = (cause: unknown): JournalError =>
   new JournalError({
@@ -96,7 +103,16 @@ export const deriveSession = (
 
     for (const line of lines.slice(1)) {
       if (isEntry(line)) {
-        if (line.item.kind === "session_root") {
+        const entry =
+          line.item.kind === "compaction"
+            ? {
+                ...line.item,
+                payload: yield* decodeCompactionPayload(line.item.payload).pipe(
+                  Effect.mapError(schemaMismatch),
+                ),
+              }
+            : line.item;
+        if (entry.kind === "session_root") {
           return yield* Effect.fail(
             new JournalError({
               corruptionClass: "invalid_record_sequence",
@@ -104,7 +120,7 @@ export const deriveSession = (
             }),
           );
         }
-        if (entries.has(line.item.id) || line.item.parentId !== leaf.id) {
+        if (entries.has(entry.id) || entry.parentId !== leaf.id) {
           return yield* Effect.fail(
             new JournalError({
               corruptionClass: "invalid_record_sequence",
@@ -112,8 +128,8 @@ export const deriveSession = (
             }),
           );
         }
-        entries.set(line.item.id, line.item);
-        leaf = line.item;
+        entries.set(entry.id, entry);
+        leaf = entry;
         continue;
       }
 

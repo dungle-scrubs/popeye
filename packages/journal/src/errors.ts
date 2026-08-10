@@ -4,6 +4,16 @@
  */
 import { Data } from "effect";
 
+/**
+ * Owns journal-local context budget failures until the kernel maps them into its failure taxonomy.
+ * It exists to keep the journal independent from the kernel while retaining budget diagnostics.
+ */
+export class ContextBudgetExceeded extends Data.TaggedError("ContextBudgetExceeded")<{
+  readonly budget: number;
+  readonly optionsDiagnostic: string;
+  readonly required: number;
+}> {}
+
 export type JournalCorruptionClass =
   | "dangling_leaf_reference"
   | "invalid_record_sequence"
@@ -29,6 +39,7 @@ export class JournalNotFound extends Data.TaggedError("JournalNotFound")<{
 export class JournalDraftRejected extends Data.TaggedError("JournalDraftRejected")<{
   readonly cause?: unknown;
   readonly kind: string;
+  readonly message?: string;
   readonly reason: "invalid_payload" | "reserved_kind";
 }> {}
 

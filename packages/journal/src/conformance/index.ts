@@ -107,6 +107,83 @@ export const describeJournalContract = async (makeLayer: MakeJournalLayer): Prom
       expect(result.leaf).toEqual(result.entry);
     });
 
+    test("appendCompaction appends a compaction entry for a contiguous current path", async () => {
+      const { layer } = makeLayer();
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const journal = yield* Journal;
+          const session = yield* journal.createSession();
+          const first = yield* journal.appendEntry(
+            session.id,
+            entryDraft("user_input", { text: "First." }),
+          );
+          const last = yield* journal.appendEntry(
+            session.id,
+            entryDraft("assistant_output", { text: "Second." }),
+          );
+          const compaction = yield* journal.appendCompaction(session.id, {
+            firstSummarizedId: first.id,
+            lastSummarizedId: last.id,
+            retainedTailIds: [last.id],
+            summary: "The user asked a question and received an answer.",
+          });
+          const leaf = yield* journal.getLeaf(session.id);
+
+          return { compaction, last, leaf };
+        }).pipe(Effect.provide(layer)),
+      );
+
+      expect(result.compaction).toMatchObject({
+        kind: "compaction",
+        parentId: result.last.id,
+        payload: {
+          firstSummarizedId: expect.any(String),
+          lastSummarizedId: expect.any(String),
+          retainedTailIds: [result.last.id],
+        },
+      });
+      expect(result.leaf).toEqual(result.compaction);
+    });
+
+    test("appendCompaction rejects a span outside the current branch with a typed draft rejection", async () => {
+      const { layer } = makeLayer();
+      const error = await Effect.runPromise(
+        Effect.gen(function* () {
+          const journal = yield* Journal;
+          const session = yield* journal.createSession();
+          const first = yield* journal.appendEntry(
+            session.id,
+            entryDraft("user_input", { text: "First." }),
+          );
+          const second = yield* journal.appendEntry(
+            session.id,
+            entryDraft("assistant_output", { text: "Second." }),
+          );
+          yield* journal.moveLeaf(session.id, first.id);
+          const alternate = yield* journal.appendEntry(
+            session.id,
+            entryDraft("assistant_output", { text: "Alternate." }),
+          );
+
+          return yield* Effect.flip(
+            journal.appendCompaction(session.id, {
+              firstSummarizedId: second.id,
+              lastSummarizedId: alternate.id,
+              retainedTailIds: [],
+              summary: "Invalid span.",
+            }),
+          );
+        }).pipe(Effect.provide(layer)),
+      );
+
+      expect(error).toMatchObject({
+        _tag: "JournalDraftRejected",
+        kind: "compaction",
+        message: expect.stringContaining("current branch"),
+        reason: "invalid_payload",
+      });
+    });
+
     test("appendRecord does not move the entry leaf", async () => {
       const { layer } = makeLayer();
       const result = await Effect.runPromise(
@@ -241,7 +318,7 @@ export const describeJournalContract = async (makeLayer: MakeJournalLayer): Prom
       expect(error._tag).toBe("JournalNotFound");
     });
 
-    test("public append APIs reject reserved kinds", async () => {
+    test("public appendEntry rejects reserved session_root and compaction kinds", async () => {
       const { layer } = makeLayer();
       const result = await Effect.runPromise(
         Effect.gen(function* () {
@@ -250,15 +327,19 @@ export const describeJournalContract = async (makeLayer: MakeJournalLayer): Prom
           const entryError = yield* Effect.flip(
             journal.appendEntry(session.id, entryDraft("session_root", {})),
           );
+          const compactionError = yield* Effect.flip(
+            journal.appendEntry(session.id, entryDraft("compaction", {})),
+          );
           const recordError = yield* Effect.flip(
             journal.appendRecord(session.id, recordDraft("leaf_moved", {})),
           );
 
-          return { entryError, recordError };
+          return { compactionError, entryError, recordError };
         }).pipe(Effect.provide(layer)),
       );
 
       expect(result.entryError).toMatchObject({ kind: "session_root", reason: "reserved_kind" });
+      expect(result.compactionError).toMatchObject({ kind: "compaction", reason: "reserved_kind" });
       expect(result.recordError).toMatchObject({ kind: "leaf_moved", reason: "reserved_kind" });
     });
 

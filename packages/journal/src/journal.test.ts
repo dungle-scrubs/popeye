@@ -60,3 +60,22 @@ test("leafFor rejects a dangling leaf_moved target as corruption", async () => {
     corruptionClass: "dangling_leaf_reference",
   });
 });
+
+test("leafFor rejects a compaction entry with a malformed strict payload", async () => {
+  const malformedCompaction = EntrySchema.make({
+    id: EntryIdSchema.make("compaction"),
+    kind: "compaction",
+    parentId: rootEntry.id,
+    payload: { summary: "Missing summarized ids and retained tail." },
+  });
+  const error = await Effect.runPromise(
+    Effect.flip(
+      leafFor([
+        rootLine,
+        EntryLineSchema.make({ item: malformedCompaction, sessionId, type: "entry" }),
+      ]),
+    ),
+  );
+
+  expect(error).toMatchObject({ _tag: "JournalError", corruptionClass: "schema_mismatch" });
+});

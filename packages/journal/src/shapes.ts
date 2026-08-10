@@ -12,6 +12,15 @@ export const EntryIdSchema = Schema.String.pipe(Schema.brand("EntryId"));
 
 export type EntryId = Schema.Schema.Type<typeof EntryIdSchema>;
 
+export const CompactionPayloadSchema = Schema.Struct({
+  firstSummarizedId: EntryIdSchema,
+  lastSummarizedId: EntryIdSchema,
+  retainedTailIds: Schema.Array(EntryIdSchema),
+  summary: Schema.String,
+});
+
+export type CompactionPayload = Schema.Schema.Type<typeof CompactionPayloadSchema>;
+
 export const RecordIdSchema = Schema.String.pipe(Schema.brand("RecordId"));
 
 export type RecordId = Schema.Schema.Type<typeof RecordIdSchema>;
@@ -24,6 +33,15 @@ export const EntrySchema = Schema.Struct({
 });
 
 export type Entry = Schema.Schema.Type<typeof EntrySchema>;
+
+export const CompactionEntrySchema = Schema.Struct({
+  id: EntryIdSchema,
+  kind: Schema.Literal("compaction"),
+  parentId: EntryIdSchema,
+  payload: CompactionPayloadSchema,
+});
+
+export type CompactionEntry = Schema.Schema.Type<typeof CompactionEntrySchema>;
 
 export const SessionRootEntrySchema = Schema.Struct({
   id: EntryIdSchema,

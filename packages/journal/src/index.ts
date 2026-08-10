@@ -5,6 +5,14 @@
 export const journalPackage = "@peye/journal";
 
 export {
+  type ContextItem,
+  type FoldAccounting,
+  type FoldOptions,
+  type FoldResult,
+  foldContext,
+} from "./context.js";
+export {
+  ContextBudgetExceeded,
   type JournalCorruptionClass,
   JournalDraftRejected,
   JournalError,
@@ -32,6 +40,10 @@ export {
   type MemoryJournalBacking,
 } from "./memory.js";
 export {
+  type CompactionEntry,
+  CompactionEntrySchema,
+  type CompactionPayload,
+  CompactionPayloadSchema,
   type Entry,
   type EntryDraft,
   EntryDraftSchema,
