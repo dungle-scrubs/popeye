@@ -5,7 +5,7 @@
 > file as features are implemented - never mark a milestone complete
 > until every current-cutoff checkbox under it is checked.
 
-> Current focus: Phase 2 - Kernel, ai seam, driver head
+> Current focus: Phase 3 - Plugin system
 
 ## Phase 1: Foundations
 
@@ -165,11 +165,11 @@ Source: `implementation.md` (M13); Normative Contracts
 ### M14: Driver head
 Source: `implementation.md` (M14); D-021
 
-- [ ] Driver exposes every kernel primitive in-process (create/resume/list, attach/detach, prompt, steer, abort, snapshot, subscribe, branch/fork, set model, set thinking level)
-- [ ] Scripted session (prompt → tool turn → steer → abort → branch) passes asserting snapshots and journal content
-- [ ] Snapshot revision increments monotonically across the script
-- [ ] Progress subscription delivers deltas during the script
-- [ ] The scripted session is captured as the canonical recorded-journal fixture
+- [x] Driver exposes every kernel primitive in-process (create/resume/list, attach/detach, prompt, steer, abort, snapshot, subscribe, branch/fork, set model, set thinking level)
+- [x] Scripted session (prompt → tool turn → steer → abort → branch) passes asserting snapshots and journal content
+- [x] Snapshot revision increments monotonically across the script
+- [x] Progress subscription delivers deltas during the script
+- [x] The scripted session is captured as the canonical recorded-journal fixture
 
 ## Phase 3: Plugin system
 
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 93
-- Remaining: 84
-- Current cutoff blockers: 84
+- Completed: 98
+- Remaining: 79
+- Current cutoff blockers: 79
 - Accepted/deferred follow-up: 5
 - Superseded/obsolete checklist debt: 0
