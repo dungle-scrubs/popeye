@@ -6,6 +6,7 @@ export const kernelPackage = "@peye/kernel";
 
 export {
   BudgetExceeded,
+  DuplicateToolName,
   GateRejected,
   MailboxClosed,
   MailboxFull,
@@ -36,6 +37,8 @@ export {
 export {
   type AssistantItem,
   type AssistantStopReason,
+  type ContextItem,
+  type ContextToolCall,
   Provider,
   type ProviderService,
   type ProviderStreamOptions,
@@ -49,6 +52,7 @@ export {
   type SessionsService,
 } from "./sessions.js";
 export {
+  defineTool,
   type RegisteredTool,
   type Tool,
   type ToolExecutionContext,

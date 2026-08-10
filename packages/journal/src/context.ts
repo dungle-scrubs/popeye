@@ -32,22 +32,22 @@ export interface FoldAccounting {
   readonly usedBudget: number;
 }
 
-export interface FoldOptions {
+export interface FoldOptions<TItem extends ContextItem = ContextItem> {
   readonly budget: number;
   /** A negative or non-finite result is a programmer defect and terminates the fold. */
   readonly sizeOf?: (entry: Entry) => number;
-  readonly summaryItem?: (payload: CompactionPayload) => ContextItem;
-  readonly visibility: (entry: Entry) => ContextItem | undefined;
+  readonly summaryItem?: (payload: CompactionPayload) => TItem;
+  readonly visibility: (entry: Entry) => TItem | undefined;
 }
 
-export interface FoldResult {
+export interface FoldResult<TItem extends ContextItem = ContextItem> {
   readonly accounting: FoldAccounting;
-  readonly items: ReadonlyArray<ContextItem>;
+  readonly items: ReadonlyArray<TItem>;
 }
 
-interface VisibleEntry {
+interface VisibleEntry<TItem extends ContextItem> {
   readonly entry: Entry;
-  readonly item: ContextItem;
+  readonly item: TItem;
 }
 
 const invalidCompaction = (message: string, cause?: unknown): JournalError =>
@@ -57,11 +57,11 @@ const invalidCompaction = (message: string, cause?: unknown): JournalError =>
     message,
   });
 
-const visibleEntries = (
+const visibleEntries = <TItem extends ContextItem>(
   entries: ReadonlyArray<Entry>,
-  visibility: FoldOptions["visibility"],
-): ReadonlyArray<VisibleEntry> =>
-  entries.flatMap((entry): ReadonlyArray<VisibleEntry> => {
+  visibility: FoldOptions<TItem>["visibility"],
+): ReadonlyArray<VisibleEntry<TItem>> =>
+  entries.flatMap((entry): ReadonlyArray<VisibleEntry<TItem>> => {
     if (entry.kind === "session_root" || entry.kind === "compaction") {
       return [];
     }
@@ -90,10 +90,10 @@ const defaultSummaryItem = (payload: CompactionPayload): ContextItem => ({
   role: "system",
 });
 
-export const foldContext = (
+export const foldContext = <TItem extends ContextItem = ContextItem>(
   branch: ReadonlyArray<Entry>,
-  options: FoldOptions,
-): Effect.Effect<FoldResult, ContextBudgetExceeded | JournalError> =>
+  options: FoldOptions<TItem>,
+): Effect.Effect<FoldResult<TItem>, ContextBudgetExceeded | JournalError> =>
   Effect.gen(function* () {
     const { compaction, compactionIndex, later } = newestCompactionScope(branch);
     if (compaction === undefined) {
@@ -127,7 +127,10 @@ export const foldContext = (
     const retained = branch.slice(0, compactionIndex).filter((entry) => retainedIds.has(entry.id));
     const retainedItems = visibleEntries(retained, options.visibility);
     const laterItems = visibleEntries(later, options.visibility);
-    const summaryItem = (options.summaryItem ?? defaultSummaryItem)(payload);
+    const summaryItem =
+      options.summaryItem === undefined
+        ? (defaultSummaryItem(payload) as TItem)
+        : options.summaryItem(payload);
     return yield* completeFold(
       [{ entry: decoded, item: summaryItem }],
       [...retainedItems, ...laterItems],
@@ -136,12 +139,12 @@ export const foldContext = (
     );
   });
 
-const completeFold = (
-  prefix: ReadonlyArray<VisibleEntry>,
-  entries: ReadonlyArray<VisibleEntry>,
-  options: FoldOptions,
+const completeFold = <TItem extends ContextItem>(
+  prefix: ReadonlyArray<VisibleEntry<TItem>>,
+  entries: ReadonlyArray<VisibleEntry<TItem>>,
+  options: FoldOptions<TItem>,
   compactionApplied: EntryId | undefined,
-): Effect.Effect<FoldResult, ContextBudgetExceeded> =>
+): Effect.Effect<FoldResult<TItem>, ContextBudgetExceeded> =>
   Effect.gen(function* () {
     const included = [...prefix, ...entries];
     let usedBudget = 0;

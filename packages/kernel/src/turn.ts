@@ -4,7 +4,6 @@
  */
 
 import {
-  type ContextItem,
   EntryDraftSchema,
   foldContext,
   Journal,
@@ -18,6 +17,7 @@ import {
   Effect,
   Exit,
   Fiber,
+  FiberId,
   Layer,
   Option,
   Ref,
@@ -28,13 +28,20 @@ import {
 import { BudgetExceeded, type ProviderError } from "./errors.js";
 import { Mailbox, type MailboxFailure } from "./mailbox.js";
 import { type Progress, ProgressHub, type TurnPhase } from "./progress.js";
-import { type AssistantStopReason, Provider } from "./provider.js";
+import {
+  type AssistantStopReason,
+  type ContextItem,
+  type ContextToolCall,
+  Provider,
+} from "./provider.js";
 import { ToolRegistry } from "./tool.js";
 import { executeToolBatch, type ToolBatchResult, type ToolCall } from "./tool-batch.js";
 
 export interface TurnOptions {
+  readonly abortGraceMs?: number;
   readonly contextBudget?: number;
   readonly maxAttempts?: number;
+  readonly maxToolRounds?: number;
   readonly toolConcurrency?: number;
 }
 
@@ -65,7 +72,12 @@ export interface TurnsService {
 export class Turns extends Context.Tag("@peye/kernel/Turns")<Turns, TurnsService>() {}
 
 interface ActiveTurn {
+  readonly abortGraceMs: number;
+  readonly completion: Deferred.Deferred<
+    Exit.Exit<TurnResult, BudgetExceeded | JournalFailure | ProviderError>
+  >;
   readonly fiber: Fiber.Fiber<TurnResult, BudgetExceeded | JournalFailure | ProviderError>;
+  readonly forceAbort: Effect.Effect<void>;
   readonly stage: Ref.Ref<"running" | "settling">;
   readonly turnOrdinal: number;
 }
@@ -79,6 +91,43 @@ type AssistantDiagnostic =
 
 const DEFAULT_CONTEXT_BUDGET = 32_000;
 const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_MAX_TOOL_ROUNDS = 16;
+const DEFAULT_ABORT_GRACE_MS = 5_000;
+
+interface BufferedToolCall extends ToolCall {
+  readonly index?: number;
+}
+
+interface ToolAbortState {
+  readonly completed: ReadonlyMap<string, ToolBatchResult>;
+  readonly finalized: boolean;
+}
+
+const asContextToolCalls = (value: unknown): ReadonlyArray<ContextToolCall> | undefined => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const calls: Array<ContextToolCall> = [];
+  for (const candidate of value) {
+    if (typeof candidate !== "object" || candidate === null) {
+      return undefined;
+    }
+    const call = candidate as {
+      readonly argumentsJson?: unknown;
+      readonly id?: unknown;
+      readonly name?: unknown;
+    };
+    if (
+      typeof call.argumentsJson !== "string" ||
+      typeof call.id !== "string" ||
+      typeof call.name !== "string"
+    ) {
+      return undefined;
+    }
+    calls.push({ argumentsJson: call.argumentsJson, id: call.id, name: call.name });
+  }
+  return calls;
+};
 
 const asContextItem = (entry: {
   readonly kind: string;
@@ -87,10 +136,52 @@ const asContextItem = (entry: {
   if (entry.kind !== "message" || typeof entry.payload !== "object" || entry.payload === null) {
     return undefined;
   }
-  const payload = entry.payload as { readonly content?: unknown; readonly role?: unknown };
-  return typeof payload.content === "string" && typeof payload.role === "string"
-    ? { content: payload.content, role: payload.role }
-    : undefined;
+  const payload = entry.payload as {
+    readonly content?: unknown;
+    readonly isError?: unknown;
+    readonly role?: unknown;
+    readonly toolCallId?: unknown;
+    readonly toolCalls?: unknown;
+  };
+  if (typeof payload.content !== "string" || typeof payload.role !== "string") {
+    return undefined;
+  }
+  if (payload.role === "assistant") {
+    const calls = asContextToolCalls(payload.toolCalls);
+    return calls === undefined
+      ? { content: payload.content, role: payload.role }
+      : { content: payload.content, role: payload.role, toolCalls: calls };
+  }
+  if (payload.role === "toolResult" && typeof payload.toolCallId === "string") {
+    return {
+      content: payload.content,
+      isError: payload.isError === true,
+      role: payload.role,
+      toolCallId: payload.toolCallId,
+    };
+  }
+  return { content: payload.content, role: payload.role };
+};
+
+const validatePositiveInteger = (name: string, value: number): void => {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new RangeError(`${name} must be a positive safe integer.`);
+  }
+};
+
+const validateTurnOptions = (options: TurnOptions): void => {
+  if (options.abortGraceMs !== undefined) {
+    validatePositiveInteger("Abort grace milliseconds", options.abortGraceMs);
+  }
+  if (options.maxAttempts !== undefined) {
+    validatePositiveInteger("Maximum attempts", options.maxAttempts);
+  }
+  if (options.maxToolRounds !== undefined) {
+    validatePositiveInteger("Maximum tool rounds", options.maxToolRounds);
+  }
+  if (options.toolConcurrency !== undefined) {
+    validatePositiveInteger("Tool concurrency", options.toolConcurrency);
+  }
 };
 
 const phaseChanged = (progress: ProgressHub["Type"], sessionId: SessionId, phase: TurnPhase) =>
@@ -125,16 +216,24 @@ export const TurnsLive = (): Layer.Layer<
         Effect.gen(function* () {
           const priorBranch = yield* journal.readBranch(sessionId);
           const turnOrdinal =
-            priorBranch.filter((entry) => asContextItem(entry)?.role === "assistant").length + 1;
+            priorBranch.filter((entry) => asContextItem(entry)?.role === "user").length + 1;
           const attempts = yield* Ref.make(0);
           const abortSettleFailure = yield* Ref.make<Cause.Cause<JournalFailure> | undefined>(
             undefined,
           );
+          const abortState = yield* Ref.make<ToolAbortState>({
+            completed: new Map(),
+            finalized: false,
+          });
           const stage = yield* Ref.make<"running" | "settling">("running");
           const stopReason = yield* Ref.make<AssistantStopReason>("done");
+          const terminalDiagnostic = yield* Ref.make<AssistantDiagnostic | undefined>(undefined);
           const text = yield* Ref.make("");
-          const toolCalls = yield* Ref.make<ReadonlyArray<ToolCall>>([]);
+          const toolCalls = yield* Ref.make<ReadonlyArray<BufferedToolCall>>([]);
+          const toolRounds = yield* Ref.make(0);
           const executingCalls = yield* Ref.make<ReadonlyArray<ToolCall> | undefined>(undefined);
+          const persistedToolCallIds = yield* Ref.make<Set<string>>(new Set());
+          const persistenceMutex = yield* Effect.makeSemaphore(1);
 
           const settle = (
             reason: AssistantStopReason,
@@ -189,12 +288,93 @@ export const TurnsLive = (): Layer.Layer<
               ),
             );
 
+          const appendToolResult = (
+            result: ToolBatchResult,
+          ): Effect.Effect<boolean, JournalFailure> =>
+            persistenceMutex.withPermits(1)(
+              Effect.uninterruptible(
+                Effect.gen(function* () {
+                  const persisted = yield* Ref.get(persistedToolCallIds);
+                  if (persisted.has(result.toolCallId)) {
+                    return false;
+                  }
+                  yield* journal.appendEntry(
+                    sessionId,
+                    EntryDraftSchema.make({
+                      kind: "message",
+                      payload: {
+                        content: result.content,
+                        isError: result.isError === true,
+                        role: "toolResult",
+                        toolCallId: result.toolCallId,
+                      },
+                    }),
+                  );
+                  yield* Ref.update(persistedToolCallIds, (current) =>
+                    new Set(current).add(result.toolCallId),
+                  );
+                  return true;
+                }),
+              ),
+            );
+
+          const settleAbort = (): Effect.Effect<void> =>
+            Ref.modify(abortState, (current) => [
+              current.finalized ? undefined : current.completed,
+              { ...current, finalized: true },
+            ]).pipe(
+              Effect.flatMap((completed) =>
+                completed !== undefined
+                  ? Effect.gen(function* () {
+                      const calls = yield* Ref.get(executingCalls);
+                      if (calls !== undefined) {
+                        yield* Effect.forEach(
+                          calls,
+                          (call) => {
+                            const completedResult = completed.get(call.id);
+                            const result =
+                              completedResult ??
+                              ({
+                                content: "Tool execution interrupted.",
+                                isError: true,
+                                toolCallId: call.id,
+                              } satisfies ToolBatchResult);
+                            return appendToolResult(result).pipe(
+                              Effect.flatMap((appended) =>
+                                appended && completedResult === undefined
+                                  ? progress.publish(sessionId, {
+                                      _tag: "toolCompleted",
+                                      isError: true,
+                                      toolCallId: call.id,
+                                    })
+                                  : Effect.void,
+                              ),
+                            );
+                          },
+                          { concurrency: 1 },
+                        );
+                        yield* Effect.annotateCurrentSpan({ interrupted: true });
+                        yield* settle("aborted", undefined, "");
+                        return;
+                      }
+                      yield* settle("aborted", undefined);
+                    }).pipe(Effect.uninterruptible)
+                  : Effect.void,
+              ),
+              Effect.exit,
+              Effect.flatMap((exit) =>
+                Exit.isFailure(exit) ? Ref.set(abortSettleFailure, exit.cause) : Effect.void,
+              ),
+            );
+
           const consume = (
             context: ReadonlyArray<ContextItem>,
           ): Effect.Effect<void, ProviderError> =>
             Effect.suspend(() =>
               Effect.gen(function* () {
+                yield* Ref.set(executingCalls, undefined);
                 yield* Ref.set(stopReason, "done");
+                yield* Ref.set(terminalDiagnostic, undefined);
                 yield* Ref.set(text, "");
                 yield* Ref.set(toolCalls, []);
                 const attempt = yield* Ref.updateAndGet(attempts, (count) => count + 1);
@@ -216,29 +396,35 @@ export const TurnsLive = (): Layer.Layer<
                       return Ref.update(attemptProgress, (current) => [...current, next]);
                     }
                     if (item._tag === "toolCall") {
-                      return Ref.update(toolCalls, (current) => [
-                        ...current,
-                        {
+                      return Ref.update(toolCalls, (current) => {
+                        const priorIndex = current.findIndex((call) => call.id === item.id);
+                        const next: BufferedToolCall = {
                           argumentsJson: item.argumentsJson,
                           id: item.id,
                           name: item.name,
-                        },
-                      ]);
+                        };
+                        return priorIndex < 0
+                          ? [...current, next]
+                          : current.map((call, index) => (index === priorIndex ? next : call));
+                      });
                     }
                     if (item._tag === "toolCallDelta") {
                       return Ref.update(toolCalls, (current) => {
-                        const prior = current.find((call) => call.id === item.id);
-                        if (prior === undefined && item.name === undefined) {
-                          return current;
-                        }
-                        const next: ToolCall = {
+                        const priorIndex = current.findIndex(
+                          (call) =>
+                            call.id === item.id ||
+                            (item.index !== undefined && call.index === item.index),
+                        );
+                        const prior = current[priorIndex];
+                        const next: BufferedToolCall = {
                           argumentsJson: (prior?.argumentsJson ?? "") + item.argumentsJsonDelta,
                           id: item.id,
                           name: item.name ?? prior?.name ?? "",
+                          ...(item.index === undefined ? {} : { index: item.index }),
                         };
-                        return prior === undefined
+                        return priorIndex < 0
                           ? [...current, next]
-                          : current.map((call) => (call.id === item.id ? next : call));
+                          : current.map((call, index) => (index === priorIndex ? next : call));
                       });
                     }
                     return Ref.set(stopReason, item.stopReason);
@@ -259,6 +445,10 @@ export const TurnsLive = (): Layer.Layer<
                 const branch = yield* journal.readBranch(sessionId);
                 const context = yield* foldContext(branch, {
                   budget: options.contextBudget ?? DEFAULT_CONTEXT_BUDGET,
+                  summaryItem: (payload): ContextItem => ({
+                    content: payload.summary,
+                    role: "system",
+                  }),
                   visibility: asContextItem,
                 }).pipe(
                   Effect.mapError((error) =>
@@ -283,7 +473,33 @@ export const TurnsLive = (): Layer.Layer<
                 if (reason !== "toolCalls") {
                   return reason;
                 }
-                const calls = yield* Ref.get(toolCalls);
+                const calls = (yield* Ref.get(toolCalls)).map(
+                  (call): ToolCall => ({
+                    argumentsJson: call.argumentsJson,
+                    id: call.id,
+                    name: call.name,
+                  }),
+                );
+                if (calls.length === 0) {
+                  const detail = "Provider returned stopReason toolCalls without any tool calls.";
+                  yield* Ref.set(text, detail);
+                  yield* Ref.set(terminalDiagnostic, {
+                    detail,
+                    reason: "turn_failure",
+                  });
+                  return "error";
+                }
+                const round = yield* Ref.updateAndGet(toolRounds, (count) => count + 1);
+                const maxToolRounds = options.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
+                if (round > maxToolRounds) {
+                  const detail = `Maximum tool round bound of ${maxToolRounds} exceeded.`;
+                  yield* Ref.set(text, detail);
+                  yield* Ref.set(terminalDiagnostic, {
+                    detail,
+                    reason: "turn_failure",
+                  });
+                  return "error";
+                }
                 const assistant = yield* journal.appendEntry(
                   sessionId,
                   EntryDraftSchema.make({
@@ -303,11 +519,27 @@ export const TurnsLive = (): Layer.Layer<
                 yield* phaseChanged(progress, sessionId, "EXECUTING");
                 yield* Ref.set(executingCalls, calls);
                 const onToolCompleted = (result: ToolBatchResult): Effect.Effect<void> =>
-                  progress.publish(sessionId, {
-                    _tag: "toolCompleted",
-                    isError: result.isError === true,
-                    toolCallId: result.toolCallId,
-                  });
+                  Ref.modify(abortState, (current) =>
+                    current.finalized
+                      ? [false, current]
+                      : [
+                          true,
+                          {
+                            completed: new Map(current.completed).set(result.toolCallId, result),
+                            finalized: false,
+                          },
+                        ],
+                  ).pipe(
+                    Effect.flatMap((recorded) =>
+                      recorded
+                        ? progress.publish(sessionId, {
+                            _tag: "toolCompleted",
+                            isError: result.isError === true,
+                            toolCallId: result.toolCallId,
+                          })
+                        : Effect.void,
+                    ),
+                  );
                 const onToolStarted = (call: ToolCall): Effect.Effect<void> =>
                   progress.publish(sessionId, {
                     _tag: "toolStarted",
@@ -328,24 +560,9 @@ export const TurnsLive = (): Layer.Layer<
                 const batch = yield* executeToolBatch(calls, { sessionId }, batchOptions).pipe(
                   Effect.provideService(ToolRegistry, toolRegistry),
                 );
-                yield* Effect.forEach(
-                  batch.results,
-                  (result) =>
-                    journal.appendEntry(
-                      sessionId,
-                      EntryDraftSchema.make({
-                        kind: "message",
-                        payload: {
-                          content: result.content,
-                          isError: result.isError === true,
-                          role: "toolResult",
-                          toolCallId: result.toolCallId,
-                        },
-                      }),
-                    ),
-                  { concurrency: 1 },
+                yield* Effect.uninterruptible(
+                  Effect.forEach(batch.results, appendToolResult, { concurrency: 1 }),
                 );
-                yield* Ref.set(executingCalls, undefined);
                 return yield* request();
               }),
             );
@@ -357,56 +574,10 @@ export const TurnsLive = (): Layer.Layer<
             );
             yield* Effect.annotateCurrentSpan({ sessionId, turnOrdinal, userEntryId: user.id });
             const reason = yield* request();
-            yield* settle(reason, undefined);
+            yield* settle(reason, yield* Ref.get(terminalDiagnostic));
             return { stopReason: reason };
           }).pipe(
-            Effect.onInterrupt(() =>
-              Ref.get(executingCalls)
-                .pipe(
-                  Effect.flatMap((calls) =>
-                    calls === undefined
-                      ? settle("aborted", undefined)
-                      : Effect.uninterruptible(
-                          Effect.forEach(
-                            calls,
-                            (call) =>
-                              journal
-                                .appendEntry(
-                                  sessionId,
-                                  EntryDraftSchema.make({
-                                    kind: "message",
-                                    payload: {
-                                      content: "Tool execution interrupted.",
-                                      isError: true,
-                                      role: "toolResult",
-                                      toolCallId: call.id,
-                                    },
-                                  }),
-                                )
-                                .pipe(
-                                  Effect.zipRight(
-                                    progress.publish(sessionId, {
-                                      _tag: "toolCompleted",
-                                      isError: true,
-                                      toolCallId: call.id,
-                                    }),
-                                  ),
-                                ),
-                            { concurrency: 1 },
-                          ).pipe(
-                            Effect.zipRight(Effect.annotateCurrentSpan({ interrupted: true })),
-                            Effect.zipRight(settle("aborted", undefined, undefined, false)),
-                          ),
-                        ),
-                  ),
-                )
-                .pipe(
-                  Effect.exit,
-                  Effect.flatMap((exit) =>
-                    Exit.isFailure(exit) ? Ref.set(abortSettleFailure, exit.cause) : Effect.void,
-                  ),
-                ),
-            ),
+            Effect.onInterrupt(settleAbort),
             Effect.catchAllCause((cause) =>
               Ref.get(stage).pipe(
                 Effect.flatMap((currentStage) => {
@@ -476,14 +647,30 @@ export const TurnsLive = (): Layer.Layer<
           );
 
           const start = yield* Deferred.make<void>();
-          const child = yield* Effect.fork(
-            Deferred.await(start).pipe(Effect.zipRight(Effect.interruptible(run))),
+          const completion =
+            yield* Deferred.make<
+              Exit.Exit<TurnResult, BudgetExceeded | JournalFailure | ProviderError>
+            >();
+          // The grace path must be able to release the caller even when a Tool never leaves an
+          // uninterruptible region. ActiveTurn still tracks this detached fiber until settlement.
+          const child = yield* Effect.forkDaemon(
+            Deferred.await(start).pipe(
+              Effect.zipRight(Effect.interruptible(run)),
+              Effect.onExit((exit) => Deferred.succeed(completion, exit)),
+            ),
           );
           yield* Ref.update(active, (current) =>
-            new Map(current).set(sessionId, { fiber: child, stage, turnOrdinal }),
+            new Map(current).set(sessionId, {
+              abortGraceMs: options.abortGraceMs ?? DEFAULT_ABORT_GRACE_MS,
+              completion,
+              fiber: child,
+              forceAbort: settleAbort(),
+              stage,
+              turnOrdinal,
+            }),
           );
           yield* Deferred.succeed(start, undefined);
-          const exit = yield* Fiber.await(child);
+          const exit = yield* Deferred.await(completion);
           yield* Ref.update(active, (current) => {
             const next = new Map(current);
             next.delete(sessionId);
@@ -514,18 +701,38 @@ export const TurnsLive = (): Layer.Layer<
                           reason: "settling",
                           turnOrdinal: turn.turnOrdinal,
                         })
-                      : Fiber.interrupt(turn.fiber).pipe(
-                          Effect.as<AbortTurnResult>({
+                      : Effect.gen(function* () {
+                          yield* Fiber.interruptFork(turn.fiber);
+                          const settled = yield* Fiber.await(turn.fiber).pipe(
+                            Effect.timeoutOption(`${turn.abortGraceMs} millis`),
+                          );
+                          if (Option.isNone(settled)) {
+                            yield* turn.forceAbort;
+                            yield* Deferred.succeed(
+                              turn.completion,
+                              Exit.succeed({ stopReason: "aborted" } satisfies TurnResult),
+                            );
+                            yield* Effect.logError(
+                              "Turn fiber exceeded abort grace and remains leaked.",
+                            ).pipe(
+                              Effect.annotateLogs({
+                                fiberId: FiberId.threadName(Fiber.id(turn.fiber)),
+                                sessionId,
+                              }),
+                            );
+                          }
+                          return {
                             aborted: true,
                             turnOrdinal: turn.turnOrdinal,
-                          }),
-                        ),
+                          } satisfies AbortTurnResult;
+                        }),
                 ),
               );
             }),
           ),
-        runTurn: (sessionId: SessionId, content: string, options: TurnOptions = {}) =>
-          mailbox
+        runTurn: (sessionId: SessionId, content: string, options: TurnOptions = {}) => {
+          validateTurnOptions(options);
+          return mailbox
             .enqueue(sessionId, {
               name: "turn",
               run: () =>
@@ -544,7 +751,8 @@ export const TurnsLive = (): Layer.Layer<
                   ),
                 ),
             })
-            .pipe(Effect.map((result) => result.value)),
+            .pipe(Effect.map((result) => result.value));
+        },
         subscribeProgress: (sessionId: SessionId) => progress.subscribe(sessionId),
       } satisfies TurnsService;
     }),

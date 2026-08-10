@@ -18,6 +18,11 @@ export class ToolError extends Data.TaggedError("ToolError")<{
   readonly toolName: string;
 }> {}
 
+export class DuplicateToolName extends Data.TaggedError("DuplicateToolName")<{
+  readonly message: string;
+  readonly name: string;
+}> {}
+
 export class GateRejected extends Data.TaggedError("GateRejected")<{
   readonly plugin: string;
   readonly reason: string;

@@ -3,12 +3,25 @@
  * It exists so turn coordination is independent from a concrete LLM endpoint.
  */
 
-import type { ContextItem } from "@peye/journal";
 import { Context, type Stream } from "effect";
 
 import type { ProviderError } from "./errors.js";
 
 export type AssistantStopReason = "aborted" | "done" | "error" | "toolCalls";
+
+export interface ContextToolCall {
+  readonly argumentsJson: string;
+  readonly id: string;
+  readonly name: string;
+}
+
+export interface ContextItem {
+  readonly content: string;
+  readonly isError?: boolean;
+  readonly role: string;
+  readonly toolCallId?: string;
+  readonly toolCalls?: ReadonlyArray<ContextToolCall>;
+}
 
 export type AssistantItem =
   | { readonly _tag: "done"; readonly stopReason: AssistantStopReason }
@@ -24,6 +37,7 @@ export type AssistantItem =
       readonly _tag: "toolCallDelta";
       readonly argumentsJsonDelta: string;
       readonly id: string;
+      readonly index?: number;
       readonly name: string | undefined;
     };
 
