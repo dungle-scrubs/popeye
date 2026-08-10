@@ -166,6 +166,7 @@ const asContextItem = (entry: {
     readonly role?: unknown;
     readonly toolCallId?: unknown;
     readonly toolCalls?: unknown;
+    readonly toolName?: unknown;
   };
   if (typeof payload.content !== "string" || typeof payload.role !== "string") {
     return undefined;
@@ -176,15 +177,22 @@ const asContextItem = (entry: {
       ? { content: payload.content, role: payload.role }
       : { content: payload.content, role: payload.role, toolCalls: calls };
   }
-  if (payload.role === "toolResult" && typeof payload.toolCallId === "string") {
+  if (
+    payload.role === "toolResult" &&
+    typeof payload.toolCallId === "string" &&
+    typeof payload.toolName === "string"
+  ) {
     return {
       content: payload.content,
       isError: payload.isError === true,
       role: payload.role,
       toolCallId: payload.toolCallId,
+      toolName: payload.toolName,
     };
   }
-  return { content: payload.content, role: payload.role };
+  return payload.role === "system" || payload.role === "user"
+    ? { content: payload.content, role: payload.role }
+    : undefined;
 };
 
 const validatePositiveInteger = (name: string, value: number): void => {
@@ -641,6 +649,7 @@ export const TurnsLive = (): Layer.Layer<
 
           const appendToolResult = (
             result: ToolBatchResult,
+            toolName: string,
           ): Effect.Effect<boolean, JournalFailure> =>
             persistenceMutex.withPermits(1)(
               Effect.uninterruptible(
@@ -658,6 +667,7 @@ export const TurnsLive = (): Layer.Layer<
                         isError: result.isError === true,
                         role: "toolResult",
                         toolCallId: result.toolCallId,
+                        toolName,
                       },
                     }),
                   );
@@ -690,7 +700,7 @@ export const TurnsLive = (): Layer.Layer<
                                 isError: true,
                                 toolCallId: call.id,
                               } satisfies ToolBatchResult);
-                            return appendToolResult(result).pipe(
+                            return appendToolResult(result, call.name).pipe(
                               Effect.flatMap((appended) =>
                                 appended && completedResult === undefined
                                   ? progress.publish(sessionId, {
@@ -937,8 +947,20 @@ export const TurnsLive = (): Layer.Layer<
                 const batch = yield* executeToolBatch(calls, { sessionId }, batchOptions).pipe(
                   Effect.provideService(ToolRegistry, toolRegistry),
                 );
+                const toolNames = new Map(calls.map((call) => [call.id, call.name]));
                 yield* Effect.uninterruptible(
-                  Effect.forEach(batch.results, appendToolResult, { concurrency: 1 }),
+                  Effect.forEach(
+                    batch.results,
+                    (result) => {
+                      const toolName = toolNames.get(result.toolCallId);
+                      return toolName === undefined
+                        ? Effect.dieMessage(
+                            `Tool result ${result.toolCallId} has no matching executed tool call.`,
+                          )
+                        : appendToolResult(result, toolName);
+                    },
+                    { concurrency: 1 },
+                  ),
                 );
                 yield* takeSteering(false).pipe(Effect.flatMap(applySteering));
                 return yield* request();

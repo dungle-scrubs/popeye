@@ -42,6 +42,7 @@ export const ToolResultMessagePayloadSchema = Schema.Struct({
   isError: Schema.Boolean,
   role: Schema.Literal("toolResult"),
   toolCallId: Schema.NonEmptyString,
+  toolName: Schema.NonEmptyString,
 });
 
 export const UserMessagePayloadSchema = Schema.Struct({

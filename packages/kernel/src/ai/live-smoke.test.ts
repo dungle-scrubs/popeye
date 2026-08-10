@@ -1,13 +1,17 @@
 /**
- * Owns the opt-in live evidence that an OpenAI-compatible endpoint completes a tool-free turn.
+ * Owns the opt-in live evidence that an OpenAI-compatible endpoint completes a full kernel Turn.
  * It exists separately from contract fixtures so normal test runs never require network access.
  */
 
-import { Chunk, Effect, Stream } from "effect";
+import { createMemoryJournalBacking, Journal, JournalMemory } from "@peye/journal";
+import { Effect, Layer } from "effect";
 import { expect, test } from "vitest";
 
-import { Provider } from "../provider.js";
+import { MailboxLive } from "../mailbox.js";
+import { ProgressHubLive } from "../progress.js";
+import { Sessions, SessionsLive } from "../sessions.js";
 import { ToolRegistryLive } from "../tool.js";
+import { Turns, TurnsLive } from "../turn.js";
 import { PiAiProviderLive } from "./seam.js";
 
 const liveSmoke =
@@ -26,28 +30,45 @@ test.skipIf(liveSmoke === undefined)(
     if (liveSmoke === undefined) {
       throw new Error("Live smoke configuration was removed after test selection.");
     }
+    const journalLayer = JournalMemory(createMemoryJournalBacking());
+    const toolLayer = ToolRegistryLive([]);
+    const mailboxLayer = MailboxLive().pipe(Layer.provide(journalLayer));
     const providerLayer = PiAiProviderLive({
       baseUrl: liveSmoke.baseUrl,
       idleTimeoutMs: 30_000,
       modelId: liveSmoke.modelId,
       provider: "lmstudio",
-    });
-
-    const items = await Effect.runPromise(
-      Effect.gen(function* () {
-        const provider = yield* Provider;
-        return yield* Stream.runCollect(
-          provider.streamAssistant(
-            [{ content: "Reply with exactly: peye live smoke", role: "user" }],
-            { attempt: 1, turnOrdinal: 1 },
-          ),
-        );
-      }).pipe(Effect.provide(providerLayer), Effect.provide(ToolRegistryLive([]))),
+    }).pipe(Layer.provide(toolLayer));
+    const dependencies = Layer.mergeAll(
+      journalLayer,
+      mailboxLayer,
+      ProgressHubLive(),
+      providerLayer,
+      toolLayer,
     );
-    const output = Chunk.toArray(items);
+    const liveLayer = Layer.mergeAll(
+      dependencies,
+      SessionsLive().pipe(Layer.provide(Layer.mergeAll(journalLayer, mailboxLayer, toolLayer))),
+      TurnsLive().pipe(Layer.provide(dependencies)),
+    );
 
-    expect(output.some((item) => item._tag === "textDelta" && item.text.length > 0)).toBe(true);
-    expect(output.at(-1)).toEqual({ _tag: "done", stopReason: "done" });
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const journal = yield* Journal;
+        const sessions = yield* Sessions;
+        const turns = yield* Turns;
+        const session = yield* sessions.create();
+        const settled = yield* turns.runTurn(session.id, "Reply with exactly: peye live smoke");
+        return { branch: yield* journal.readBranch(session.id), settled };
+      }).pipe(Effect.provide(liveLayer)),
+    );
+
+    expect(output.settled).toEqual({ stopReason: "done" });
+    expect(output.branch.at(-1)?.payload).toMatchObject({
+      role: "assistant",
+      stopReason: "done",
+    });
+    expect(output.branch.at(-1)?.payload).toHaveProperty("content");
   },
   180_000,
 );

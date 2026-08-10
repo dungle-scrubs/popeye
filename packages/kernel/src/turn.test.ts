@@ -334,6 +334,46 @@ test("tool-free turn walks IDLE through SETTLING to IDLE and persists final stop
   expect(result.branch[2]?.parentId).toBe(result.branch[1]?.id);
 });
 
+test("truncated provider output settles the turn and progress without degrading to done", async () => {
+  const observed: Array<Progress> = [];
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const progress = yield* Effect.fork(
+        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+          Effect.sync(() => observed.push(item)),
+        ),
+      );
+      yield* Effect.yieldNow();
+
+      const settled = yield* turns.runTurn(session.id, "Long answer");
+
+      yield* Fiber.interrupt(progress);
+      return { branch: yield* journal.readBranch(session.id), settled };
+    }).pipe(
+      Effect.provide(
+        testLayer(
+          scriptedProvider([
+            { _tag: "textDelta", text: "Partial answer." },
+            { _tag: "done", stopReason: "truncated" },
+          ]),
+        ),
+      ),
+    ),
+  );
+
+  expect(result.settled).toEqual({ stopReason: "truncated" });
+  expect(result.branch.at(-1)?.payload).toMatchObject({
+    content: "Partial answer.",
+    role: "assistant",
+    stopReason: "truncated",
+  });
+  expect(observed).toContainEqual({ _tag: "turnSettled", revision: 5, stopReason: "truncated" });
+});
+
 test("assistant text and thinking deltas stream only during STREAMING and persist their concatenation", async () => {
   const observed: Array<Progress> = [];
   const branch = await Effect.runPromise(
@@ -1071,12 +1111,14 @@ test("tool calls append results in call order while completion order appears onl
       isError: false,
       role: "toolResult",
       toolCallId: "slow-call",
+      toolName: "slow",
     },
     {
       content: "fast result",
       isError: false,
       role: "toolResult",
       toolCallId: "fast-call",
+      toolName: "fast",
     },
   ]);
 });
@@ -1306,7 +1348,13 @@ test("steer during EXECUTING drains after the tool batch before the next provide
       role: "assistant",
       toolCalls: [{ argumentsJson: "{}", id: "wait-call", name: "wait" }],
     },
-    { content: "tool result", isError: false, role: "toolResult", toolCallId: "wait-call" },
+    {
+      content: "tool result",
+      isError: false,
+      role: "toolResult",
+      toolCallId: "wait-call",
+      toolName: "wait",
+    },
     { content: "Use this constraint", role: "user" },
   ]);
   expect(result.branch.map((entry) => entry.payload)).toMatchObject([
@@ -2008,17 +2056,26 @@ test("abort preserves completed results and writes exactly one result for every 
     }) as ReadonlyArray<{
     readonly content: string;
     readonly isError: boolean;
+    readonly role: "toolResult";
     readonly toolCallId: string;
+    readonly toolName: string;
   }>;
   expect(result.aborted).toEqual({ aborted: true, turnOrdinal: 1 });
   expect(result.settled).toEqual({ stopReason: "aborted" });
   expect(toolResults).toEqual([
-    { content: "real result", isError: false, role: "toolResult", toolCallId: "fast-call" },
+    {
+      content: "real result",
+      isError: false,
+      role: "toolResult",
+      toolCallId: "fast-call",
+      toolName: "fast",
+    },
     {
       content: "Tool execution interrupted.",
       isError: true,
       role: "toolResult",
       toolCallId: "wait-call",
+      toolName: "wait",
     },
   ]);
   expect(new Set(toolResults.map((result) => result.toolCallId)).size).toBe(2);

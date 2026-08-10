@@ -35,7 +35,7 @@ export const ProgressSchema = Schema.Union(
   }),
   Schema.TaggedStruct("turnSettled", {
     revision: Schema.Number,
-    stopReason: Schema.Literal("aborted", "done", "error", "toolCalls"),
+    stopReason: Schema.Literal("aborted", "done", "error", "toolCalls", "truncated"),
   }),
 );
 

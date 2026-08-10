@@ -646,6 +646,7 @@ test("recovery reports resolved calls and synthesizes only missing results after
             isError: false,
             role: "toolResult",
             toolCallId: "completed-call",
+            toolName: "first_tool",
           },
         }),
       );
@@ -689,6 +690,7 @@ test("tool-result idempotency is scoped by operationId when Tool call ids repeat
             isError: false,
             role: "toolResult",
             toolCallId: "reused-call",
+            toolName: "historical_tool",
           },
         }),
       );

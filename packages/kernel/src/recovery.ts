@@ -133,7 +133,7 @@ const interruptedAssistant = (): EntryDraft =>
     },
   });
 
-const interruptedToolResult = (toolCallId: string): EntryDraft =>
+const interruptedToolResult = (toolCallId: string, toolName: string): EntryDraft =>
   EntryDraftSchema.make({
     kind: "message",
     payload: {
@@ -141,6 +141,7 @@ const interruptedToolResult = (toolCallId: string): EntryDraft =>
       isError: true,
       role: "toolResult",
       toolCallId,
+      toolName,
     },
   });
 
@@ -414,7 +415,7 @@ export const recoverSession = (
         toolCallId: call.id,
         toolName: call.name,
       });
-      toolResults.push(interruptedToolResult(call.id));
+      toolResults.push(interruptedToolResult(call.id, call.name));
       if (replay === "safe") {
         safeReplay.push({
           argumentsJson: call.argumentsJson,

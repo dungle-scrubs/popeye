@@ -114,3 +114,20 @@ export const mutatedSettlementFixture = (): RecordedFixture => {
   stream.push({ message: final, reason: "toolUse", type: "done" });
   return { final, stream };
 };
+
+export const stopReasonFixture = (
+  reason: Extract<AssistantMessage["stopReason"], "deferred" | "length">,
+): RecordedFixture => {
+  const stream = createAssistantMessageEventStream();
+  const final = fixtureMessage(reason, [{ text: "partial", type: "text" }]);
+  stream.push({ partial: fixtureMessage("pending"), type: "start" });
+  stream.push({ message: final, reason, type: "done" });
+  return { final, stream };
+};
+
+export const unterminatedFixture = (): AssistantMessageEventStream => {
+  const stream = createAssistantMessageEventStream();
+  stream.push({ partial: fixtureMessage("pending"), type: "start" });
+  stream.end();
+  return stream;
+};

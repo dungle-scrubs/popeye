@@ -7,7 +7,13 @@ import { Context, type Stream } from "effect";
 
 import type { ProviderError } from "./errors.js";
 
-export const ASSISTANT_STOP_REASONS = ["aborted", "done", "error", "toolCalls"] as const;
+export const ASSISTANT_STOP_REASONS = [
+  "aborted",
+  "done",
+  "error",
+  "toolCalls",
+  "truncated",
+] as const;
 
 export type AssistantStopReason = (typeof ASSISTANT_STOP_REASONS)[number];
 
@@ -43,13 +49,20 @@ export const asContextToolCalls = (value: unknown): ReadonlyArray<ContextToolCal
   return calls;
 };
 
-export interface ContextItem {
-  readonly content: string;
-  readonly isError?: boolean;
-  readonly role: string;
-  readonly toolCallId?: string;
-  readonly toolCalls?: ReadonlyArray<ContextToolCall>;
-}
+export type ContextItem =
+  | {
+      readonly content: string;
+      readonly role: "assistant";
+      readonly toolCalls?: ReadonlyArray<ContextToolCall>;
+    }
+  | { readonly content: string; readonly role: "system" | "user" }
+  | {
+      readonly content: string;
+      readonly isError: boolean;
+      readonly role: "toolResult";
+      readonly toolCallId: string;
+      readonly toolName: string;
+    };
 
 export type AssistantItem =
   | { readonly _tag: "done"; readonly stopReason: AssistantStopReason }

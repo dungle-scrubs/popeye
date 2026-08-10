@@ -617,6 +617,7 @@ test("recovery dedupes by operationId and toolCallId after a kill during applica
               isError: false,
               role: "toolResult",
               toolCallId: "reused-call",
+              toolName: "historical_tool",
             },
           }),
         );
