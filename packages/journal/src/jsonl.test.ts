@@ -5,8 +5,8 @@ import { join } from "node:path";
 
 import { Effect, Layer } from "effect";
 import { afterEach, expect, test } from "vitest";
+import { describeJournalContract } from "./conformance/index.js";
 import { Journal } from "./journal.js";
-import { describeJournalContract } from "./journal-contract.js";
 import { createJsonlJournalHarness, JournalJsonl } from "./jsonl.js";
 import { EntryDraftSchema, SessionIdSchema } from "./shapes.js";
 
@@ -535,4 +535,4 @@ test("bad session files do not prevent healthy sessions from opening", async () 
   });
 });
 
-describeJournalContract(() => createJsonlJournalHarness(makeDirectorySync()));
+await describeJournalContract(() => createJsonlJournalHarness(makeDirectorySync()));

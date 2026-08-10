@@ -38,6 +38,9 @@ importers:
       effect:
         specifier: 3.22.1
         version: 3.22.1
+      vitest:
+        specifier: 3.2.7
+        version: 3.2.7(@types/node@26.2.0)
 
   packages/kernel:
     dependencies:

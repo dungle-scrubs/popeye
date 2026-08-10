@@ -1,4 +1,4 @@
-import { describeJournalContract } from "./journal-contract.js";
+import { describeJournalContract } from "./conformance/index.js";
 import { createMemoryJournalHarness } from "./memory.js";
 
-describeJournalContract(createMemoryJournalHarness);
+await describeJournalContract(createMemoryJournalHarness);

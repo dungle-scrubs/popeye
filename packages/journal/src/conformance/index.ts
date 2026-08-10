@@ -1,18 +1,20 @@
 /**
- * Owns reusable Journal behavior checks so every durable adapter proves the same semantics.
+ * Owns the published Journal backend contract so every adapter proves the same semantics.
  * It exists to prevent adapter-specific tests from changing the Journal interface contract.
+ *
+ * Vitest is a required peer dependency of this conformance subpath. The main package entry
+ * deliberately does not import Vitest.
  */
 import { Effect, type Layer } from "effect";
-import { describe, expect, test } from "vitest";
 
-import type { JournalError } from "./errors.js";
-import { Journal } from "./journal.js";
+import type { JournalError } from "../errors.js";
+import { Journal } from "../journal.js";
 import {
   type EntryDraft,
   EntryDraftSchema,
   type RecordDraft,
   RecordDraftSchema,
-} from "./shapes.js";
+} from "../shapes.js";
 
 export interface JournalContractHarness {
   readonly layer: Layer.Layer<Journal, JournalError>;
@@ -28,7 +30,46 @@ const entryDraft = (kind: string, payload: unknown): EntryDraft =>
 const recordDraft = (kind: string, payload: unknown): RecordDraft =>
   RecordDraftSchema.make({ kind, payload });
 
-export const describeJournalContract = (makeLayer: MakeJournalLayer): void => {
+export const assertLeafMovePersistsAfterReopen = async (
+  makeLayer: MakeJournalLayer,
+): Promise<void> => {
+  const harness = makeLayer();
+  const initial = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const session = yield* journal.createSession();
+      const first = yield* journal.appendEntry(
+        session.id,
+        entryDraft("user_input", { text: "First." }),
+      );
+      yield* journal.appendEntry(session.id, entryDraft("assistant_output", { text: "Second." }));
+      yield* journal.moveLeaf(session.id, first.id);
+      const branch = yield* journal.readBranch(session.id);
+      const leaf = yield* journal.getLeaf(session.id);
+
+      return { branch, leaf, session };
+    }).pipe(Effect.provide(harness.layer)),
+  );
+  const reopened = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const branch = yield* journal.readBranch(initial.session.id);
+      const leaf = yield* journal.getLeaf(initial.session.id);
+
+      return { branch, leaf };
+    }).pipe(Effect.provide(harness.reopen())),
+  );
+
+  if (JSON.stringify(reopened) !== JSON.stringify({ branch: initial.branch, leaf: initial.leaf })) {
+    throw new Error(
+      "Journal contract violation: moveLeaf must persist a leaf_moved record so reopening reconstructs the moved leaf.",
+    );
+  }
+};
+
+export const describeJournalContract = async (makeLayer: MakeJournalLayer): Promise<void> => {
+  const { describe, expect, test } = await import("vitest");
+
   describe("Journal contract", () => {
     test("createSession appends a tagged root entry and reports it as leaf", async () => {
       const { layer } = makeLayer();
@@ -141,37 +182,7 @@ export const describeJournalContract = (makeLayer: MakeJournalLayer): void => {
     });
 
     test("leaf reconstructs after reopen", async () => {
-      const harness = makeLayer();
-      const initial = await Effect.runPromise(
-        Effect.gen(function* () {
-          const journal = yield* Journal;
-          const session = yield* journal.createSession();
-          const first = yield* journal.appendEntry(
-            session.id,
-            entryDraft("user_input", { text: "First." }),
-          );
-          yield* journal.appendEntry(
-            session.id,
-            entryDraft("assistant_output", { text: "Second." }),
-          );
-          yield* journal.moveLeaf(session.id, first.id);
-          const branch = yield* journal.readBranch(session.id);
-          const leaf = yield* journal.getLeaf(session.id);
-
-          return { branch, leaf, session };
-        }).pipe(Effect.provide(harness.layer)),
-      );
-      const reopened = await Effect.runPromise(
-        Effect.gen(function* () {
-          const journal = yield* Journal;
-          const branch = yield* journal.readBranch(initial.session.id);
-          const leaf = yield* journal.getLeaf(initial.session.id);
-
-          return { branch, leaf };
-        }).pipe(Effect.provide(harness.reopen())),
-      );
-
-      expect(reopened).toEqual({ branch: initial.branch, leaf: initial.leaf });
+      await assertLeafMovePersistsAfterReopen(makeLayer);
     });
 
     test("append after moveLeaf parents to the moved-to entry", async () => {

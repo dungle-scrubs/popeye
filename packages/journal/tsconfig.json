@@ -6,6 +6,6 @@
     "tsBuildInfoFile": "./dist/.tsbuildinfo",
     "types": ["node"]
   },
-  "exclude": ["src/**/*.test.ts", "src/journal-contract.ts"],
+  "exclude": ["src/**/*.test.ts"],
   "include": ["src/**/*.ts"]
 }
