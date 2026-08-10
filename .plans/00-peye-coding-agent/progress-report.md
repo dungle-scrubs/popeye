@@ -5,7 +5,7 @@
 > file as features are implemented - never mark a milestone complete
 > until every current-cutoff checkbox under it is checked.
 
-> Current focus: Phase 1 - Foundations
+> Current focus: Phase 2 - Kernel, ai seam, driver head
 
 ## Phase 1: Foundations
 
@@ -67,15 +67,15 @@ Source: `implementation.md` (M5)
 ### M6: Compaction semantics and context fold
 Source: `implementation.md` (M6); Normative Contracts (journal rules)
 
-- [ ] Compaction entry records summarized span (first/last ids), summary, and retained-tail ids
-- [ ] Fold with a compaction on the branch uses summary + retained tail + later entries only
-- [ ] Fold never reads entries older than the newest compaction on the branch (assert access)
-- [ ] Compaction-of-compaction folds correctly (newer covers older)
-- [ ] A branch created from an entry inside a summarized span folds without the other branch's compaction
-- [ ] Non-model-visible entry kinds are excluded by the single visibility boundary and nowhere else
-- [ ] Fold respects the token budget parameter
-- [ ] Budget unfittable even after compaction yields `BudgetExceeded` with the options diagnostic
-- [ ] Fold of an empty session (root only) yields an empty message sequence
+- [x] Compaction entry records summarized span (first/last ids), summary, and retained-tail ids
+- [x] Fold with a compaction on the branch uses summary + retained tail + later entries only
+- [x] Fold never reads entries older than the newest compaction on the branch (assert access)
+- [x] Compaction-of-compaction folds correctly (newer covers older)
+- [x] A branch created from an entry inside a summarized span folds without the other branch's compaction
+- [x] Non-model-visible entry kinds are excluded by the single visibility boundary and nowhere else
+- [x] Fold respects the token budget parameter
+- [x] Budget unfittable even after compaction yields `BudgetExceeded` with the options diagnostic
+- [x] Fold of an empty session (root only) yields an empty message sequence
 
 ## Phase 2: Kernel, ai seam, driver head
 
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 35
-- Remaining: 142
-- Current cutoff blockers: 142
+- Completed: 44
+- Remaining: 133
+- Current cutoff blockers: 133
 - Accepted/deferred follow-up: 11
 - Superseded/obsolete checklist debt: 0
