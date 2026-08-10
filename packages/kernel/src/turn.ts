@@ -759,7 +759,7 @@ export const TurnsLive = (): Layer.Layer<
                 const attemptProgress = yield* Ref.make<ReadonlyArray<Progress>>([]);
                 yield* Effect.annotateCurrentSpan({ attempt });
                 yield* Stream.runForEach(
-                  provider.streamAssistant(context, { turnOrdinal }),
+                  provider.streamAssistant(context, { attempt, turnOrdinal }),
                   (item) => {
                     if (item._tag === "textDelta") {
                       const next: Progress = { _tag: "assistantText", text: item.text };

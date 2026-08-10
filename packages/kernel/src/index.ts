@@ -4,6 +4,7 @@
  */
 export const kernelPackage = "@peye/kernel";
 
+export { type PiAiProviderLayerOptions, PiAiProviderLive } from "./ai/seam.js";
 export {
   BudgetExceeded,
   DuplicateToolName,

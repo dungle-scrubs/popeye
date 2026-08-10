@@ -70,6 +70,7 @@ export type AssistantItem =
     };
 
 export interface ProviderStreamOptions {
+  readonly attempt: number;
   readonly turnOrdinal: number;
 }
 
