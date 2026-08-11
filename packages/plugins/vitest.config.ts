@@ -6,7 +6,7 @@ export default defineConfig({
     server: {
       deps: {
         // Plugin fixtures must bypass Vite so tests exercise Node 24 native type stripping.
-        external: [/\/\.loader-/],
+        external: [/\/peye-plugin-fixture-/],
       },
     },
   },

@@ -78,6 +78,7 @@ export {
   HookInputInvalid,
   type PluginLoadCause,
   PluginLoadError,
+  TrustResolverTimeoutError,
 } from "./errors.js";
 export type {
   GenerationLoadError,
@@ -90,7 +91,11 @@ export type {
   TrustResolutionRequest,
   TrustResolver,
 } from "./generation.js";
-export { loadGeneration, makePluginRuntime } from "./generation.js";
+export {
+  DEFAULT_TRUST_RESOLVER_TIMEOUT_MILLIS,
+  loadGeneration,
+  makePluginRuntime,
+} from "./generation.js";
 export {
   type CompactionGateHookInput,
   CompactionGateHookInputSchema,

@@ -13,6 +13,7 @@ import { phase1Sources, phase2Sources } from "./discovery.js";
 import type { HookDiagnostic, HookEmitError, HookEmitterService } from "./emitter.js";
 import { HookEmitter, HookEmitterLive } from "./emitter.js";
 import type { ContributionRegistryError, PluginLoadError } from "./errors.js";
+import { TrustResolverTimeoutError } from "./errors.js";
 import { loadPluginModule } from "./loader.js";
 import type { ContributionRegistryService, RegistryDiagnostic } from "./registry.js";
 import { ContributionRegistry, ContributionRegistryLive } from "./registry.js";
@@ -33,7 +34,10 @@ export type GenerationLoadError =
   | PluginDigestError
   | PluginDiscoveryError
   | PluginLoadError
+  | TrustResolverTimeoutError
   | TrustStoreError;
+
+export const DEFAULT_TRUST_RESOLVER_TIMEOUT_MILLIS = 300_000;
 
 export interface GenerationPlugin {
   readonly name: string;
@@ -90,31 +94,53 @@ export type TrustResolver = (request: TrustResolutionRequest) => Effect.Effect<T
 export interface LoadGenerationOptions {
   readonly config: PluginDiscoveryConfig;
   readonly generationDiagnosticSink?: (diagnostic: GenerationSwapDiagnostic) => Effect.Effect<void>;
+  readonly generationFinalizerSink?: (generationId: string) => Effect.Effect<void>;
   readonly grants?: CapabilityGrants;
   readonly hookDiagnosticSink?: (diagnostic: HookDiagnostic) => Effect.Effect<void>;
   readonly registryDiagnosticSink?: (diagnostic: RegistryDiagnostic) => Effect.Effect<void>;
   readonly trust: TrustDecision | TrustResolver;
   readonly trustDiagnosticSink?: (diagnostic: TrustDiagnostic) => Effect.Effect<void>;
+  readonly trustResolverTimeoutMillis?: number;
 }
 
 interface GenerationRuntime extends PluginGeneration {
   readonly scope: Scope.CloseableScope;
 }
 
+interface GenerationRoutingState {
+  readonly drain: Deferred.Deferred<void> | null;
+  readonly inFlight: number;
+}
+
 interface RoutableGeneration extends GenerationRuntime {
-  readonly drained: Deferred.Deferred<void>;
-  readonly inFlight: Ref.Ref<number>;
+  readonly routing: Ref.Ref<GenerationRoutingState>;
 }
 
 const resolvedTrust = (
   options: LoadGenerationOptions,
   result: TrustCheckResult,
-): Effect.Effect<TrustCheckResult, PluginDigestError | TrustStoreError, TrustStore> => {
+): Effect.Effect<
+  TrustCheckResult,
+  PluginDigestError | TrustResolverTimeoutError | TrustStoreError,
+  TrustStore
+> => {
   if (result.kind === "trusted" || result.kind === "untrusted") {
     return Effect.succeed(result);
   }
   const resolution =
-    typeof options.trust === "function" ? options.trust(result) : Effect.succeed(options.trust);
+    typeof options.trust === "function"
+      ? options.trust(result).pipe(
+          Effect.timeoutFail({
+            duration: options.trustResolverTimeoutMillis ?? DEFAULT_TRUST_RESOLVER_TIMEOUT_MILLIS,
+            onTimeout: () =>
+              new TrustResolverTimeoutError({
+                projectPath: options.config.projectPath,
+                timeoutMillis:
+                  options.trustResolverTimeoutMillis ?? DEFAULT_TRUST_RESOLVER_TIMEOUT_MILLIS,
+              }),
+          }),
+        )
+      : Effect.succeed(options.trust);
   return resolution.pipe(
     Effect.flatMap((decision) =>
       recordDecision(options.config, decision, result.currentDigest, "user").pipe(
@@ -158,6 +184,7 @@ const loadGenerationRuntime = (
     const generationId = randomUUID();
     const scope = yield* Scope.make();
     const closedResources = yield* Ref.make(0);
+    const generationFinalizerSink = options.generationFinalizerSink ?? (() => Effect.void);
     const registryLayer = ContributionRegistryLive(
       options.registryDiagnosticSink === undefined
         ? {}
@@ -169,7 +196,11 @@ const loadGenerationRuntime = (
         : { diagnosticSink: options.hookDiagnosticSink },
     ).pipe(Layer.provide(registryLayer));
     const lifetimeLayer = Layer.scopedDiscard(
-      Effect.addFinalizer(() => Ref.update(closedResources, (count) => count + 1)),
+      Effect.addFinalizer(() =>
+        Ref.update(closedResources, (count) => count + 1).pipe(
+          Effect.zipRight(generationFinalizerSink(generationId)),
+        ),
+      ),
     );
     const context = yield* Layer.buildWithScope(
       Layer.mergeAll(registryLayer, emitterLayer, lifetimeLayer),
@@ -214,21 +245,9 @@ const makeRoutable = (generation: GenerationRuntime): Effect.Effect<RoutableGene
   Effect.gen(function* () {
     return {
       ...generation,
-      drained: yield* Deferred.make<void>(),
-      inFlight: yield* Ref.make(0),
+      routing: yield* Ref.make<GenerationRoutingState>({ drain: null, inFlight: 0 }),
     };
   });
-
-const settle = (generation: RoutableGeneration): Effect.Effect<void> =>
-  Ref.modify(generation.inFlight, (count) => {
-    const remaining = count - 1;
-    return [remaining, remaining] as const;
-  }).pipe(
-    Effect.flatMap((remaining) =>
-      remaining === 0 ? Deferred.succeed(generation.drained, undefined) : Effect.void,
-    ),
-    Effect.asVoid,
-  );
 
 const pluginChanges = (
   oldGeneration: RoutableGeneration,
@@ -255,13 +274,29 @@ export const makePluginRuntime = (
       options.generationDiagnosticSink ??
       ((diagnostic: GenerationSwapDiagnostic) => Effect.logInfo(JSON.stringify(diagnostic)));
 
+    const settle = (generation: RoutableGeneration): Effect.Effect<void> =>
+      routeMutex.withPermits(1)(
+        Ref.modify(generation.routing, (state) => {
+          const remaining = state.inFlight - 1;
+          return [remaining === 0 ? state.drain : null, { ...state, inFlight: remaining }] as const;
+        }).pipe(
+          Effect.flatMap((drain) =>
+            drain === null ? Effect.void : Deferred.succeed(drain, undefined),
+          ),
+          Effect.asVoid,
+        ),
+      );
+
     const use: PluginRuntime["use"] = (run) =>
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const generation = yield* routeMutex.withPermits(1)(
             Effect.gen(function* () {
               const selected = yield* Ref.get(current);
-              yield* Ref.update(selected.inFlight, (count) => count + 1);
+              yield* Ref.update(selected.routing, (state) => ({
+                ...state,
+                inFlight: state.inFlight + 1,
+              }));
               return selected;
             }),
           );
@@ -276,19 +311,21 @@ export const makePluginRuntime = (
       .withPermits(1)(
         Effect.gen(function* () {
           const fresh = yield* loadGenerationRuntime(options).pipe(Effect.flatMap(makeRoutable));
-          const old = yield* routeMutex.withPermits(1)(
+          const drain = yield* Deferred.make<void>();
+          const { inFlight, old } = yield* routeMutex.withPermits(1)(
             Effect.gen(function* () {
               const selected = yield* Ref.get(current);
+              const state = yield* Ref.get(selected.routing);
+              yield* Ref.set(selected.routing, { ...state, drain });
               yield* Ref.set(current, fresh);
-              const count = yield* Ref.get(selected.inFlight);
-              if (count === 0) {
-                yield* Deferred.succeed(selected.drained, undefined);
-              }
-              return selected;
+              return { inFlight: state.inFlight, old: selected };
             }),
           );
+          if (inFlight === 0) {
+            yield* Deferred.succeed(drain, undefined);
+          }
           const drainStartedAt = yield* Clock.currentTimeMillis;
-          yield* Deferred.await(old.drained);
+          yield* Deferred.await(drain);
           yield* old.close;
           const drainFinishedAt = yield* Clock.currentTimeMillis;
           return {
@@ -322,22 +359,29 @@ export const makePluginRuntime = (
 
     const close = reloadMutex.withPermits(1)(
       Effect.gen(function* () {
-        const generation = yield* Ref.get(current);
-        const count = yield* Ref.get(generation.inFlight);
-        if (count === 0) {
-          yield* Deferred.succeed(generation.drained, undefined);
+        const drain = yield* Deferred.make<void>();
+        const { generation, inFlight } = yield* routeMutex.withPermits(1)(
+          Effect.gen(function* () {
+            const selected = yield* Ref.get(current);
+            const state = yield* Ref.get(selected.routing);
+            yield* Ref.set(selected.routing, { ...state, drain });
+            return { generation: selected, inFlight: state.inFlight };
+          }),
+        );
+        if (inFlight === 0) {
+          yield* Deferred.succeed(drain, undefined);
         }
-        yield* Deferred.await(generation.drained);
+        yield* Deferred.await(drain);
         yield* generation.close;
       }),
     );
 
     const debugInfo = Ref.get(current).pipe(
       Effect.flatMap((generation) =>
-        Ref.get(generation.inFlight).pipe(
-          Effect.map((inFlight) => ({
+        Ref.get(generation.routing).pipe(
+          Effect.map((routing) => ({
             currentGenerationId: generation.id,
-            inFlight,
+            inFlight: routing.inFlight,
             plugins: generation.plugins.map((plugin) => plugin.name),
           })),
         ),

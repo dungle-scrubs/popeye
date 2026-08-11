@@ -1,7 +1,10 @@
 /**
  * Owns native Plugin module import and factory construction.
  * It exists because D-027 requires Node type stripping through absolute file URLs, without a
- * transforming loader, and reload needs an explicit query-string cache key.
+ * transforming loader, and reload needs an explicit query-string cache key. That key reloads only
+ * the entry module: relative sibling imports keep their original URLs, so sibling edits require a
+ * full process restart. Each distinct query also adds a permanent, non-evictable Node ESM registry
+ * entry. D-027 accepts that v1 tradeoff because reloads are human-paced rather than a hot loop.
  */
 import { isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -44,10 +47,7 @@ const unsupportedConstruct = (message: string): "enum" | "namespace" | "unknown"
 const loadFailure = (path: string, cause: unknown): PluginLoadError => {
   const message = errorMessage(cause);
   const construct = unsupportedConstruct(message);
-  if (
-    errorCode(cause) === "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX" ||
-    (construct !== "unknown" && /not supported in strip-only mode/i.test(message))
-  ) {
+  if (errorCode(cause) === "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX") {
     return new PluginLoadError({
       cause: "unsupported_syntax",
       message: `Plugin ${path} uses unsupported TypeScript ${construct} syntax: ${message}`,

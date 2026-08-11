@@ -71,7 +71,7 @@ const tracerLayer = (spans: Array<CapturedSpan>): Layer.Layer<never> => {
 };
 
 test("two-phase loading never imports project-local code on the untrusted path", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-generation-untrusted-"));
+  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-untrusted-"));
   const projectPath = join(root, "project");
   const projectPluginDirectory = join(projectPath, ".peye", "plugins");
   const markerPath = join(root, "project-plugin-imported");
@@ -119,7 +119,7 @@ test("two-phase loading never imports project-local code on the untrusted path",
 });
 
 test("reload swaps the generation and work admitted after the swap uses only the new generation", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-generation-swap-"));
+  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-swap-"));
   const projectPath = join(root, "project");
   const pluginPath = join(root, "external-plugin.ts");
 
@@ -165,7 +165,7 @@ test("reload swaps the generation and work admitted after the swap uses only the
 });
 
 test("in-flight work finishes on its old generation after reload swaps to the new generation", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-generation-in-flight-"));
+  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-in-flight-"));
   const projectPath = join(root, "project");
   const pluginPath = join(root, "external-plugin.ts");
 
@@ -221,8 +221,83 @@ test("in-flight work finishes on its old generation after reload swaps to the ne
   }
 });
 
+test("reload waits for blocking work even after the current generation previously returned to idle", async () => {
+  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-idle-drain-"));
+  const projectPath = join(root, "project");
+  const pluginPath = join(root, "external-plugin.ts");
+
+  try {
+    await mkdir(projectPath, { recursive: true });
+    await writeFile(pluginPath, pluginSource("idle-drain-plugin", "old"));
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runtime = yield* makePluginRuntime({
+          config: { cliPaths: [pluginPath], projectPath, userGlobalDirectories: [] },
+          generationDiagnosticSink: () => Effect.void,
+          trust: "untrusted",
+        });
+        const oldGeneration = yield* runtime.use((generation) => Effect.succeed(generation));
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const workFiber = yield* Effect.fork(
+          runtime.use(() =>
+            Deferred.succeed(started, undefined).pipe(Effect.zipRight(Deferred.await(release))),
+          ),
+        );
+        yield* Deferred.await(started);
+        yield* Effect.promise(() =>
+          writeFile(pluginPath, pluginSource("idle-drain-plugin", "new")),
+        );
+        const reloadFiber = yield* Effect.fork(runtime.reload);
+        let current = yield* runtime.debugInfo;
+        for (
+          let attempt = 0;
+          attempt < 100 && current.currentGenerationId === oldGeneration.id;
+          attempt += 1
+        ) {
+          yield* Effect.sleep("1 millis");
+          current = yield* runtime.debugInfo;
+        }
+        yield* Effect.sleep("25 millis");
+        const closedBeforeRelease = yield* oldGeneration.closedResources;
+        const reloadBeforeRelease = yield* Fiber.poll(reloadFiber);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(workFiber);
+        const diagnostic = yield* Fiber.join(reloadFiber);
+        yield* Effect.promise(() =>
+          writeFile(
+            pluginPath,
+            [
+              "enum NativeImportGuard { Active }",
+              "void NativeImportGuard.Active;",
+              pluginSource("idle-drain-plugin", "native-guard"),
+            ].join("\n"),
+          ),
+        );
+        const nativeSyntaxError = yield* Effect.flip(runtime.reload);
+        yield* runtime.close;
+        return {
+          closedBeforeRelease,
+          diagnostic,
+          nativeSyntaxError,
+          reloadBeforeRelease,
+        };
+      }).pipe(Effect.provide(TrustStoreMemory())),
+    );
+
+    expect(result.closedBeforeRelease).toBe(0);
+    expect(Option.isNone(result.reloadBeforeRelease)).toBe(true);
+    expect(result.diagnostic.closedResources).toBe(1);
+    expect(result.diagnostic.drainDurationMillis).toBeGreaterThanOrEqual(20);
+    expect(result.nativeSyntaxError).toMatchObject({ cause: "unsupported_syntax" });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 test("the old generation Scope closes exactly once after its last in-flight work settles", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-generation-scope-close-"));
+  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-scope-close-"));
   const projectPath = join(root, "project");
   const pluginPath = join(root, "external-plugin.ts");
 
@@ -273,7 +348,7 @@ test("the old generation Scope closes exactly once after its last in-flight work
 });
 
 test("reload is serialized and cannot import a new generation during a running gate hook", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-generation-serialized-"));
+  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-serialized-"));
   const projectPath = join(root, "project");
   const pluginPath = join(root, "external-plugin.ts");
   const reloadImportMarker = join(root, "reload-imported");
@@ -332,7 +407,7 @@ test("reload is serialized and cannot import a new generation during a running g
 });
 
 test("generation-swap diagnostics and the plugins.reload span report ids, drain, resources, and Plugin changes", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-generation-observability-"));
+  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-observability-"));
   const projectPath = join(root, "project");
   const pluginDirectory = join(projectPath, ".peye", "plugins");
   const keptPath = join(pluginDirectory, "kept.ts");
@@ -387,9 +462,11 @@ test("generation-swap diagnostics and the plugins.reload span report ids, drain,
 });
 
 test("generation reload passes a 120-iteration admission, interruption, swap, and drain race", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-generation-race-"));
+  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-race-"));
   const projectPath = join(root, "project");
   const pluginPath = join(root, "external-plugin.ts");
+  const finalizerCounts = new Map<string, number>();
+  const lifecycleEvents: Array<string> = [];
 
   try {
     await mkdir(projectPath, { recursive: true });
@@ -400,6 +477,11 @@ test("generation reload passes a 120-iteration admission, interruption, swap, an
         const runtime = yield* makePluginRuntime({
           config: { cliPaths: [pluginPath], projectPath, userGlobalDirectories: [] },
           generationDiagnosticSink: () => Effect.void,
+          generationFinalizerSink: (generationId) =>
+            Effect.sync(() => {
+              finalizerCounts.set(generationId, (finalizerCounts.get(generationId) ?? 0) + 1);
+              lifecycleEvents.push(`finalized:${generationId}`);
+            }),
           trust: "untrusted",
           trustDiagnosticSink: () => Effect.void,
         });
@@ -413,6 +495,9 @@ test("generation reload passes a 120-iteration admission, interruption, swap, an
               Deferred.succeed(firstStarted, generation.id).pipe(
                 Effect.zipRight(Deferred.await(release)),
                 Effect.as(generation.id),
+                Effect.ensuring(
+                  Effect.sync(() => lifecycleEvents.push(`turn-settled:${generation.id}`)),
+                ),
               ),
             ),
           );
@@ -421,6 +506,9 @@ test("generation reload passes a 120-iteration admission, interruption, swap, an
               Deferred.succeed(secondStarted, generation.id).pipe(
                 Effect.zipRight(Deferred.await(release)),
                 Effect.as(generation.id),
+                Effect.ensuring(
+                  Effect.sync(() => lifecycleEvents.push(`turn-settled:${generation.id}`)),
+                ),
               ),
             ),
           );
@@ -450,7 +538,14 @@ test("generation reload passes a 120-iteration admission, interruption, swap, an
           const diagnostic = yield* Fiber.join(reloadFiber);
           expect(oldIds).toEqual([initial.currentGenerationId, initial.currentGenerationId]);
           expect(newId).toBe(diagnostic.newGenerationId);
-          expect(diagnostic.closedResources).toBe(1);
+          const finalizerIndex = lifecycleEvents.indexOf(
+            `finalized:${initial.currentGenerationId}`,
+          );
+          const settledIndices = lifecycleEvents.flatMap((event, index) =>
+            event === `turn-settled:${initial.currentGenerationId}` ? [index] : [],
+          );
+          expect(settledIndices).toHaveLength(2);
+          expect(Math.max(...settledIndices)).toBeLessThan(finalizerIndex);
         }
         yield* runtime.close;
         return 120;
@@ -458,13 +553,16 @@ test("generation reload passes a 120-iteration admission, interruption, swap, an
     );
 
     expect(iterations).toBe(120);
+    expect(lifecycleEvents.filter((event) => event.startsWith("turn-settled:"))).toHaveLength(240);
+    expect(finalizerCounts.size).toBe(121);
+    expect([...finalizerCounts.values()]).toEqual(Array.from({ length: 121 }, () => 1));
   } finally {
     await rm(root, { force: true, recursive: true });
   }
 }, 20_000);
 
 test("unsupported syntax and build failures during reload leave the old generation intact", async () => {
-  const root = await mkdtemp(join(tmpdir(), ".loader-generation-atomic-"));
+  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-atomic-"));
   const projectPath = join(root, "project");
   const pluginPath = join(root, "external-plugin.ts");
 
@@ -517,7 +615,7 @@ test("unsupported syntax and build failures during reload leave the old generati
 });
 
 test("a Trust resolver runs after user-global Plugins load and before trusted project-local Plugins load", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-generation-trust-resolver-"));
+  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-trust-resolver-"));
   const projectPath = join(root, "project");
   const projectPluginDirectory = join(projectPath, ".peye", "plugins");
   const userGlobalDirectory = join(root, "user-plugins");
@@ -566,6 +664,54 @@ test("a Trust resolver runs after user-global Plugins load and before trusted pr
 
     expect(names).toEqual(["user-plugin", "project-plugin"]);
     await expect(access(projectMarker)).resolves.toBeUndefined();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("a timed-out Trust resolver fails reload and releases the reload mutex", async () => {
+  const root = await mkdtemp(
+    join(tmpdir(), "peye-plugin-fixture-generation-trust-resolver-timeout-"),
+  );
+  const projectPath = join(root, "project");
+  const projectPluginDirectory = join(projectPath, ".peye", "plugins");
+  const pluginPath = join(projectPluginDirectory, "project.ts");
+  let resolverCalls = 0;
+
+  try {
+    await mkdir(projectPluginDirectory, { recursive: true });
+    await writeFile(pluginPath, pluginSource("timeout-plugin", "initial"));
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runtime = yield* makePluginRuntime({
+          config: { cliPaths: [], projectPath, userGlobalDirectories: [] },
+          generationDiagnosticSink: () => Effect.void,
+          trust: () =>
+            Effect.suspend(() => {
+              resolverCalls += 1;
+              return resolverCalls === 2 ? Effect.never : Effect.succeed("trusted" as const);
+            }),
+          trustDiagnosticSink: () => Effect.void,
+          trustResolverTimeoutMillis: 10,
+        });
+        yield* Effect.promise(() =>
+          writeFile(pluginPath, pluginSource("timeout-plugin", "changed")),
+        );
+        const timeoutError = yield* Effect.flip(runtime.reload);
+        const diagnostic = yield* runtime.reload;
+        yield* runtime.close;
+        return { diagnostic, timeoutError };
+      }).pipe(Effect.provide(TrustStoreMemory())),
+    );
+
+    expect(result.timeoutError).toMatchObject({
+      _tag: "TrustResolverTimeoutError",
+      projectPath,
+      timeoutMillis: 10,
+    });
+    expect(result.diagnostic.type).toBe("generation_swap");
+    expect(resolverCalls).toBe(3);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

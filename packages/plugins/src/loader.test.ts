@@ -1,29 +1,35 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { Effect } from "effect";
 import { expect, test } from "vitest";
 
 import { loadPluginModule } from "./loader.js";
 
-const packageDirectory = fileURLToPath(new URL("../", import.meta.url));
-
 test("native import loads annotations, import type, generics, host imports, and relative siblings", async () => {
-  const root = await mkdtemp(join(packageDirectory, ".loader-native-"));
+  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-loader-native-"));
   const pluginPath = join(root, "plugin.ts");
 
   try {
-    await mkdir(root, { recursive: true });
+    await symlink(
+      join(process.cwd(), "packages", "plugins", "node_modules"),
+      join(root, "node_modules"),
+      "dir",
+    );
     await writeFile(
       join(root, "sibling.ts"),
       "export const siblingValue: string = 'relative-sibling';\n",
     );
     await writeFile(
+      join(root, "types.ts"),
+      "export interface PluginManifest { readonly capabilities: readonly string[]; readonly name: string; readonly version: string; }\n",
+    );
+    await writeFile(
       pluginPath,
       [
         'import { Schema } from "effect";',
-        'import type { PluginManifest } from "../src/manifest.ts";',
+        'import type { PluginManifest } from "./types.ts";',
         'import { siblingValue } from "./sibling.ts";',
         "",
         "const identity = <TValue>(value: TValue): TValue => value;",
@@ -61,7 +67,7 @@ test("native import loads annotations, import type, generics, host imports, and 
 });
 
 test("enum and namespace syntax fail with a clear diagnostic naming the file and construct", async () => {
-  const root = await mkdtemp(join(packageDirectory, ".loader-syntax-"));
+  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-loader-syntax-"));
   const enumPath = join(root, "enum-plugin.ts");
   const namespacePath = join(root, "namespace-plugin.ts");
 
@@ -93,8 +99,8 @@ test("enum and namespace syntax fail with a clear diagnostic naming the file and
   }
 });
 
-test("reload cache busting re-imports a Plugin with fresh module state", async () => {
-  const root = await mkdtemp(join(packageDirectory, ".loader-state-"));
+test("distinct reload keys evaluate fresh entries while each Node registry entry stays cached", async () => {
+  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-loader-state-"));
   const pluginPath = join(root, "plugin.ts");
   const stateKey = `peye-loader-${root}`;
 
@@ -121,17 +127,54 @@ test("reload cache busting re-imports a Plugin with fresh module state", async (
 
     const first = await Effect.runPromise(loadPluginModule(pluginPath, { cacheKey: "first" }));
     const second = await Effect.runPromise(loadPluginModule(pluginPath, { cacheKey: "second" }));
+    const firstAgain = await Effect.runPromise(loadPluginModule(pluginPath, { cacheKey: "first" }));
 
     expect(first.contributions[0]?.payload).toMatchObject({ content: "1" });
     expect(second.contributions[0]?.payload).toMatchObject({ content: "2" });
+    expect(firstAgain.contributions[0]?.payload).toMatchObject({ content: "1" });
   } finally {
     delete (globalThis as Record<string, unknown>)[stateKey];
     await rm(root, { force: true, recursive: true });
   }
 });
 
+test("reload cache busting does not reload relative sibling modules", async () => {
+  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-loader-sibling-cache-"));
+  const pluginPath = join(root, "plugin.ts");
+  const siblingPath = join(root, "sibling.ts");
+
+  try {
+    await writeFile(siblingPath, "export const content: string = 'old';\n");
+    await writeFile(
+      pluginPath,
+      [
+        'import { content } from "./sibling.ts";',
+        "export default () => ({",
+        "  contributions: [{",
+        "    kind: 'instruction-fragment',",
+        "    name: 'sibling-cache',",
+        "    payload: { content, id: 'sibling-cache', trigger: 'explicit' },",
+        "    priority: 0,",
+        "  }],",
+        "  manifest: { capabilities: [], name: 'sibling-cache', version: '1.0.0' },",
+        "});",
+        "",
+      ].join("\n"),
+    );
+
+    const first = await Effect.runPromise(loadPluginModule(pluginPath, { cacheKey: "first" }));
+    await writeFile(siblingPath, "export const content: string = 'new';\n");
+    const second = await Effect.runPromise(loadPluginModule(pluginPath, { cacheKey: "second" }));
+
+    expect(first.contributions[0]?.payload).toMatchObject({ content: "old" });
+    expect(second.contributions[0]?.payload).toMatchObject({ content: "old" });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 test("module-evaluation and factory throws fail as build_failed and name the Plugin file", async () => {
-  const root = await mkdtemp(join(packageDirectory, ".loader-build-"));
+  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-loader-build-"));
   const importFailurePath = join(root, "import-failure.ts");
   const factoryFailurePath = join(root, "factory-failure.ts");
 
@@ -153,6 +196,24 @@ test("module-evaluation and factory throws fail as build_failed and name the Plu
     expect(importError.message).toContain("import exploded");
     expect(factoryError).toMatchObject({ cause: "build_failed", plugin: factoryFailurePath });
     expect(factoryError.message).toContain("factory exploded");
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("Plugin error text cannot impersonate Node's unsupported TypeScript syntax code", async () => {
+  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-loader-error-text-"));
+  const pluginPath = join(root, "plugin.ts");
+
+  try {
+    await writeFile(
+      pluginPath,
+      "throw new Error('TypeScript enum is not supported in strip-only mode');\n",
+    );
+
+    const error = await Effect.runPromise(Effect.flip(loadPluginModule(pluginPath)));
+
+    expect(error).toMatchObject({ cause: "build_failed", plugin: pluginPath });
   } finally {
     await rm(root, { force: true, recursive: true });
   }

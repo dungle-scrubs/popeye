@@ -31,6 +31,11 @@ export class PluginLoadError extends Data.TaggedError("PluginLoadError")<{
   readonly schemaCause?: unknown;
 }> {}
 
+export class TrustResolverTimeoutError extends Data.TaggedError("TrustResolverTimeoutError")<{
+  readonly projectPath: string;
+  readonly timeoutMillis: number;
+}> {}
+
 export type ContributionRegistryErrorReason =
   | "hook_merge_class_mismatch"
   | "hook_point_conflict"
