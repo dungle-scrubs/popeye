@@ -36,6 +36,7 @@ export interface RegisteredContribution<TKind extends string = string, TPayload 
   extends Contribution<TKind, TPayload> {
   readonly key: ContributionKey;
   readonly priority: number;
+  readonly registrationRevision: number;
 }
 
 export interface CommandExecutionContext {

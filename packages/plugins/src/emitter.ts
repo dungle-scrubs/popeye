@@ -1,48 +1,74 @@
 /**
  * Owns generic Hook execution for every declared point.
  * It exists because one emitter must execute all Hook points from declared semantics; bespoke
- * per-point emitters must not exist, which preserves the M2 review lesson from pi.
+ * per-point emitters must not exist.
  */
-import type { Duration, Scope, Tracer } from "effect";
-import { Clock, Context, Effect, Exit, Layer, Queue, Ref } from "effect";
+import type { Cause as CauseType, Fiber as FiberType, Scope, Tracer } from "effect";
+import {
+  Cause,
+  Clock,
+  Context,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Queue,
+  Ref,
+  Schema,
+} from "effect";
 
 import type { CapabilityGrants } from "./capability.js";
 import type { RegisteredContribution } from "./contribution.js";
-import { type ContributionRegistryError, GateRejected } from "./errors.js";
-import {
-  HOOK_POINTS,
-  type HookPayload,
-  type HookPointInput,
-  type HookPointName,
-  type HookPointOutput,
+import { type ContributionRegistryError, GateRejected, HookInputInvalid } from "./errors.js";
+import type {
+  HookMergeClass,
+  HookPayload,
+  HookPointDefinition,
+  HookPointInput,
+  HookPointName,
+  HookPointResult,
+  HookPointTypeMap,
 } from "./hook-points.js";
 import { ContributionRegistry, HookContributionKind } from "./registry.js";
 
 type RegisteredHook = RegisteredContribution<
   "hook",
   {
-    readonly mergeClass: "Accumulate" | "Chain" | "FirstWins" | "Tap";
+    readonly mergeClass: HookMergeClass;
     readonly name: string;
     readonly point: string;
     readonly run: (input: unknown) => Effect.Effect<unknown, unknown>;
   }
 >;
 
-export const DEFAULT_GATE_TIMEOUT_MILLIS = 30_000;
+export const DEFAULT_HOOK_TIMEOUT_MILLIS = 30_000;
+/** @deprecated Use DEFAULT_HOOK_TIMEOUT_MILLIS. */
+export const DEFAULT_GATE_TIMEOUT_MILLIS = DEFAULT_HOOK_TIMEOUT_MILLIS;
 export const DEFAULT_TAP_QUEUE_CAPACITY = 64;
+const MAX_FAILURE_RENDER_LENGTH = 1_024;
 
-export interface HookContributionSkippedDiagnostic {
+export type HookErrorPayload = Readonly<Record<string, unknown>> | null;
+
+interface HookFailureDiagnosticFields {
+  readonly cause: string;
+  readonly errorPayload: HookErrorPayload;
+  readonly errorTag: string | null;
+  readonly reason: string;
+  readonly timedOut: boolean;
+}
+
+export interface HookContributionSkippedDiagnostic extends HookFailureDiagnosticFields {
   readonly mergeClass: "Accumulate" | "Chain" | "FirstWins";
   readonly plugin: string;
   readonly point: HookPointName;
-  readonly reason: string;
   readonly type: "hook_contribution_skipped";
 }
 
-export interface HookTapFailedDiagnostic {
+export interface HookTapFailedDiagnostic extends HookFailureDiagnosticFields {
   readonly plugin: string;
   readonly point: HookPointName;
-  readonly reason: string;
   readonly type: "hook_tap_failed";
 }
 
@@ -53,77 +79,180 @@ export interface HookTapDroppedDiagnostic {
   readonly type: "hook_tap_dropped";
 }
 
-export interface HookGateRejectedDiagnostic {
+export interface HookGateRejectedDiagnostic extends HookFailureDiagnosticFields {
   readonly plugin: string;
   readonly point: HookPointName;
-  readonly reason: string;
-  readonly timedOut: boolean;
   readonly type: "hook_gate_rejected";
+}
+
+export interface HookFieldConflictDiagnostic {
+  readonly field: string;
+  readonly point: HookPointName;
+  readonly selectedPlugin: string;
+  readonly skippedPlugin: string;
+  readonly type: "hook_field_conflict";
+}
+
+export interface HookPriorityTieDiagnostic {
+  readonly orderedPlugins: readonly [string, string];
+  readonly point: HookPointName;
+  readonly priority: number;
+  readonly type: "hook_priority_tie";
 }
 
 export type HookDiagnostic =
   | HookContributionSkippedDiagnostic
+  | HookFieldConflictDiagnostic
   | HookGateRejectedDiagnostic
+  | HookPriorityTieDiagnostic
   | HookTapDroppedDiagnostic
   | HookTapFailedDiagnostic;
 
 export interface HookEmitterOptions {
+  /** Test seam for forcing the consumer/eviction interleaving. */
+  readonly beforeTapEviction?: Effect.Effect<void>;
   readonly diagnosticSink?: (diagnostic: HookDiagnostic) => Effect.Effect<void>;
-  readonly gateTimeout?: Duration.DurationInput;
   readonly tapQueueCapacity?: number;
 }
 
+const compareCodepoints = (left: string, right: string): number =>
+  left < right ? -1 : left > right ? 1 : 0;
+
 const compareHookPriority = (left: RegisteredHook, right: RegisteredHook): number =>
-  right.priority - left.priority || left.key.localeCompare(right.key);
+  right.priority - left.priority || compareCodepoints(left.key, right.key);
 
 const hooksAtPoint = (
   contributions: ReadonlyArray<RegisteredHook>,
-  point: HookPointName,
-): ReadonlyArray<RegisteredHook> => {
-  const definition = HOOK_POINTS[point];
-  return contributions
+  definition: HookPointDefinition,
+): ReadonlyArray<RegisteredHook> =>
+  contributions
     .filter(
       (contribution) =>
-        contribution.payload.point === point &&
+        contribution.payload.point === definition.name &&
         contribution.payload.mergeClass === definition.mergeClass,
     )
     .sort(compareHookPriority);
-};
 
 const pluginName = (contribution: RegisteredHook): string =>
   contribution.key.slice(0, contribution.key.indexOf("/"));
 
-const failureReason = (failure: unknown): string =>
-  failure instanceof Error ? failure.message : String(failure);
+const bounded = (value: string): string =>
+  value.length <= MAX_FAILURE_RENDER_LENGTH
+    ? value
+    : `${value.slice(0, MAX_FAILURE_RENDER_LENGTH - 1)}…`;
+
+const jsonValue = (value: unknown): unknown => {
+  if (value === null || typeof value === "boolean" || typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return bounded(value);
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map(jsonValue);
+  }
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([key]) => key !== "_tag" && key !== "stack")
+        .slice(0, 20)
+        .map(([key, item]) => [key, jsonValue(item)]),
+    );
+  }
+  return String(value);
+};
+
+const boundedJson = (value: unknown): string => {
+  try {
+    return bounded(JSON.stringify(jsonValue(value)));
+  } catch {
+    return bounded(String(value));
+  }
+};
+
+interface FailureDetails {
+  readonly cause: string;
+  readonly errorPayload: HookErrorPayload;
+  readonly errorTag: string | null;
+  readonly reason: string;
+  readonly timedOut: boolean;
+}
+
+const failureDetails = (cause: CauseType.Cause<unknown>): FailureDetails => {
+  const failure = Cause.failures(cause).pipe(
+    (failures) => failures[Symbol.iterator]().next().value,
+  );
+  const tagged =
+    typeof failure === "object" &&
+    failure !== null &&
+    "_tag" in failure &&
+    typeof failure._tag === "string"
+      ? failure
+      : null;
+  const errorPayload = tagged === null ? null : (jsonValue(tagged) as HookErrorPayload);
+  const reason =
+    tagged !== null
+      ? bounded(`${tagged._tag}: ${boundedJson(errorPayload)}`)
+      : failure instanceof Error
+        ? bounded(`${failure.name}: ${failure.message}`)
+        : failure !== undefined
+          ? bounded(String(failure))
+          : bounded(Cause.pretty(cause));
+  return {
+    cause: bounded(Cause.pretty(cause)),
+    errorPayload,
+    errorTag: tagged?._tag ?? null,
+    reason,
+    timedOut: false,
+  };
+};
+
+const timeoutDetails = (definition: HookPointDefinition): FailureDetails => {
+  const timeoutMillis = Duration.toMillis(Duration.decode(definition.timeout));
+  const reason = `Hook timed out after ${timeoutMillis} ms.`;
+  return {
+    cause: reason,
+    errorPayload: null,
+    errorTag: null,
+    reason,
+    timedOut: true,
+  };
+};
 
 const gateRejected = (
   contribution: RegisteredHook,
+  details: FailureDetails,
   point: HookPointName,
-  reason: string,
-  timedOut: boolean,
-): GateRejected => new GateRejected({ plugin: pluginName(contribution), point, reason, timedOut });
+): GateRejected =>
+  new GateRejected({
+    cause: details.cause,
+    plugin: pluginName(contribution),
+    point,
+    reason: details.reason,
+    timedOut: details.timedOut,
+  });
 
 const skippedDiagnostic = (
   contribution: RegisteredHook,
-  failure: unknown,
+  details: FailureDetails,
   mergeClass: HookContributionSkippedDiagnostic["mergeClass"],
   point: HookPointName,
 ): HookContributionSkippedDiagnostic => ({
+  ...details,
   mergeClass,
   plugin: pluginName(contribution),
   point,
-  reason: failureReason(failure),
   type: "hook_contribution_skipped",
 });
 
 const tapFailedDiagnostic = (
   contribution: RegisteredHook,
-  failure: unknown,
+  details: FailureDetails,
   point: HookPointName,
 ): HookTapFailedDiagnostic => ({
+  ...details,
   plugin: pluginName(contribution),
   point,
-  reason: failureReason(failure),
   type: "hook_tap_failed",
 });
 
@@ -139,6 +268,9 @@ const makeHookTraceState = (): HookTraceState => ({
   skippedPlugins: [],
 });
 
+const exitOutcome = (exit: Exit.Exit<unknown, unknown>): string =>
+  Exit.isSuccess(exit) ? "success" : Cause.isInterrupted(exit.cause) ? "interrupted" : "failure";
+
 const traceHook = <TValue, TError, TRequirements>(
   effect: Effect.Effect<TValue, TError, TRequirements>,
   point: HookPointName,
@@ -151,9 +283,11 @@ const traceHook = <TValue, TError, TRequirements>(
         outcome:
           traceState.rejectedPlugins.length > 0
             ? "rejected"
-            : Exit.isSuccess(exit)
-              ? "success"
-              : "error",
+            : Exit.isFailure(exit) && Cause.isInterrupted(exit.cause)
+              ? "interrupted"
+              : Exit.isSuccess(exit)
+                ? "success"
+                : "error",
         rejectedPlugins: [...traceState.rejectedPlugins],
         skippedPlugins: [...traceState.skippedPlugins],
       }),
@@ -174,7 +308,7 @@ const traceContribution = <TValue, TError, TRequirements>(
             Effect.flatMap((finishedAt) =>
               Effect.annotateCurrentSpan({
                 durationMillis: finishedAt - startedAt,
-                outcome: Exit.isSuccess(exit) ? "success" : "failure",
+                outcome: exitOutcome(exit),
               }),
             ),
           ),
@@ -187,100 +321,132 @@ const traceContribution = <TValue, TError, TRequirements>(
   );
 
 type HookRunResult =
-  | { readonly status: "skipped" }
+  | { readonly details: FailureDetails; readonly status: "failure" }
   | { readonly status: "success"; readonly value: unknown };
 
-const runSkippable = (
+const runContribution = (
   contribution: RegisteredHook,
-  diagnosticSink: (diagnostic: HookDiagnostic) => Effect.Effect<void>,
+  definition: HookPointDefinition,
   input: unknown,
+  point: HookPointName,
+): Effect.Effect<HookRunResult> =>
+  Effect.gen(function* () {
+    const exit = yield* Effect.exit(
+      traceContribution(
+        contribution,
+        contribution.payload
+          .run(input)
+          .pipe(Effect.flatMap(Schema.decodeUnknown(definition.outputSchema))),
+        point,
+      ).pipe(Effect.timeoutOption(definition.timeout)),
+    );
+    if (Exit.isFailure(exit)) {
+      if (Cause.isInterrupted(exit.cause)) {
+        return yield* Effect.failCause(exit.cause as CauseType.Cause<never>);
+      }
+      return { details: failureDetails(exit.cause), status: "failure" };
+    }
+    return Option.isNone(exit.value)
+      ? { details: timeoutDetails(definition), status: "failure" }
+      : { status: "success", value: exit.value.value };
+  });
+
+const emitPriorityTieDiagnostics = (
+  contributions: ReadonlyArray<RegisteredHook>,
+  diagnosticSink: (diagnostic: HookDiagnostic) => Effect.Effect<void>,
+  point: HookPointName,
+): Effect.Effect<void> =>
+  Effect.forEach(
+    contributions.slice(1),
+    (contribution, index) => {
+      const previous = contributions[index];
+      if (
+        previous === undefined ||
+        previous.priority !== contribution.priority ||
+        pluginName(previous) === pluginName(contribution)
+      ) {
+        return Effect.void;
+      }
+      return diagnosticSink({
+        orderedPlugins: [pluginName(previous), pluginName(contribution)],
+        point,
+        priority: contribution.priority,
+        type: "hook_priority_tie",
+      });
+    },
+    { discard: true },
+  );
+
+const emitFailureDiagnostic = (
+  contribution: RegisteredHook,
+  details: FailureDetails,
+  diagnosticSink: (diagnostic: HookDiagnostic) => Effect.Effect<void>,
   mergeClass: HookContributionSkippedDiagnostic["mergeClass"],
   point: HookPointName,
   traceState: HookTraceState,
-): Effect.Effect<HookRunResult> =>
-  traceContribution(contribution, contribution.payload.run(input), point).pipe(
-    Effect.map((value) => ({ status: "success" as const, value })),
-    Effect.catchAll((failure) => {
-      traceState.skippedPlugins.push(pluginName(contribution));
-      return diagnosticSink(skippedDiagnostic(contribution, failure, mergeClass, point)).pipe(
-        Effect.as({ status: "skipped" as const }),
-      );
-    }),
-  );
-
-const runGate = (
-  contribution: RegisteredHook,
-  diagnosticSink: (diagnostic: HookDiagnostic) => Effect.Effect<void>,
-  gateTimeout: Duration.DurationInput,
-  input: unknown,
-  point: HookPointName,
-  traceState: HookTraceState,
-): Effect.Effect<unknown, GateRejected> =>
-  traceContribution(contribution, contribution.payload.run(input), point).pipe(
-    Effect.mapError((failure) => gateRejected(contribution, point, failureReason(failure), false)),
-    Effect.timeoutFail({
-      duration: gateTimeout,
-      onTimeout: () =>
-        gateRejected(
-          contribution,
-          point,
-          `Hook gate timed out after ${String(gateTimeout)}.`,
-          true,
-        ),
-    }),
-    Effect.tapError((error) =>
-      Effect.sync(() => traceState.rejectedPlugins.push(pluginName(contribution))).pipe(
-        Effect.zipRight(
-          diagnosticSink({
-            plugin: error.plugin,
-            point,
-            reason: error.reason,
-            timedOut: error.timedOut,
-            type: "hook_gate_rejected",
-          }),
-        ),
-      ),
-    ),
-  );
-
-const runTap = (
-  contribution: RegisteredHook,
-  diagnosticSink: (diagnostic: HookDiagnostic) => Effect.Effect<void>,
-  input: HookPayload,
-  point: HookPointName,
-): Effect.Effect<void> =>
-  traceContribution(contribution, contribution.payload.run(input), point).pipe(
-    Effect.catchAll((failure) => {
-      const diagnostic = tapFailedDiagnostic(contribution, failure, point);
-      return diagnosticSink(diagnostic).pipe(
-        Effect.zipRight(Effect.logWarning(JSON.stringify(diagnostic))),
-      );
-    }),
-  );
+): Effect.Effect<void> => {
+  traceState.skippedPlugins.push(pluginName(contribution));
+  return diagnosticSink(skippedDiagnostic(contribution, details, mergeClass, point));
+};
 
 const runFirstWins = (
   contributions: ReadonlyArray<RegisteredHook>,
+  definition: HookPointDefinition,
   diagnosticSink: (diagnostic: HookDiagnostic) => Effect.Effect<void>,
-  gateTimeout: Duration.DurationInput,
-  input: HookPayload,
+  input: unknown,
   point: HookPointName,
-  rejectFailures: boolean,
   traceState: HookTraceState,
 ): Effect.Effect<unknown | undefined, GateRejected> =>
   Effect.gen(function* () {
     for (const contribution of contributions) {
-      const output = rejectFailures
-        ? yield* runGate(contribution, diagnosticSink, gateTimeout, input, point, traceState)
-        : yield* runSkippable(
-            contribution,
-            diagnosticSink,
-            input,
-            "FirstWins",
+      const result = yield* runContribution(contribution, definition, input, point);
+      if (result.status === "failure") {
+        if (definition.failurePolicy === "reject") {
+          const error = gateRejected(contribution, result.details, point);
+          traceState.rejectedPlugins.push(pluginName(contribution));
+          yield* diagnosticSink({
+            ...result.details,
+            plugin: error.plugin,
             point,
-            traceState,
-          ).pipe(Effect.map((result) => (result.status === "success" ? result.value : undefined)));
-      if (output !== undefined) {
-        return output;
+            type: "hook_gate_rejected",
+          });
+          return yield* error;
+        }
+        yield* emitFailureDiagnostic(
+          contribution,
+          result.details,
+          diagnosticSink,
+          "FirstWins",
+          point,
+          traceState,
+        );
+        continue;
+      }
+      const decision = result.value as Readonly<Record<string, unknown>>;
+      if (decision.decision === "continue") {
+        continue;
+      }
+      if (decision.decision === "block") {
+        const reason = String(decision.reason);
+        const details: FailureDetails = {
+          cause: `block(${reason})`,
+          errorPayload: null,
+          errorTag: null,
+          reason,
+          timedOut: false,
+        };
+        const error = gateRejected(contribution, details, point);
+        traceState.rejectedPlugins.push(pluginName(contribution));
+        yield* diagnosticSink({
+          ...details,
+          plugin: error.plugin,
+          point,
+          type: "hook_gate_rejected",
+        });
+        return yield* error;
+      }
+      if (decision.decision === "replace" || decision.decision === "handled") {
+        return decision.value;
       }
     }
     return undefined;
@@ -288,34 +454,83 @@ const runFirstWins = (
 
 const runChain = (
   contributions: ReadonlyArray<RegisteredHook>,
+  definition: HookPointDefinition,
   diagnosticSink: (diagnostic: HookDiagnostic) => Effect.Effect<void>,
   input: HookPayload,
   point: HookPointName,
   traceState: HookTraceState,
 ): Effect.Effect<HookPayload> =>
   Effect.reduce(contributions, input, (current, contribution) =>
-    runSkippable(contribution, diagnosticSink, current, "Chain", point, traceState).pipe(
-      Effect.map((result) =>
-        result.status === "success" ? (result.value as HookPayload) : current,
-      ),
+    runContribution(contribution, definition, current, point).pipe(
+      Effect.flatMap((result) => {
+        if (result.status === "success") {
+          return Effect.succeed(result.value as HookPayload);
+        }
+        return emitFailureDiagnostic(
+          contribution,
+          result.details,
+          diagnosticSink,
+          "Chain",
+          point,
+          traceState,
+        ).pipe(Effect.as(current));
+      }),
     ),
   );
 
+interface AccumulateState {
+  readonly output: HookPayload;
+  readonly owners: ReadonlyMap<string, string>;
+}
+
 const runAccumulate = (
-  combine: (current: HookPayload, next: HookPayload) => HookPayload,
   contributions: ReadonlyArray<RegisteredHook>,
+  definition: HookPointDefinition,
   diagnosticSink: (diagnostic: HookDiagnostic) => Effect.Effect<void>,
   input: HookPayload,
   point: HookPointName,
   traceState: HookTraceState,
 ): Effect.Effect<HookPayload> =>
-  Effect.reduce(contributions, input, (current, contribution) =>
-    runSkippable(contribution, diagnosticSink, input, "Accumulate", point, traceState).pipe(
-      Effect.map((result) =>
-        result.status === "success" ? combine(current, result.value as HookPayload) : current,
+  Effect.reduce(
+    contributions,
+    { output: input, owners: new Map<string, string>() } satisfies AccumulateState,
+    (state, contribution) =>
+      runContribution(contribution, definition, input, point).pipe(
+        Effect.flatMap((result) => {
+          if (result.status === "failure") {
+            return emitFailureDiagnostic(
+              contribution,
+              result.details,
+              diagnosticSink,
+              "Accumulate",
+              point,
+              traceState,
+            ).pipe(Effect.as(state));
+          }
+          const output = { ...state.output };
+          const owners = new Map(state.owners);
+          return Effect.forEach(
+            Object.entries(result.value as HookPayload),
+            ([field, value]) => {
+              const selectedPlugin = owners.get(field);
+              if (selectedPlugin !== undefined) {
+                return diagnosticSink({
+                  field,
+                  point,
+                  selectedPlugin,
+                  skippedPlugin: pluginName(contribution),
+                  type: "hook_field_conflict",
+                });
+              }
+              output[field] = value;
+              owners.set(field, pluginName(contribution));
+              return Effect.void;
+            },
+            { discard: true },
+          ).pipe(Effect.as({ output, owners }));
+        }),
       ),
-    ),
-  );
+  ).pipe(Effect.map((state) => state.output));
 
 interface TapWork {
   readonly input: HookPayload;
@@ -323,14 +538,35 @@ interface TapWork {
 }
 
 interface TapWorker {
-  readonly capacity: number;
   readonly droppedCount: Ref.Ref<number>;
+  readonly fiber: FiberType.RuntimeFiber<void, never>;
   readonly offerMutex: Effect.Semaphore;
   readonly queue: Queue.Queue<TapWork>;
+  readonly registrationRevision: number;
 }
+
+const runTap = (
+  contribution: RegisteredHook,
+  definition: HookPointDefinition,
+  diagnosticSink: (diagnostic: HookDiagnostic) => Effect.Effect<void>,
+  input: HookPayload,
+  point: HookPointName,
+): Effect.Effect<void> =>
+  runContribution(contribution, definition, input, point).pipe(
+    Effect.flatMap((result) => {
+      if (result.status === "success") {
+        return Effect.void;
+      }
+      const diagnostic = tapFailedDiagnostic(contribution, result.details, point);
+      return diagnosticSink(diagnostic).pipe(
+        Effect.zipRight(Effect.logWarning(JSON.stringify(diagnostic))),
+      );
+    }),
+  );
 
 const makeTapWorker = (
   contribution: RegisteredHook,
+  definition: HookPointDefinition,
   capacity: number,
   diagnosticSink: (diagnostic: HookDiagnostic) => Effect.Effect<void>,
   point: HookPointName,
@@ -339,24 +575,35 @@ const makeTapWorker = (
   Effect.gen(function* () {
     const droppedCount = yield* Ref.make(0);
     const offerMutex = yield* Effect.makeSemaphore(1);
-    const queue = yield* Queue.sliding<TapWork>(capacity);
-    yield* Effect.forkIn(
-      Effect.forever(
-        Queue.take(queue).pipe(
-          Effect.flatMap((work) =>
-            runTap(contribution, diagnosticSink, work.input, point).pipe(
-              Effect.withParentSpan(work.parentSpan),
-            ),
-          ),
-          Effect.asVoid,
+    const queue = yield* Queue.bounded<TapWork>(capacity);
+    const iteration = Queue.take(queue).pipe(
+      Effect.flatMap((work) =>
+        runTap(contribution, definition, diagnosticSink, work.input, point).pipe(
+          Effect.withParentSpan(work.parentSpan),
         ),
       ),
-      scope,
+      Effect.catchAllCause((cause) =>
+        Cause.isInterrupted(cause)
+          ? Effect.failCause(cause as CauseType.Cause<never>)
+          : Effect.logWarning(`Tap worker recovered from defect: ${bounded(Cause.pretty(cause))}`),
+      ),
+      Effect.asVoid,
     );
-    return { capacity, droppedCount, offerMutex, queue };
+    const fiber = yield* Effect.forkIn(Effect.forever(iteration), scope);
+    return {
+      droppedCount,
+      fiber,
+      offerMutex,
+      queue,
+      registrationRevision: contribution.registrationRevision,
+    };
   });
 
+const closeTapWorker = (worker: TapWorker): Effect.Effect<void> =>
+  Queue.shutdown(worker.queue).pipe(Effect.zipRight(Fiber.interrupt(worker.fiber)), Effect.asVoid);
+
 const offerTap = (
+  beforeTapEviction: Effect.Effect<void>,
   contribution: RegisteredHook,
   diagnosticSink: (diagnostic: HookDiagnostic) => Effect.Effect<void>,
   input: HookPayload,
@@ -367,24 +614,37 @@ const offerTap = (
   worker.offerMutex.withPermits(1)(
     Effect.gen(function* () {
       if (yield* Queue.isFull(worker.queue)) {
-        const droppedCount = yield* Ref.updateAndGet(worker.droppedCount, (count) => count + 1);
-        yield* diagnosticSink({
-          droppedCount,
-          plugin: pluginName(contribution),
-          point,
-          type: "hook_tap_dropped",
-        });
+        yield* beforeTapEviction;
+        const evicted = yield* Queue.poll(worker.queue);
+        if (Option.isSome(evicted)) {
+          const droppedCount = yield* Ref.updateAndGet(worker.droppedCount, (count) => count + 1);
+          yield* diagnosticSink({
+            droppedCount,
+            plugin: pluginName(contribution),
+            point,
+            type: "hook_tap_dropped",
+          });
+        }
       }
       yield* Queue.offer(worker.queue, { input, parentSpan });
     }),
   );
 
+export type HookEmitError<TPoint extends HookPointName> =
+  | ContributionRegistryError
+  | HookInputInvalid
+  | (HookPointTypeMap[TPoint]["failurePolicy"] extends "reject" ? GateRejected : never);
+
 export interface HookEmitterService {
+  readonly activeTapWorkerCount: Effect.Effect<number>;
   readonly emit: <TPoint extends HookPointName>(
     point: TPoint,
     input: HookPointInput<TPoint>,
     grants: CapabilityGrants,
-  ) => Effect.Effect<HookPointOutput<TPoint>, ContributionRegistryError | GateRejected>;
+  ) => Effect.Effect<HookPointResult<TPoint>, HookEmitError<TPoint>>;
+  readonly registerHookPoint: (
+    definition: HookPointDefinition,
+  ) => Effect.Effect<void, ContributionRegistryError>;
 }
 
 export class HookEmitter extends Context.Tag("@peye/plugins/HookEmitter")<
@@ -392,38 +652,50 @@ export class HookEmitter extends Context.Tag("@peye/plugins/HookEmitter")<
   HookEmitterService
 >() {}
 
-const initialOutput = <TPoint extends HookPointName>(
-  point: TPoint,
-  input: HookPointInput<TPoint>,
-): HookPointOutput<TPoint> => {
-  const mergeClass = HOOK_POINTS[point].mergeClass;
-  return (
-    mergeClass === "Accumulate" || mergeClass === "Chain" ? (input as HookPayload) : undefined
-  ) as HookPointOutput<TPoint>;
-};
-
 const makeHookEmitter = (options: HookEmitterOptions) =>
   Effect.gen(function* () {
     const registry = yield* ContributionRegistry;
     const diagnosticSink = options.diagnosticSink ?? (() => Effect.void);
-    const gateTimeout = options.gateTimeout ?? DEFAULT_GATE_TIMEOUT_MILLIS;
+    const beforeTapEviction = options.beforeTapEviction ?? Effect.void;
     const tapQueueCapacity = options.tapQueueCapacity ?? DEFAULT_TAP_QUEUE_CAPACITY;
     const scope = yield* Effect.scope;
     const tapWorkerMutex = yield* Effect.makeSemaphore(1);
     const tapWorkers = new Map<string, TapWorker>();
 
+    const sweepTapWorkers = (contributions: ReadonlyArray<RegisteredHook>): Effect.Effect<void> =>
+      tapWorkerMutex.withPermits(1)(
+        Effect.gen(function* () {
+          const active = new Map<string, number>(
+            contributions
+              .filter((contribution) => contribution.payload.mergeClass === "Tap")
+              .map((contribution) => [contribution.key, contribution.registrationRevision]),
+          );
+          for (const [key, worker] of tapWorkers) {
+            if (active.get(key) !== worker.registrationRevision) {
+              yield* closeTapWorker(worker);
+              tapWorkers.delete(key);
+            }
+          }
+        }),
+      );
+
     const tapWorker = (
       contribution: RegisteredHook,
+      definition: HookPointDefinition,
       point: HookPointName,
     ): Effect.Effect<TapWorker> =>
       tapWorkerMutex.withPermits(1)(
         Effect.gen(function* () {
           const existing = tapWorkers.get(contribution.key);
-          if (existing !== undefined) {
+          if (existing?.registrationRevision === contribution.registrationRevision) {
             return existing;
+          }
+          if (existing !== undefined) {
+            yield* closeTapWorker(existing);
           }
           const worker = yield* makeTapWorker(
             contribution,
+            definition,
             tapQueueCapacity,
             diagnosticSink,
             point,
@@ -434,71 +706,95 @@ const makeHookEmitter = (options: HookEmitterOptions) =>
         }),
       );
 
-    const emit: HookEmitterService["emit"] = (point, input, grants) => {
+    const emitImplementation = <TPoint extends HookPointName>(
+      point: TPoint,
+      input: HookPointInput<TPoint>,
+      grants: CapabilityGrants,
+    ) => {
       const traceState = makeHookTraceState();
       return traceHook(
         Effect.gen(function* () {
-          const definition = HOOK_POINTS[point];
+          const definition = yield* registry.getHookPoint(point);
+          const allContributions = yield* registry.listAll(HookContributionKind);
+          yield* sweepTapWorkers(allContributions);
           const contributions = hooksAtPoint(
             yield* registry.list(HookContributionKind, grants),
-            point,
+            definition,
           );
           traceState.contributionCount = contributions.length;
-          const initial = initialOutput(point, input);
+          yield* emitPriorityTieDiagnostics(contributions, diagnosticSink, point);
+          const decodedInput = yield* Schema.decodeUnknown(definition.inputSchema)(input).pipe(
+            Effect.mapError((schemaCause) => {
+              const cause = bounded(String(schemaCause));
+              return new HookInputInvalid({
+                cause,
+                point,
+                reason: `Invalid input for Hook point ${point}: ${cause}`,
+                schemaCause,
+              });
+            }),
+          );
           if (definition.mergeClass === "FirstWins") {
             return (yield* runFirstWins(
               contributions,
+              definition,
               diagnosticSink,
-              gateTimeout,
-              input,
+              decodedInput,
               point,
-              definition.failurePolicy === "reject",
               traceState,
-            )) as HookPointOutput<typeof point>;
+            )) as HookPointResult<typeof point>;
           }
           if (definition.mergeClass === "Chain") {
             return (yield* runChain(
               contributions,
+              definition,
               diagnosticSink,
-              initial as HookPayload,
+              decodedInput as HookPayload,
               point,
               traceState,
-            )) as HookPointOutput<typeof point>;
+            )) as HookPointResult<typeof point>;
           }
           if (definition.mergeClass === "Accumulate") {
-            const combine = definition.combine;
-            if (combine === null) {
-              return yield* Effect.dieMessage(`Accumulate Hook point ${point} has no combiner.`);
-            }
             return (yield* runAccumulate(
-              combine,
               contributions,
+              definition,
               diagnosticSink,
-              initial as HookPayload,
+              decodedInput as HookPayload,
               point,
               traceState,
-            )) as HookPointOutput<typeof point>;
+            )) as HookPointResult<typeof point>;
           }
-          if (definition.mergeClass === "Tap") {
-            const parentSpan = yield* Effect.currentSpan.pipe(Effect.orDie);
-            yield* Effect.forEach(
-              contributions,
-              (contribution) =>
-                tapWorker(contribution, point).pipe(
-                  Effect.flatMap((worker) =>
-                    offerTap(contribution, diagnosticSink, input, parentSpan, point, worker),
+          const parentSpan = yield* Effect.currentSpan.pipe(Effect.orDie);
+          yield* Effect.forEach(
+            contributions,
+            (contribution) =>
+              tapWorker(contribution, definition, point).pipe(
+                Effect.flatMap((worker) =>
+                  offerTap(
+                    beforeTapEviction,
+                    contribution,
+                    diagnosticSink,
+                    decodedInput as HookPayload,
+                    parentSpan,
+                    point,
+                    worker,
                   ),
                 ),
-              { discard: true },
-            );
-          }
-          return initial;
+              ),
+            { discard: true },
+          );
+          return undefined as HookPointResult<typeof point>;
         }),
         point,
         traceState,
       );
     };
-    return { emit } satisfies HookEmitterService;
+    const emit = emitImplementation as HookEmitterService["emit"];
+    return {
+      activeTapWorkerCount: Effect.sync(() => tapWorkers.size),
+      emit,
+      registerHookPoint: registry.registerHookPoint,
+    } satisfies HookEmitterService;
   });
 
 export const HookEmitterLive = (

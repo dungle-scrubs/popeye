@@ -1,255 +1,349 @@
 /**
- * Owns the declared input, output, merge, and failure semantics for every Hook point.
- * It exists so adding a Hook point is a data registration instead of a new execution path.
+ * Owns the declared input, output, result, merge, failure, and latency semantics for every Hook
+ * point. Runtime extensions are registered through ContributionRegistry.registerHookPoint so the
+ * exported built-in table can remain immutable.
  */
+import type { Duration } from "effect";
 import { Schema } from "effect";
 
 export type HookPayload = Readonly<Record<string, unknown>>;
 
-const payloadSchema = (): Schema.Schema<HookPayload> =>
-  Schema.Record({ key: Schema.String, value: Schema.Unknown });
+const UnknownFieldsSchema = Schema.Record({ key: Schema.String, value: Schema.Unknown });
 
-export const ContextHookInputSchema = payloadSchema();
-export const ContextHookOutputSchema = payloadSchema();
+export const ContextHookInputSchema = Schema.Struct({
+  messages: Schema.Array(Schema.Unknown),
+  tokenBudget: Schema.Number,
+});
+export const ContextHookOutputSchema = ContextHookInputSchema;
+export const ContextHookResultSchema = ContextHookOutputSchema;
+
+export const ProviderRequestHookInputSchema = Schema.Struct({
+  messages: Schema.Array(Schema.Unknown),
+  model: Schema.String,
+  options: UnknownFieldsSchema,
+});
+export const ProviderRequestHookOutputSchema = ProviderRequestHookInputSchema;
+export const ProviderRequestHookResultSchema = ProviderRequestHookOutputSchema;
+
+export const InputTransformHookInputSchema = Schema.Struct({ text: Schema.String });
+export const InputTransformHookOutputSchema = InputTransformHookInputSchema;
+export const InputTransformHookResultSchema = InputTransformHookOutputSchema;
+
+export const InputHandlingResultSchema = Schema.Struct({
+  handledBy: Schema.String,
+  response: Schema.optional(Schema.String),
+});
+export const InputHandlingHookInputSchema = Schema.Struct({ text: Schema.String });
+export const InputHandlingHookOutputSchema = Schema.Union(
+  Schema.Struct({ decision: Schema.Literal("continue") }),
+  Schema.Struct({ decision: Schema.Literal("handled"), value: InputHandlingResultSchema }),
+);
+
+export const ToolCallGateResultSchema = Schema.Struct({
+  arguments: Schema.Unknown,
+  toolCallId: Schema.String,
+  toolName: Schema.String,
+});
+export const ToolCallGateHookInputSchema = ToolCallGateResultSchema;
+
+export const CompactionGateResultSchema = Schema.Struct({
+  action: Schema.Literal("compact", "skip"),
+  reason: Schema.String,
+});
+export const CompactionGateHookInputSchema = Schema.Struct({
+  reason: Schema.String,
+  tokenCount: Schema.Number,
+});
+
+export const TrustResultSchema = Schema.Struct({
+  decision: Schema.Literal("allow", "deny"),
+  plugin: Schema.String,
+});
+export const TrustHookInputSchema = Schema.Struct({
+  path: Schema.String,
+  plugin: Schema.String,
+});
+
+const gateDecisionSchema = <TValue, TEncoded>(value: Schema.Schema<TValue, TEncoded>) =>
+  Schema.Union(
+    Schema.Struct({ decision: Schema.Literal("continue") }),
+    Schema.Struct({ decision: Schema.Literal("block"), reason: Schema.String }),
+    Schema.Struct({ decision: Schema.Literal("replace"), value }),
+  );
+
+export const ToolCallGateHookOutputSchema = gateDecisionSchema(ToolCallGateResultSchema);
+export const CompactionGateHookOutputSchema = gateDecisionSchema(CompactionGateResultSchema);
+export const TrustHookOutputSchema = gateDecisionSchema(TrustResultSchema);
+
+export const ToolResultHookInputSchema = Schema.Struct({
+  content: Schema.String,
+  isError: Schema.Boolean,
+  metadata: UnknownFieldsSchema,
+  toolCallId: Schema.String,
+  toolName: Schema.String,
+});
+export const ToolResultHookOutputSchema = Schema.Struct({
+  content: Schema.optional(Schema.String),
+  isError: Schema.optional(Schema.Boolean),
+  metadata: Schema.optional(UnknownFieldsSchema),
+});
+export const ToolResultHookResultSchema = ToolResultHookInputSchema;
+
+export const ResourceDiscoveryHookInputSchema = Schema.Struct({ query: Schema.String });
+export const ResourceDiscoveryHookOutputSchema = Schema.Struct({
+  metadata: Schema.optional(UnknownFieldsSchema),
+  resources: Schema.optional(Schema.Array(Schema.String)),
+});
+export const ResourceDiscoveryHookResultSchema = Schema.Struct({
+  metadata: Schema.optional(UnknownFieldsSchema),
+  query: Schema.String,
+  resources: Schema.optional(Schema.Array(Schema.String)),
+});
+
+export const TurnLifecycleHookInputSchema = Schema.Struct({
+  phase: Schema.Literal("assembling", "executing", "settling", "streaming"),
+  sessionId: Schema.String,
+});
+export const TurnLifecycleHookOutputSchema = Schema.Void;
+export const TurnLifecycleHookResultSchema = Schema.Void;
+
+export const ProgressHookInputSchema = Schema.Struct({
+  completed: Schema.Number,
+  message: Schema.String,
+  total: Schema.Number,
+});
+export const ProgressHookOutputSchema = Schema.Void;
+export const ProgressHookResultSchema = Schema.Void;
+
+export const SessionLifecycleHookInputSchema = Schema.Struct({
+  event: Schema.Literal("created", "closed", "resumed"),
+  sessionId: Schema.String,
+});
+export const SessionLifecycleHookOutputSchema = Schema.Void;
+export const SessionLifecycleHookResultSchema = Schema.Void;
+
 export type ContextHookInput = Schema.Schema.Type<typeof ContextHookInputSchema>;
 export type ContextHookOutput = Schema.Schema.Type<typeof ContextHookOutputSchema>;
-
-export const ProviderRequestHookInputSchema = payloadSchema();
-export const ProviderRequestHookOutputSchema = payloadSchema();
 export type ProviderRequestHookInput = Schema.Schema.Type<typeof ProviderRequestHookInputSchema>;
 export type ProviderRequestHookOutput = Schema.Schema.Type<typeof ProviderRequestHookOutputSchema>;
-
-export const InputTransformHookInputSchema = payloadSchema();
-export const InputTransformHookOutputSchema = payloadSchema();
 export type InputTransformHookInput = Schema.Schema.Type<typeof InputTransformHookInputSchema>;
 export type InputTransformHookOutput = Schema.Schema.Type<typeof InputTransformHookOutputSchema>;
-
-export const InputHandlingHookInputSchema = payloadSchema();
-export const InputHandlingHookOutputSchema = Schema.UndefinedOr(payloadSchema());
 export type InputHandlingHookInput = Schema.Schema.Type<typeof InputHandlingHookInputSchema>;
 export type InputHandlingHookOutput = Schema.Schema.Type<typeof InputHandlingHookOutputSchema>;
-
-export const ToolCallGateHookInputSchema = payloadSchema();
-export const ToolCallGateHookOutputSchema = Schema.UndefinedOr(payloadSchema());
+export type InputHandlingResult = Schema.Schema.Type<typeof InputHandlingResultSchema>;
 export type ToolCallGateHookInput = Schema.Schema.Type<typeof ToolCallGateHookInputSchema>;
 export type ToolCallGateHookOutput = Schema.Schema.Type<typeof ToolCallGateHookOutputSchema>;
-
-export const ToolResultHookInputSchema = payloadSchema();
-export const ToolResultHookOutputSchema = payloadSchema();
+export type ToolCallGateResult = Schema.Schema.Type<typeof ToolCallGateResultSchema>;
 export type ToolResultHookInput = Schema.Schema.Type<typeof ToolResultHookInputSchema>;
 export type ToolResultHookOutput = Schema.Schema.Type<typeof ToolResultHookOutputSchema>;
-
-export const ResourceDiscoveryHookInputSchema = payloadSchema();
-export const ResourceDiscoveryHookOutputSchema = payloadSchema();
 export type ResourceDiscoveryHookInput = Schema.Schema.Type<
   typeof ResourceDiscoveryHookInputSchema
 >;
 export type ResourceDiscoveryHookOutput = Schema.Schema.Type<
   typeof ResourceDiscoveryHookOutputSchema
 >;
-
-export const CompactionGateHookInputSchema = payloadSchema();
-export const CompactionGateHookOutputSchema = Schema.UndefinedOr(payloadSchema());
 export type CompactionGateHookInput = Schema.Schema.Type<typeof CompactionGateHookInputSchema>;
 export type CompactionGateHookOutput = Schema.Schema.Type<typeof CompactionGateHookOutputSchema>;
-
-export const TrustHookInputSchema = payloadSchema();
-export const TrustHookOutputSchema = Schema.UndefinedOr(payloadSchema());
+export type CompactionGateResult = Schema.Schema.Type<typeof CompactionGateResultSchema>;
 export type TrustHookInput = Schema.Schema.Type<typeof TrustHookInputSchema>;
 export type TrustHookOutput = Schema.Schema.Type<typeof TrustHookOutputSchema>;
-
-export const TurnLifecycleHookInputSchema = payloadSchema();
-export const TurnLifecycleHookOutputSchema = Schema.Void;
+export type TrustResult = Schema.Schema.Type<typeof TrustResultSchema>;
 export type TurnLifecycleHookInput = Schema.Schema.Type<typeof TurnLifecycleHookInputSchema>;
 export type TurnLifecycleHookOutput = Schema.Schema.Type<typeof TurnLifecycleHookOutputSchema>;
-
-export const ProgressHookInputSchema = payloadSchema();
-export const ProgressHookOutputSchema = Schema.Void;
 export type ProgressHookInput = Schema.Schema.Type<typeof ProgressHookInputSchema>;
 export type ProgressHookOutput = Schema.Schema.Type<typeof ProgressHookOutputSchema>;
-
-export const SessionLifecycleHookInputSchema = payloadSchema();
-export const SessionLifecycleHookOutputSchema = Schema.Void;
 export type SessionLifecycleHookInput = Schema.Schema.Type<typeof SessionLifecycleHookInputSchema>;
 export type SessionLifecycleHookOutput = Schema.Schema.Type<
   typeof SessionLifecycleHookOutputSchema
 >;
 
 export type HookFailurePolicy = "drop" | "reject" | "skip";
+export type HookMergeClass = "Accumulate" | "Chain" | "FirstWins" | "Tap";
 
-export interface HookPointTypeMap {
-  readonly "compaction-gate": {
-    readonly input: CompactionGateHookInput;
-    readonly output: CompactionGateHookOutput;
-  };
-  readonly context: { readonly input: ContextHookInput; readonly output: ContextHookOutput };
-  readonly "input-handling": {
-    readonly input: InputHandlingHookInput;
-    readonly output: InputHandlingHookOutput;
-  };
-  readonly "input-transform": {
-    readonly input: InputTransformHookInput;
-    readonly output: InputTransformHookOutput;
-  };
-  readonly progress: { readonly input: ProgressHookInput; readonly output: ProgressHookOutput };
-  readonly "provider-request": {
-    readonly input: ProviderRequestHookInput;
-    readonly output: ProviderRequestHookOutput;
-  };
-  readonly "resource-discovery": {
-    readonly input: ResourceDiscoveryHookInput;
-    readonly output: ResourceDiscoveryHookOutput;
-  };
-  readonly "session-lifecycle": {
-    readonly input: SessionLifecycleHookInput;
-    readonly output: SessionLifecycleHookOutput;
-  };
-  readonly "tool-call-gate": {
-    readonly input: ToolCallGateHookInput;
-    readonly output: ToolCallGateHookOutput;
-  };
-  readonly "tool-result": {
-    readonly input: ToolResultHookInput;
-    readonly output: ToolResultHookOutput;
-  };
-  readonly trust: { readonly input: TrustHookInput; readonly output: TrustHookOutput };
-  readonly "turn-lifecycle": {
-    readonly input: TurnLifecycleHookInput;
-    readonly output: TurnLifecycleHookOutput;
-  };
+export interface HookPointDefinition<
+  TName extends string = string,
+  TMergeClass extends HookMergeClass = HookMergeClass,
+  TFailurePolicy extends HookFailurePolicy = HookFailurePolicy,
+  TInputSchema extends Schema.Schema.AnyNoContext = Schema.Schema.AnyNoContext,
+  TOutputSchema extends Schema.Schema.AnyNoContext = Schema.Schema.AnyNoContext,
+  TResultSchema extends Schema.Schema.AnyNoContext = Schema.Schema.AnyNoContext,
+> {
+  readonly conflictPolicy: TMergeClass extends "Accumulate" ? "highest-priority-wins" : null;
+  readonly failurePolicy: TFailurePolicy;
+  readonly inputSchema: TInputSchema;
+  readonly mergeClass: TMergeClass;
+  readonly name: TName;
+  readonly outputSchema: TOutputSchema;
+  readonly resultSchema: TResultSchema;
+  readonly timeout: Duration.DurationInput;
 }
 
-export type HookPointName = keyof HookPointTypeMap;
-export type HookPointInput<TPoint extends HookPointName> = HookPointTypeMap[TPoint]["input"];
-export type HookPointOutput<TPoint extends HookPointName> = HookPointTypeMap[TPoint]["output"];
+export const defineHookPoint = <
+  const TName extends string,
+  const TMergeClass extends HookMergeClass,
+  const TFailurePolicy extends HookFailurePolicy,
+  TInputSchema extends Schema.Schema.AnyNoContext,
+  TOutputSchema extends Schema.Schema.AnyNoContext,
+  TResultSchema extends Schema.Schema.AnyNoContext,
+>(
+  definition: HookPointDefinition<
+    TName,
+    TMergeClass,
+    TFailurePolicy,
+    TInputSchema,
+    TOutputSchema,
+    TResultSchema
+  >,
+): HookPointDefinition<
+  TName,
+  TMergeClass,
+  TFailurePolicy,
+  TInputSchema,
+  TOutputSchema,
+  TResultSchema
+> => Object.freeze(definition);
 
-export interface HookPointDefinition {
-  readonly combine: ((current: HookPayload, next: HookPayload) => HookPayload) | null;
-  readonly failurePolicy: HookFailurePolicy;
-  readonly inputSchema: Schema.Schema.AnyNoContext;
-  readonly mergeClass: "Accumulate" | "Chain" | "FirstWins" | "Tap";
-  readonly name: HookPointName;
-  readonly outputSchema: Schema.Schema.AnyNoContext;
-}
+const DEFAULT_HOOK_TIMEOUT = "30 seconds";
 
-export const defineHookPoint = (definition: HookPointDefinition): HookPointDefinition => definition;
-
-const mergeFields = (current: HookPayload, next: HookPayload): HookPayload => ({
-  ...current,
-  ...next,
-});
-
-export const HOOK_POINTS: Readonly<Record<HookPointName, HookPointDefinition>> = {
-  "compaction-gate": defineHookPoint({
-    combine: null,
-    failurePolicy: "reject",
-    inputSchema: CompactionGateHookInputSchema,
-    mergeClass: "FirstWins",
-    name: "compaction-gate",
-    outputSchema: CompactionGateHookOutputSchema,
-  }),
+const builtInHookPoints = {
   context: defineHookPoint({
-    combine: null,
+    conflictPolicy: null,
     failurePolicy: "skip",
     inputSchema: ContextHookInputSchema,
     mergeClass: "Chain",
     name: "context",
     outputSchema: ContextHookOutputSchema,
-  }),
-  "input-handling": defineHookPoint({
-    combine: null,
-    // Input handling fails open so a broken optional Hook cannot discard user input.
-    failurePolicy: "skip",
-    inputSchema: InputHandlingHookInputSchema,
-    mergeClass: "FirstWins",
-    name: "input-handling",
-    outputSchema: InputHandlingHookOutputSchema,
-  }),
-  "input-transform": defineHookPoint({
-    combine: null,
-    failurePolicy: "skip",
-    inputSchema: InputTransformHookInputSchema,
-    mergeClass: "Chain",
-    name: "input-transform",
-    outputSchema: InputTransformHookOutputSchema,
-  }),
-  progress: defineHookPoint({
-    combine: null,
-    failurePolicy: "drop",
-    inputSchema: ProgressHookInputSchema,
-    mergeClass: "Tap",
-    name: "progress",
-    outputSchema: ProgressHookOutputSchema,
+    resultSchema: ContextHookResultSchema,
+    timeout: DEFAULT_HOOK_TIMEOUT,
   }),
   "provider-request": defineHookPoint({
-    combine: null,
+    conflictPolicy: null,
     failurePolicy: "skip",
     inputSchema: ProviderRequestHookInputSchema,
     mergeClass: "Chain",
     name: "provider-request",
     outputSchema: ProviderRequestHookOutputSchema,
+    resultSchema: ProviderRequestHookResultSchema,
+    timeout: DEFAULT_HOOK_TIMEOUT,
   }),
-  "resource-discovery": defineHookPoint({
-    combine: mergeFields,
+  "input-transform": defineHookPoint({
+    conflictPolicy: null,
     failurePolicy: "skip",
-    inputSchema: ResourceDiscoveryHookInputSchema,
-    mergeClass: "Accumulate",
-    name: "resource-discovery",
-    outputSchema: ResourceDiscoveryHookOutputSchema,
+    inputSchema: InputTransformHookInputSchema,
+    mergeClass: "Chain",
+    name: "input-transform",
+    outputSchema: InputTransformHookOutputSchema,
+    resultSchema: InputTransformHookResultSchema,
+    timeout: DEFAULT_HOOK_TIMEOUT,
   }),
-  "session-lifecycle": defineHookPoint({
-    combine: null,
-    failurePolicy: "drop",
-    inputSchema: SessionLifecycleHookInputSchema,
-    mergeClass: "Tap",
-    name: "session-lifecycle",
-    outputSchema: SessionLifecycleHookOutputSchema,
+  "input-handling": defineHookPoint({
+    conflictPolicy: null,
+    // A broken optional input handler must not discard user input.
+    failurePolicy: "skip",
+    inputSchema: InputHandlingHookInputSchema,
+    mergeClass: "FirstWins",
+    name: "input-handling",
+    outputSchema: InputHandlingHookOutputSchema,
+    resultSchema: InputHandlingResultSchema,
+    timeout: DEFAULT_HOOK_TIMEOUT,
   }),
   "tool-call-gate": defineHookPoint({
-    combine: null,
+    conflictPolicy: null,
     failurePolicy: "reject",
     inputSchema: ToolCallGateHookInputSchema,
     mergeClass: "FirstWins",
     name: "tool-call-gate",
     outputSchema: ToolCallGateHookOutputSchema,
+    resultSchema: ToolCallGateResultSchema,
+    timeout: DEFAULT_HOOK_TIMEOUT,
   }),
   "tool-result": defineHookPoint({
-    combine: mergeFields,
+    conflictPolicy: "highest-priority-wins",
     failurePolicy: "skip",
     inputSchema: ToolResultHookInputSchema,
     mergeClass: "Accumulate",
     name: "tool-result",
     outputSchema: ToolResultHookOutputSchema,
+    resultSchema: ToolResultHookResultSchema,
+    timeout: DEFAULT_HOOK_TIMEOUT,
+  }),
+  "resource-discovery": defineHookPoint({
+    conflictPolicy: "highest-priority-wins",
+    failurePolicy: "skip",
+    inputSchema: ResourceDiscoveryHookInputSchema,
+    mergeClass: "Accumulate",
+    name: "resource-discovery",
+    outputSchema: ResourceDiscoveryHookOutputSchema,
+    resultSchema: ResourceDiscoveryHookResultSchema,
+    timeout: DEFAULT_HOOK_TIMEOUT,
+  }),
+  "compaction-gate": defineHookPoint({
+    conflictPolicy: null,
+    failurePolicy: "reject",
+    inputSchema: CompactionGateHookInputSchema,
+    mergeClass: "FirstWins",
+    name: "compaction-gate",
+    outputSchema: CompactionGateHookOutputSchema,
+    resultSchema: CompactionGateResultSchema,
+    timeout: DEFAULT_HOOK_TIMEOUT,
   }),
   trust: defineHookPoint({
-    combine: null,
+    conflictPolicy: null,
     failurePolicy: "reject",
     inputSchema: TrustHookInputSchema,
     mergeClass: "FirstWins",
     name: "trust",
     outputSchema: TrustHookOutputSchema,
+    resultSchema: TrustResultSchema,
+    timeout: DEFAULT_HOOK_TIMEOUT,
   }),
   "turn-lifecycle": defineHookPoint({
-    combine: null,
+    conflictPolicy: null,
     failurePolicy: "drop",
     inputSchema: TurnLifecycleHookInputSchema,
     mergeClass: "Tap",
     name: "turn-lifecycle",
     outputSchema: TurnLifecycleHookOutputSchema,
+    resultSchema: TurnLifecycleHookResultSchema,
+    timeout: DEFAULT_HOOK_TIMEOUT,
   }),
+  progress: defineHookPoint({
+    conflictPolicy: null,
+    failurePolicy: "drop",
+    inputSchema: ProgressHookInputSchema,
+    mergeClass: "Tap",
+    name: "progress",
+    outputSchema: ProgressHookOutputSchema,
+    resultSchema: ProgressHookResultSchema,
+    timeout: DEFAULT_HOOK_TIMEOUT,
+  }),
+  "session-lifecycle": defineHookPoint({
+    conflictPolicy: null,
+    failurePolicy: "drop",
+    inputSchema: SessionLifecycleHookInputSchema,
+    mergeClass: "Tap",
+    name: "session-lifecycle",
+    outputSchema: SessionLifecycleHookOutputSchema,
+    resultSchema: SessionLifecycleHookResultSchema,
+    timeout: DEFAULT_HOOK_TIMEOUT,
+  }),
+} as const;
+
+export const HOOK_POINTS = Object.freeze(builtInHookPoints);
+
+export type HookPointName = keyof typeof HOOK_POINTS;
+export const HOOK_POINT_NAMES = Object.freeze(Object.keys(HOOK_POINTS) as Array<HookPointName>);
+
+export type HookPointTypeMap = {
+  readonly [TPoint in HookPointName]: {
+    readonly failurePolicy: (typeof HOOK_POINTS)[TPoint]["failurePolicy"];
+    readonly input: Schema.Schema.Type<(typeof HOOK_POINTS)[TPoint]["inputSchema"]>;
+    readonly mergeClass: (typeof HOOK_POINTS)[TPoint]["mergeClass"];
+    readonly output: Schema.Schema.Type<(typeof HOOK_POINTS)[TPoint]["outputSchema"]>;
+    readonly result: Schema.Schema.Type<(typeof HOOK_POINTS)[TPoint]["resultSchema"]>;
+  };
 };
 
-export const HOOK_POINT_NAMES = [
-  "context",
-  "provider-request",
-  "input-transform",
-  "input-handling",
-  "tool-call-gate",
-  "tool-result",
-  "resource-discovery",
-  "compaction-gate",
-  "trust",
-  "turn-lifecycle",
-  "progress",
-  "session-lifecycle",
-] as const satisfies ReadonlyArray<HookPointName>;
+export type HookPointInput<TPoint extends HookPointName> = HookPointTypeMap[TPoint]["input"];
+export type HookPointOutput<TPoint extends HookPointName> = HookPointTypeMap[TPoint]["output"];
+export type HookPointResult<TPoint extends HookPointName> = HookPointTypeMap[TPoint]["result"];

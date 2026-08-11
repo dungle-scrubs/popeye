@@ -17,6 +17,7 @@ import type {
 } from "./contribution.js";
 import { contributionKey } from "./contribution.js";
 import { ContributionRegistryError, type PluginLoadError } from "./errors.js";
+import { HOOK_POINTS, type HookPointDefinition } from "./hook-points.js";
 import { ContributionNameSchema, decodePluginManifest, type PluginManifest } from "./manifest.js";
 
 export interface ContributionConflictDiagnostic {
@@ -150,14 +151,17 @@ interface StoredEntry {
   readonly payload: unknown;
   readonly pluginName: string;
   readonly priority: number;
+  readonly registrationRevision: number;
   readonly requiredCapabilities: ReadonlyArray<string>;
 }
 
 interface RegistryState {
   readonly diagnosedExclusions: ReadonlySet<string>;
   readonly entries: ReadonlyMap<string, ReadonlyMap<ContributionKey, StoredEntry>>;
+  readonly hookPoints: ReadonlyMap<string, HookPointDefinition>;
   readonly kinds: ReadonlyMap<string, StoredKind>;
   readonly plugins: ReadonlyMap<string, PluginManifest>;
+  readonly revision: number;
 }
 
 interface StagedPlugin {
@@ -166,9 +170,18 @@ interface StagedPlugin {
 }
 
 export interface ContributionRegistryService {
+  readonly getHookPoint: (
+    name: string,
+  ) => Effect.Effect<HookPointDefinition, ContributionRegistryError>;
   readonly list: <TKind extends string, TPayload, TEncoded>(
     kind: ContributionKind<TKind, TPayload, TEncoded>,
     grants: CapabilityGrants,
+  ) => Effect.Effect<
+    ReadonlyArray<RegisteredContribution<TKind, TPayload>>,
+    ContributionRegistryError
+  >;
+  readonly listAll: <TKind extends string, TPayload, TEncoded>(
+    kind: ContributionKind<TKind, TPayload, TEncoded>,
   ) => Effect.Effect<
     ReadonlyArray<RegisteredContribution<TKind, TPayload>>,
     ContributionRegistryError
@@ -184,11 +197,15 @@ export interface ContributionRegistryService {
   readonly registerKind: <TKind extends string, TPayload, TEncoded>(
     kind: ContributionKind<TKind, TPayload, TEncoded>,
   ) => Effect.Effect<void, ContributionRegistryError>;
+  readonly registerHookPoint: (
+    definition: HookPointDefinition,
+  ) => Effect.Effect<void, ContributionRegistryError>;
   readonly registerPlugin: (
     manifest: PluginManifest,
     contributions: ReadonlyArray<Contribution>,
   ) => Effect.Effect<void, ContributionRegistryError | PluginLoadError>;
   readonly removePlugin: (name: string) => Effect.Effect<boolean, ContributionRegistryError>;
+  readonly revision: Effect.Effect<number>;
 }
 
 export class ContributionRegistry extends Context.Tag("@peye/plugins/ContributionRegistry")<
@@ -223,8 +240,10 @@ const initialState = (): RegistryState => {
   return {
     diagnosedExclusions: new Set<string>(),
     entries: new Map([...kinds.keys()].map((kind) => [kind, new Map()])),
+    hookPoints: new Map(Object.entries(HOOK_POINTS)),
     kinds,
     plugins: new Map(),
+    revision: 0,
   };
 };
 
@@ -267,7 +286,9 @@ const removePluginFromState = (state: RegistryState, pluginName: string): Regist
     ]),
   ),
   kinds: state.kinds,
+  hookPoints: state.hookPoints,
   plugins: new Map([...state.plugins].filter(([name]) => name !== pluginName)),
+  revision: state.revision,
 });
 
 const requiredManifestCapabilities = (manifest: PluginManifest): ReadonlyArray<string> =>
@@ -289,6 +310,7 @@ const stagePlugin = (
     );
     const diagnostics: Array<ContributionConflictDiagnostic> = [];
     const manifestCapabilities = requiredManifestCapabilities(manifest);
+    const registrationRevision = state.revision + 1;
 
     for (const contribution of contributions) {
       const name = yield* Schema.decodeUnknown(ContributionNameSchema)(contribution.name).pipe(
@@ -339,6 +361,26 @@ const stagePlugin = (
             ),
           ),
       );
+      if (contribution.kind === HookContributionKind.kind) {
+        const hook = decoded.value as AnyHookDeclaration;
+        const definition = state.hookPoints.get(hook.point);
+        if (definition === undefined) {
+          return yield* registryError(
+            contribution.kind,
+            "hook_point_unknown",
+            `Unknown Hook point: ${hook.point}.`,
+            key,
+          );
+        }
+        if (hook.mergeClass !== definition.mergeClass) {
+          return yield* registryError(
+            contribution.kind,
+            "hook_merge_class_mismatch",
+            `Hook ${key} declares merge class ${hook.mergeClass}, but ${hook.point} requires ${definition.mergeClass}.`,
+            key,
+          );
+        }
+      }
       const incoming: StoredEntry = {
         key,
         kind: contribution.kind,
@@ -346,6 +388,7 @@ const stagePlugin = (
         payload: decoded.value,
         pluginName: manifest.name,
         priority: contribution.priority ?? 0,
+        registrationRevision,
         requiredCapabilities: [
           ...new Set([...manifestCapabilities, ...contributionCapabilities]),
         ].sort(),
@@ -383,8 +426,10 @@ const stagePlugin = (
       state: {
         diagnosedExclusions: new Set(),
         entries,
+        hookPoints: state.hookPoints,
         kinds: state.kinds,
         plugins: new Map(base.plugins).set(manifest.name, manifest),
+        revision: registrationRevision,
       },
     };
   });
@@ -481,6 +526,7 @@ const makeContributionRegistry = (
           name: entry.name,
           payload,
           priority: entry.priority,
+          registrationRevision: entry.registrationRevision,
         })),
         Effect.mapError((schemaCause) =>
           registryError(
@@ -504,6 +550,15 @@ const makeContributionRegistry = (
         return yield* Effect.forEach(
           available.filter((entry) => entry !== undefined),
           (entry) => decodeRegistered(definition, entry),
+        );
+      });
+
+    const listAll: ContributionRegistryService["listAll"] = (definition) =>
+      Effect.gen(function* () {
+        const state = yield* Ref.get(stateRef);
+        yield* checkedKind(definition, state);
+        return yield* Effect.forEach(state.entries.get(definition.kind)?.values() ?? [], (entry) =>
+          decodeRegistered(definition, entry),
         );
       });
 
@@ -540,6 +595,42 @@ const makeContributionRegistry = (
             diagnosedExclusions: new Set<string>(),
             entries,
             kinds,
+            revision: state.revision + 1,
+          });
+        }),
+      );
+
+    const registerHookPoint: ContributionRegistryService["registerHookPoint"] = (definition) =>
+      mutationMutex.withPermits(1)(
+        Effect.gen(function* () {
+          const name = yield* Schema.decodeUnknown(ContributionNameSchema)(definition.name).pipe(
+            Effect.mapError((schemaCause) =>
+              registryError(
+                "hook",
+                "invalid_name",
+                `Invalid Hook point name: ${ParseResult.ArrayFormatter.formatErrorSync(schemaCause)[0]?.message ?? "name does not match the Schema"}.`,
+                null,
+                schemaCause,
+              ),
+            ),
+          );
+          const state = yield* Ref.get(stateRef);
+          const existing = state.hookPoints.get(name);
+          if (existing === definition) {
+            return;
+          }
+          if (existing !== undefined) {
+            return yield* registryError(
+              "hook",
+              "hook_point_conflict",
+              `Hook point ${name} is already registered with a different definition.`,
+            );
+          }
+          yield* Ref.set(stateRef, {
+            ...state,
+            diagnosedExclusions: new Set<string>(),
+            hookPoints: new Map(state.hookPoints).set(name, definition),
+            revision: state.revision + 1,
           });
         }),
       );
@@ -579,12 +670,37 @@ const makeContributionRegistry = (
           if (!state.plugins.has(name)) {
             return false;
           }
-          yield* Ref.set(stateRef, removePluginFromState(state, name));
+          yield* Ref.set(stateRef, {
+            ...removePluginFromState(state, name),
+            revision: state.revision + 1,
+          });
           return true;
         }),
       );
 
-    return { list, lookup, registerKind, registerPlugin, removePlugin };
+    const getHookPoint: ContributionRegistryService["getHookPoint"] = (name) =>
+      Ref.get(stateRef).pipe(
+        Effect.flatMap((state) => {
+          const definition = state.hookPoints.get(name);
+          return definition === undefined
+            ? Effect.fail(
+                registryError("hook", "hook_point_unknown", `Unknown Hook point: ${name}.`),
+              )
+            : Effect.succeed(definition);
+        }),
+      );
+
+    return {
+      getHookPoint,
+      list,
+      listAll,
+      lookup,
+      registerHookPoint,
+      registerKind,
+      registerPlugin,
+      removePlugin,
+      revision: Ref.get(stateRef).pipe(Effect.map((state) => state.revision)),
+    };
   });
 
 export const ContributionRegistryLive = (

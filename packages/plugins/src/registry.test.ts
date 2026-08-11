@@ -6,13 +6,16 @@ import { createCapabilityGrants } from "./capability.js";
 import {
   contributionKey,
   defineContribution,
+  defineHookContribution,
   defineInstructionFragmentContribution,
   defineToolContribution,
 } from "./contribution.js";
+import { defineHookPoint } from "./hook-points.js";
 import {
   ContributionRegistry,
   ContributionRegistryLive,
   defineContributionKind,
+  HookContributionKind,
   InstructionFragmentContributionKind,
   type RegistryDiagnostic,
   ToolContributionKind,
@@ -348,4 +351,120 @@ test("Re-registering a kind with different options fails typed and emits a diagn
 
   expect(error).toMatchObject({ kind: "renderer", reason: "kind_conflict" });
   expect(diagnostics).toEqual([{ kind: "renderer", type: "kind_registration_conflict" }]);
+});
+
+test("Hook registration rejects unknown points and merge-class mismatches atomically", async () => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const registry = yield* ContributionRegistry;
+      const unknown = yield* Effect.flip(
+        registry.registerPlugin(manifest("unknown-hook"), [
+          defineHookContribution({
+            mergeClass: "Chain",
+            name: "unknown",
+            point: "not-declared",
+            run: (input: unknown) => Effect.succeed(input),
+          }),
+        ]),
+      );
+      const mismatch = yield* Effect.flip(
+        registry.registerPlugin(manifest("mismatched-hook"), [
+          defineHookContribution({
+            mergeClass: "Tap",
+            name: "mismatch",
+            point: "tool-call-gate",
+            run: () => Effect.void,
+          }),
+        ]),
+      );
+      return {
+        mismatch,
+        remaining: yield* registry.list(HookContributionKind, grants("hook-validation")),
+        unknown,
+      };
+    }).pipe(Effect.provide(ContributionRegistryLive())),
+  );
+
+  expect(result.unknown).toMatchObject({ reason: "hook_point_unknown" });
+  expect(result.mismatch).toMatchObject({ reason: "hook_merge_class_mismatch" });
+  expect(result.remaining).toEqual([]);
+});
+
+test("defineHookPoint feeds the runtime registration API", async () => {
+  const inputSchema = Schema.Struct({ value: Schema.String });
+  const definition = defineHookPoint({
+    conflictPolicy: null,
+    failurePolicy: "skip",
+    inputSchema,
+    mergeClass: "Chain",
+    name: "custom-context",
+    outputSchema: inputSchema,
+    resultSchema: inputSchema,
+    timeout: "30 seconds",
+  });
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const registry = yield* ContributionRegistry;
+      yield* registry.registerHookPoint(definition);
+      yield* registry.registerPlugin(manifest("custom-hook"), [
+        defineHookContribution({
+          mergeClass: "Chain",
+          name: "custom",
+          point: "custom-context",
+          run: (input: { readonly value: string }) => Effect.succeed(input),
+        }),
+      ]);
+      return {
+        definition: yield* registry.getHookPoint("custom-context"),
+        hooks: yield* registry.list(HookContributionKind, grants("custom-hook")),
+      };
+    }).pipe(Effect.provide(ContributionRegistryLive())),
+  );
+
+  expect(result.definition).toBe(definition);
+  expect(result.hooks.map((hook) => hook.payload.point)).toEqual(["custom-context"]);
+});
+
+test("registry revisions increase on successful registrations, replacement, and removal", async () => {
+  const contribution = defineInstructionFragmentContribution({
+    content: "one",
+    id: "one",
+    trigger: "explicit",
+  });
+  const revisions = await Effect.runPromise(
+    Effect.gen(function* () {
+      const registry = yield* ContributionRegistry;
+      const initial = yield* registry.revision;
+      yield* registry.registerPlugin(manifest("revision-plugin"), [contribution]);
+      const registered = yield* registry.revision;
+      const [first] = yield* registry.list(
+        InstructionFragmentContributionKind,
+        grants("revision-session"),
+      );
+      yield* registry.registerPlugin(manifest("revision-plugin"), [contribution]);
+      const replaced = yield* registry.revision;
+      const [second] = yield* registry.list(
+        InstructionFragmentContributionKind,
+        grants("revision-session"),
+      );
+      yield* registry.removePlugin("revision-plugin");
+      const removed = yield* registry.revision;
+      return {
+        entryRevisions: [first?.registrationRevision, second?.registrationRevision],
+        initial,
+        registered,
+        removed,
+        replaced,
+      };
+    }).pipe(Effect.provide(ContributionRegistryLive())),
+  );
+
+  expect(revisions).toEqual({
+    entryRevisions: [1, 2],
+    initial: 0,
+    registered: 1,
+    removed: 3,
+    replaced: 2,
+  });
 });
