@@ -9,42 +9,42 @@
 ### M1: argv/env/config resolution
 Source: implementation.md (M1); D-001, D-002, D-004, D-005
 
-- [ ] parseArgs handles -p headless flag
-- [ ] --mode print|json|rpc parsed (default print)
-- [ ] positional prompt parsed
-- [ ] stdin used as prompt when no prompt arg and stdin is piped
-- [ ] --model / --base-url / --resume / --session-dir parsed
-- [ ] flags override env; PEYE_MODEL/PEYE_BASE_URL/PEYE_API_KEY read
-- [ ] OPENAI_API_KEY / ANTHROPIC_API_KEY fallback for the key
-- [ ] --version prints the cli package version and exits 0
-- [ ] --help prints usage and exits 0
-- [ ] missing model or endpoint fails typed, naming the env/flag to set
-- [ ] --api-key flag is rejected (secrets via env only)
-- [ ] rpc mode rejects a prompt arg with a clear error
+- [x] parseArgs handles -p headless flag
+- [x] --mode print|json|rpc parsed (default print)
+- [x] positional prompt parsed
+- [x] stdin used as prompt when no prompt arg and stdin is piped
+- [x] --model / --base-url / --resume / --session-dir parsed
+- [x] flags override env; PEYE_MODEL/PEYE_BASE_URL/PEYE_API_KEY read
+- [x] OPENAI_API_KEY / ANTHROPIC_API_KEY fallback for the key
+- [x] --version prints the cli package version and exits 0
+- [x] --help prints usage and exits 0
+- [x] missing model or endpoint fails typed, naming the env/flag to set
+- [x] --api-key flag is rejected (secrets via env only)
+- [x] rpc mode rejects a prompt arg with a clear error
 
 ### M2: spawnable bin + head wiring
 Source: implementation.md (M2); D-003, D-006
 
-- [ ] bin/peye.ts shebang entrypoint added; bin field in package.json
-- [ ] version bumped 0.0.0 -> 0.1.0
-- [ ] run() composes the Driver with PiAiProviderLive from config
-- [ ] print head dispatch: final text + stop-reason exit code
-- [ ] json head dispatch: wire stream + exit code, spawn-per-turn
-- [ ] rpc head dispatch: persistent LF-delimited stdio server
-- [ ] a spawned-subprocess test drives the built bin (--version, -p,
+- [x] bin/peye.ts shebang entrypoint added; bin field in package.json
+- [x] version bumped 0.0.0 -> 0.1.0
+- [x] run() composes the Driver with PiAiProviderLive from config
+- [x] print head dispatch: final text + stop-reason exit code
+- [x] json head dispatch: wire stream + exit code, spawn-per-turn
+- [x] rpc head dispatch: persistent LF-delimited stdio server
+- [x] a spawned-subprocess test drives the built bin (--version, -p,
       --mode json, bad-args exit, missing-config exit)
-- [ ] startup line + errors go to stderr; stdout stays pure protocol
-- [ ] flag surface matches the documented pi-style -p/--mode shape
+- [x] startup line + errors go to stderr; stdout stays pure protocol
+- [x] flag surface matches the documented pi-style -p/--mode shape
 
 ### M3: fake-provider seam + captured wire fixture
 Source: implementation.md (M3); D-007
 
-- [ ] env-gated deterministic provider runs the CLI end-to-end without
+- [x] env-gated deterministic provider runs the CLI end-to-end without
       a network/model
-- [ ] peye -p --mode json against it captured as
+- [x] peye -p --mode json against it captured as
       test-fixtures/cli-json-stream.jsonl
-- [ ] committed stream decodes through @peye/protocol decoders
-- [ ] fixture stable across two runs
+- [x] committed stream decodes through @peye/protocol decoders
+- [x] fixture stable across two runs
 
 ## Deferred follow-up
 
@@ -53,9 +53,9 @@ Source: implementation.md (M3); D-007
 - [ ] normalizer-side descriptor + content decoder - normalizer repo
 
 ## Summary
-- Total features: 24
-- Completed: 0
-- Remaining: 24
-- Current cutoff blockers: 24
+- Total features: 25
+- Completed: 25
+- Remaining: 0
+- Current cutoff blockers: 0
 - Accepted/deferred follow-up: 3
 - Superseded/obsolete checklist debt: 0
