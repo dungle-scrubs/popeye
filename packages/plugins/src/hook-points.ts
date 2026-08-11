@@ -44,7 +44,12 @@ export const ToolCallGateResultSchema = Schema.Struct({
   toolCallId: Schema.String,
   toolName: Schema.String,
 });
-export const ToolCallGateHookInputSchema = ToolCallGateResultSchema;
+export const ToolCallGateHookInputSchema = Schema.Struct({
+  arguments: Schema.Unknown,
+  sessionId: Schema.optional(Schema.String),
+  toolCallId: Schema.String,
+  toolName: Schema.String,
+});
 
 export const CompactionGateResultSchema = Schema.Union(
   Schema.Struct({ action: Schema.Literal("compact") }),

@@ -66,7 +66,7 @@ export const decodeInteractionRequest = (
 ): Effect.Effect<InteractionRequest, ProtocolError> =>
   Schema.decodeUnknown(
     InteractionRequestSchema,
-    StrictParseOptions,
+    LenientParseOptions,
   )(input).pipe(Effect.mapError((cause) => malformed("interaction request", cause)));
 
 export const decodeInteractionResponse = (

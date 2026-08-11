@@ -168,6 +168,19 @@ export {
   type TurnLifecycleHookOutput,
   TurnLifecycleHookOutputSchema,
 } from "./hook-points.js";
+export {
+  CurrentGrantsFiberRef,
+  CurrentPluginFiberRef,
+  DEFAULT_INTERACTION_TIMEOUT_MILLIS,
+  makePluginInteractionsLiveLayer,
+  makePluginInteractionsLiveService,
+  makePluginInteractionsNullService,
+  type PluginInteractionRequest,
+  type PluginInteractionResolution,
+  PluginInteractions,
+  PluginInteractionsNullLive,
+  type PluginInteractionsService,
+} from "./interactions.js";
 export type { LoadedPlugin, PluginModuleLoadOptions } from "./loader.js";
 export { loadPluginModule } from "./loader.js";
 export {

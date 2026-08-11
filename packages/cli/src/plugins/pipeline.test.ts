@@ -92,6 +92,7 @@ test("first-party Plugin generation entries expose the same manifest accessor", 
       })),
     ).toEqual([
       { manifestName: "compact", name: "compact" },
+      { manifestName: "reload", name: "reload" },
       { manifestName: "session-name", name: "session-name" },
     ]);
     await Effect.runPromise(generation.close);
@@ -150,9 +151,9 @@ test("an empty project exposes only the invokable first-party commands", async (
     );
 
     expect(result).toEqual({
-      commands: ["compact", "session-name"],
+      commands: ["compact", "reload", "session-name"],
       invocations: ["compact", "Pipeline name"],
-      plugins: ["compact", "session-name"],
+      plugins: ["compact", "reload", "session-name"],
     });
   } finally {
     await rm(projectPath, { force: true, recursive: true });
@@ -197,6 +198,7 @@ test("a project Plugin loads in phase 2 and its command is invokable", async () 
     expect(result.output).toBe("project-result");
     expect(result.plugins.map(({ name, scope }) => ({ name, scope }))).toEqual([
       { name: "compact", scope: "external" },
+      { name: "reload", scope: "external" },
       { name: "session-name", scope: "external" },
       { name: "project-command", scope: "project-local" },
     ]);
@@ -426,8 +428,8 @@ test("noProjectPlugins skips discovered and CLI project-local Plugins but keeps 
     );
 
     expect(result).toEqual({
-      commands: ["compact", "external-command", "session-name", "user-command"],
-      plugins: ["compact", "external-command", "session-name", "user-command"],
+      commands: ["compact", "external-command", "reload", "session-name", "user-command"],
+      plugins: ["compact", "external-command", "reload", "session-name", "user-command"],
     });
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -497,8 +499,8 @@ test("trusted composition uses fresh memory stores and never writes Trust state"
     const projectFiles = await readdir(projectPath, { recursive: true });
 
     expect(loadedNames).toEqual([
-      ["compact", "session-name", "trusted-command"],
-      ["compact", "session-name", "trusted-command"],
+      ["compact", "reload", "session-name", "trusted-command"],
+      ["compact", "reload", "session-name", "trusted-command"],
     ]);
     expect(projectFiles.filter((path) => path.toLowerCase().includes("trust"))).toEqual([
       ".peye/plugins/trusted-command.ts",

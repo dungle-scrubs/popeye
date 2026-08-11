@@ -31,6 +31,7 @@ import type {
   HookPointResult,
   HookPointTypeMap,
 } from "./hook-points.js";
+import { CurrentGrantsFiberRef, CurrentPluginFiberRef } from "./interactions.js";
 import { ContributionRegistry, HookContributionKind } from "./registry.js";
 import type { PluginSourceScope } from "./sources.js";
 
@@ -341,7 +342,9 @@ const runContribution = (
           .run(input)
           .pipe(Effect.flatMap(Schema.decodeUnknown(definition.outputSchema))),
         point,
-      ).pipe(Effect.timeoutOption(definition.timeout)),
+      )
+        .pipe(Effect.timeoutOption(definition.timeout))
+        .pipe(Effect.locally(CurrentPluginFiberRef, Option.some(pluginName(contribution)))),
     );
     if (Exit.isFailure(exit)) {
       if (Cause.isInterrupted(exit.cause)) {
@@ -558,8 +561,10 @@ const runAccumulate = (
   ).pipe(Effect.map((state) => state.output));
 
 interface TapWork {
+  readonly grants: CapabilityGrants;
   readonly input: HookPayload;
   readonly parentSpan: Tracer.Span;
+  readonly pluginName: string;
 }
 
 interface TapWorker {
@@ -603,9 +608,12 @@ const makeTapWorker = (
     const queue = yield* Queue.bounded<TapWork>(capacity);
     const iteration = Queue.take(queue).pipe(
       Effect.flatMap((work) =>
-        runTap(contribution, definition, diagnosticSink, work.input, point).pipe(
-          Effect.withParentSpan(work.parentSpan),
-        ),
+        runTap(contribution, definition, diagnosticSink, work.input, point)
+          .pipe(
+            Effect.locally(CurrentPluginFiberRef, Option.some(work.pluginName)),
+            Effect.locally(CurrentGrantsFiberRef, Option.some(work.grants)),
+          )
+          .pipe(Effect.withParentSpan(work.parentSpan)),
       ),
       Effect.catchAllCause((cause) =>
         Cause.isInterrupted(cause)
@@ -631,6 +639,7 @@ const offerTap = (
   beforeTapEviction: Effect.Effect<void>,
   contribution: RegisteredHook,
   diagnosticSink: (diagnostic: HookDiagnostic) => Effect.Effect<void>,
+  grants: CapabilityGrants,
   input: HookPayload,
   parentSpan: Tracer.Span,
   point: HookPointName,
@@ -651,7 +660,12 @@ const offerTap = (
           });
         }
       }
-      yield* Queue.offer(worker.queue, { input, parentSpan });
+      yield* Queue.offer(worker.queue, {
+        grants,
+        input,
+        parentSpan,
+        pluginName: pluginName(contribution),
+      });
     }),
   );
 
@@ -761,54 +775,67 @@ const makeHookEmitter = (options: HookEmitterOptions) =>
               });
             }),
           );
+          const runWithGrants = <T>(
+            effect: Effect.Effect<T, unknown, unknown>,
+          ): Effect.Effect<T, unknown, unknown> =>
+            effect.pipe(Effect.locally(CurrentGrantsFiberRef, Option.some(grants)));
           if (definition.mergeClass === "FirstWins") {
-            return (yield* runFirstWins(
-              contributions,
-              definition,
-              diagnosticSink,
-              decodedInput,
-              point,
-              traceState,
+            return (yield* runWithGrants(
+              runFirstWins(
+                contributions,
+                definition,
+                diagnosticSink,
+                decodedInput,
+                point,
+                traceState,
+              ),
             )) as HookPointResult<typeof point>;
           }
           if (definition.mergeClass === "Chain") {
-            return (yield* runChain(
-              contributions,
-              definition,
-              diagnosticSink,
-              decodedInput as HookPayload,
-              point,
-              traceState,
+            return (yield* runWithGrants(
+              runChain(
+                contributions,
+                definition,
+                diagnosticSink,
+                decodedInput as HookPayload,
+                point,
+                traceState,
+              ),
             )) as HookPointResult<typeof point>;
           }
           if (definition.mergeClass === "Accumulate") {
-            return (yield* runAccumulate(
-              contributions,
-              definition,
-              diagnosticSink,
-              decodedInput as HookPayload,
-              point,
-              traceState,
+            return (yield* runWithGrants(
+              runAccumulate(
+                contributions,
+                definition,
+                diagnosticSink,
+                decodedInput as HookPayload,
+                point,
+                traceState,
+              ),
             )) as HookPointResult<typeof point>;
           }
           const parentSpan = yield* Effect.currentSpan.pipe(Effect.orDie);
-          yield* Effect.forEach(
-            contributions,
-            (contribution) =>
-              tapWorker(contribution, definition, point).pipe(
-                Effect.flatMap((worker) =>
-                  offerTap(
-                    beforeTapEviction,
-                    contribution,
-                    diagnosticSink,
-                    decodedInput as HookPayload,
-                    parentSpan,
-                    point,
-                    worker,
+          yield* runWithGrants(
+            Effect.forEach(
+              contributions,
+              (contribution) =>
+                tapWorker(contribution, definition, point).pipe(
+                  Effect.flatMap((worker) =>
+                    offerTap(
+                      beforeTapEviction,
+                      contribution,
+                      diagnosticSink,
+                      grants,
+                      decodedInput as HookPayload,
+                      parentSpan,
+                      point,
+                      worker,
+                    ),
                   ),
                 ),
-              ),
-            { discard: true },
+              { discard: true },
+            ),
           );
           return undefined as HookPointResult<typeof point>;
         }),

@@ -179,7 +179,7 @@ test("the built RPC Head Snapshot audits the loaded Plugin generation and sorted
     capabilityGrants: ["filesystem-read", "shell"],
     loadedGeneration: {
       id: expect.any(String),
-      plugins: ["compact", "session-name", "snapshot-audit"],
+      plugins: ["compact", "reload", "session-name", "snapshot-audit"],
     },
   });
 });
@@ -261,7 +261,7 @@ test("the built JSON Head Snapshot audits the current process after Session resu
     capabilityGrants: [],
     loadedGeneration: {
       id: expect.any(String),
-      plugins: ["compact", "session-name"],
+      plugins: ["compact", "reload", "session-name"],
     },
     sessionId,
   });

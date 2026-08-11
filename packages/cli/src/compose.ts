@@ -45,6 +45,10 @@ import { composePluginRuntime, type FirstPartyPlugin } from "./plugins/pipeline.
 export type {
   AssistantItem,
   DriverSnapshot,
+  PluginCommandContext,
+  PluginCompactionGateRequest,
+  PluginCompactionGateResult,
+  PluginHostService,
   ProviderService,
   RegisteredTool,
   SessionToolView,
@@ -55,17 +59,16 @@ export type {
 export {
   AssistantStopReasonSchema,
   Driver,
-  InvokeCommandError,
-  PluginHost,
   defineTool,
+  InvokeCommandError,
   PiAiProviderLive,
+  PluginHost,
   Provider,
   ProviderError,
   ToolError,
   ToolRegistry,
   ToolRegistryLive,
 };
-export type { PluginHostService, PluginCommandContext, PluginCompactionGateRequest, PluginCompactionGateResult };
 
 export const inProcessKernelPackage = kernelPackage;
 

@@ -7,8 +7,8 @@
 import { readFile } from "node:fs/promises";
 
 import { JournalJsonl, SessionIdSchema } from "@pop-eye/journal";
+import { type PluginInteractions, PluginInteractionsNullLive } from "@pop-eye/plugins";
 import { Data, Effect, Layer, Logger, Schema, Stream } from "effect";
-
 import type { AssistantItem, Driver, ProviderService } from "../compose.js";
 import {
   AssistantStopReasonSchema,
@@ -21,7 +21,7 @@ import {
 import { runJsonHead } from "../heads/json.js";
 import { runPrintHead } from "../heads/print.js";
 import type { RpcInteractions } from "../heads/rpc.js";
-import { RpcInteractionsLive, runRpcHead } from "../heads/rpc.js";
+import { PluginInteractionsRpcLive, RpcInteractionsLive, runRpcHead } from "../heads/rpc.js";
 import type { HeadExitCode, HeadWriteError, HeadWriter } from "../heads/shared.js";
 import { errorMessage, makeWritableHeadWriter, makeWritableLogfmtLogger } from "../heads/shared.js";
 import { makeCliRuntime } from "../plugins/runtime.js";
@@ -161,6 +161,7 @@ const dispatch = (
       projectPath: process.cwd(),
       userPluginDir: config.userPluginDir,
     }).pipe(
+      Effect.provide(PluginInteractionsNullLive),
       Effect.mapError((cause) =>
         runError(
           "composition_failed",
@@ -202,8 +203,16 @@ const dispatch = (
       const dependencies = Layer.mergeAll(JournalJsonl(config.sessionDir), providerLayer, tools);
       const currentGen = yield* cliRuntime.currentGeneration;
       const driver = GenerationDriverDefault(currentGen).pipe(Layer.provide(dependencies));
-      const runtime = Layer.merge(driver, RpcInteractionsLive);
-      let head: Effect.Effect<HeadExitCode, CliRunError | HeadWriteError, Driver | RpcInteractions>;
+      const pluginLive =
+        config.mode === "rpc"
+          ? PluginInteractionsRpcLive.pipe(Layer.provide(RpcInteractionsLive))
+          : PluginInteractionsNullLive;
+      const runtime = Layer.mergeAll(driver, RpcInteractionsLive, pluginLive);
+      let head: Effect.Effect<
+        HeadExitCode,
+        CliRunError | HeadWriteError,
+        Driver | RpcInteractions | PluginInteractions
+      >;
       if (config.mode === "rpc") {
         head = runRpcHead({
           errorWriter,

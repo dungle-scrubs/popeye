@@ -11,6 +11,11 @@ import { StringDecoder } from "node:string_decoder";
 
 import type { SessionId } from "@pop-eye/journal";
 import {
+  makePluginInteractionsLiveService,
+  type PluginInteractionResolution,
+  PluginInteractions,
+} from "@pop-eye/plugins";
+import {
   type Command,
   decodeCommand,
   decodeInteractionResponse,
@@ -100,7 +105,7 @@ interface RpcInteractiveHead {
 interface PendingInteraction {
   readonly deferred: Deferred.Deferred<RpcInteractionResolution>;
   readonly request: InteractionRequest;
-  readonly sessionId: string;
+  readonly sessionId: string | undefined;
 }
 
 interface RpcInteractionState {
@@ -126,7 +131,7 @@ export interface RpcInteractionsService {
   ) => Effect.Effect<ReadonlyArray<InteractionRequest>>;
   readonly detach: (sessionId: string, head: RpcInteractiveHead) => Effect.Effect<void>;
   readonly request: (
-    sessionId: string,
+    sessionId: string | undefined,
     request: InteractionRequest,
   ) => Effect.Effect<RpcInteractionResolution, HeadWriteError | ProtocolError>;
   readonly respond: (response: InteractionResponse) => Effect.Effect<void, ProtocolError>;
@@ -196,7 +201,7 @@ export const RpcInteractionsLive: Layer.Layer<RpcInteractions> = Layer.effect(
         const heads = new Map(current.heads);
         heads.set(sessionId, head);
         const pending = [...current.pending.values()]
-          .filter((item) => item.sessionId === sessionId)
+          .filter((item) => item.sessionId === sessionId || item.sessionId === undefined)
           .map((item) => item.request);
         return [pending, { ...current, heads }];
       });
@@ -212,7 +217,10 @@ export const RpcInteractionsLive: Layer.Layer<RpcInteractions> = Layer.effect(
           const pending = new Map(current.pending);
           const removed: Array<PendingInteraction> = [];
           for (const [requestId, item] of pending) {
-            if (item.sessionId === sessionId) {
+            if (item.sessionId === sessionId || item.sessionId === undefined) {
+              if (item.sessionId === undefined && heads.size > 0) {
+                continue;
+              }
               removed.push(item);
               pending.delete(requestId);
             }
@@ -244,8 +252,12 @@ export const RpcInteractionsLive: Layer.Layer<RpcInteractions> = Layer.effect(
               request: interactionRequest,
               sessionId,
             });
+            const head =
+              sessionId === undefined
+                ? current.heads.values().next().value
+                : current.heads.get(sessionId);
             return [
-              { _tag: "accepted", head: current.heads.get(sessionId) },
+              { _tag: "accepted", head },
               { ...current, pending },
             ];
           },
@@ -284,7 +296,34 @@ export const RpcInteractionsLive: Layer.Layer<RpcInteractions> = Layer.effect(
             );
           }),
         );
-        return yield* Effect.raceFirst(Deferred.await(deferred), timeoutFallback);
+        const race = Effect.raceFirst(Deferred.await(deferred), timeoutFallback);
+        return yield* race.pipe(
+          Effect.onInterrupt(() =>
+            Ref.modify(state, (current) => {
+              const pending = current.pending.get(interactionRequest.id);
+              if (pending?.deferred !== deferred) {
+                return [false, current];
+              }
+              const next = new Map(current.pending);
+              next.delete(interactionRequest.id);
+              return [true, { ...current, pending: next }];
+            }).pipe(
+              Effect.flatMap((removed) =>
+                removed
+                  ? Effect.logWarning(
+                      "RPC interaction pending entry removed on interruption.",
+                    ).pipe(
+                      Effect.annotateLogs({
+                        diagnostic: "interaction_interrupted",
+                        requestId: interactionRequest.id,
+                        sessionId,
+                      }),
+                    )
+                  : Effect.void,
+              ),
+            ),
+          ),
+        );
       });
 
     const respond: RpcInteractionsService["respond"] = (response) =>
@@ -320,6 +359,44 @@ export const RpcInteractionsLive: Layer.Layer<RpcInteractions> = Layer.effect(
     return { attach, detach, request, respond } satisfies RpcInteractionsService;
   }),
 );
+
+export const PluginInteractionsRpcLive: Layer.Layer<PluginInteractions, never, RpcInteractions> =
+  Layer.effect(
+    PluginInteractions,
+    Effect.gen(function* () {
+      const rpc = yield* RpcInteractions;
+      const transport = (
+        sessionId: string | undefined,
+        request: InteractionRequest,
+      ): Effect.Effect<PluginInteractionResolution> =>
+        rpc.request(sessionId, request).pipe(
+          Effect.map(
+            (resolution) =>
+              ({
+                ...(resolution.error ? { error: resolution.error } : {}),
+                ...(request.pluginName ? { pluginName: request.pluginName } : {}),
+                response: resolution.response,
+                source: resolution.source,
+              }) as PluginInteractionResolution,
+          ),
+          Effect.catchAll(() =>
+            Effect.succeed({
+              ...(request.pluginName ? { pluginName: request.pluginName } : {}),
+              response: {
+                _tag: "interaction-response",
+                id: request.id,
+                kind: request.kind,
+                // biome-ignore lint/suspicious/noExplicitAny: fallback discriminated union narrows by kind
+                value: (request.fallback as any).value,
+                // biome-ignore lint/suspicious/noExplicitAny: response shape asserted via fallback
+              } as any,
+              source: "fallback" as const,
+            } as PluginInteractionResolution),
+          ),
+        );
+      return makePluginInteractionsLiveService({ transport });
+    }),
+  );
 
 const decodeChunk = (decoder: StringDecoder, chunk: unknown): string => {
   if (typeof chunk === "string") {

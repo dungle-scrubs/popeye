@@ -23,6 +23,7 @@ import {
 import { Data, Effect } from "effect";
 
 import { compactPlugin } from "../features/compact.js";
+import { reloadPlugin } from "../features/reload.js";
 import { sessionNamePlugin } from "../features/session-name.js";
 
 export interface FirstPartyPlugin {
@@ -58,7 +59,9 @@ const firstPartyPath = (plugin: FirstPartyPlugin): string =>
     ? fileURLToPath(new URL("../features/compact.js", import.meta.url))
     : plugin === sessionNamePlugin
       ? fileURLToPath(new URL("../features/session-name.js", import.meta.url))
-      : `first-party:${plugin.manifest.name}`;
+      : plugin === reloadPlugin
+        ? fileURLToPath(new URL("../features/reload.js", import.meta.url))
+        : `first-party:${plugin.manifest.name}`;
 
 const firstPartyGenerationPlugins = (
   plugins: ReadonlyArray<FirstPartyPlugin>,
@@ -205,7 +208,11 @@ export const composePluginRuntime = (
           trust: "trusted",
           trustDiagnosticSink: diagnosticSink("trust"),
         });
-        const firstPartyPlugins = options.firstPartyPlugins ?? [compactPlugin, sessionNamePlugin];
+        const firstPartyPlugins = options.firstPartyPlugins ?? [
+          compactPlugin,
+          reloadPlugin,
+          sessionNamePlugin,
+        ];
         const firstPartyGeneration = firstPartyGenerationPlugins(firstPartyPlugins);
         return yield* Effect.gen(function* () {
           const collision = pluginNameCollision([...firstPartyGeneration, ...generation.plugins]);
