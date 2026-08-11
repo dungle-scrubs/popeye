@@ -5,7 +5,7 @@
 > file as features are implemented - never mark a milestone complete
 > until every current-cutoff checkbox under it is checked.
 
-> Current focus: Phase 1 - Plugin pipeline in the CLI
+> Current focus: Phase 2 - Tool adaptation and audit surface
 
 ## Phase 1: Plugin pipeline in the CLI
 
