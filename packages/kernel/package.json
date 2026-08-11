@@ -10,6 +10,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./ai-conformance": {
+      "types": "./dist/ai/conformance/index.d.ts",
+      "default": "./dist/ai/conformance/index.js"
     }
   },
   "dependencies": {
@@ -18,9 +22,16 @@
     "@peye/protocol": "workspace:*"
   },
   "peerDependencies": {
-    "effect": "^3.22.1"
+    "effect": "^3.22.1",
+    "vitest": "^3.2.7"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "effect": "3.22.1"
+    "effect": "3.22.1",
+    "vitest": "3.2.7"
   }
 }

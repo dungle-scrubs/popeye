@@ -10,6 +10,7 @@ import { Effect, type Layer } from "effect";
 import { foldContext } from "../context.js";
 import type { JournalError } from "../errors.js";
 import { Journal } from "../journal.js";
+import { createMemoryJournalHarness } from "../memory.js";
 import {
   type EntryDraft,
   EntryDraftSchema,
@@ -24,6 +25,10 @@ export interface JournalContractHarness {
 }
 
 export type MakeJournalLayer = () => JournalContractHarness;
+
+/** Creates an isolated harness for the shipped in-memory Journal adapter. */
+export const createMemoryJournalContractHarness = (): JournalContractHarness =>
+  createMemoryJournalHarness();
 
 const entryDraft = (kind: string, payload: unknown): EntryDraft =>
   EntryDraftSchema.make({ kind, payload });
