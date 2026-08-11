@@ -54,9 +54,9 @@ Source: `implementation.md` (M3); D-003, D-006, D-007, D-009, D-015
 ### M4: Snapshot audit fields
 Source: `implementation.md` (M4); D-012
 
-- [ ] rpc snapshots carry `capabilityGrants` (sorted) and `loadedGeneration` for a loaded fixture plugin
-- [ ] json head emits both fields; golden transcripts regenerated and stable
-- [ ] Both fields survive session resume (fields present on a resumed session's snapshot)
+- [x] rpc snapshots carry `capabilityGrants` (sorted) and `loadedGeneration` for a loaded fixture plugin
+- [x] json head emits both fields; golden transcripts regenerated and stable
+- [x] Both fields survive session resume (fields present on a resumed session's snapshot)
 
 ### M5: End-to-end tool proof
 Source: `implementation.md` (M5)
@@ -113,8 +113,8 @@ Source: `implementation.md` (Deferred follow-up); D-006, D-010
 
 ## Summary
 - Total features: 53
-- Completed: 28
-- Remaining: 25
-- Current cutoff blockers: 25
+- Completed: 31
+- Remaining: 22
+- Current cutoff blockers: 22
 - Accepted/deferred follow-up: 4
 - Superseded/obsolete checklist debt: 0
