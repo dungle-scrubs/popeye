@@ -6,6 +6,8 @@ import {
   Driver,
   DriverDefault,
   type DriverDefaultOptions,
+  type DriverSnapshot,
+  defineTool,
   InvokeCommandError,
   kernelPackage,
   type PluginCommandContext,
@@ -15,7 +17,9 @@ import {
   type PluginHostService,
   Provider,
   type ProviderService,
+  type Tool,
   ToolRegistryLive,
+  type TurnResult,
 } from "@peye/kernel";
 import {
   type CapabilityGrants,
@@ -35,8 +39,8 @@ import { Context, Effect, Layer, Schema } from "effect";
 import { compactPlugin } from "./features/compact.js";
 import { sessionNamePlugin } from "./features/session-name.js";
 
-export type { ProviderService };
-export { Driver, Provider, ToolRegistryLive };
+export type { DriverSnapshot, ProviderService, Tool, TurnResult };
+export { Driver, defineTool, Provider, ToolRegistryLive };
 
 export const inProcessKernelPackage = kernelPackage;
 

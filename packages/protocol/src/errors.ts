@@ -4,9 +4,10 @@
  */
 import { Data } from "effect";
 
-export type ProtocolErrorReason = "malformed_frame" | "phase_invalid_command";
+export type ProtocolErrorReason = "malformed_frame" | "phase_invalid_command" | "unknown_command";
 
 export class ProtocolError extends Data.TaggedError("ProtocolError")<{
+  readonly cause?: unknown;
   readonly message: string;
   readonly reason: ProtocolErrorReason;
 }> {}

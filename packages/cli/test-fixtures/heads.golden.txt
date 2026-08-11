@@ -1,0 +1,52 @@
+CASE plain
+PRINT EXIT 0
+Plain answer.
+JSON EXIT 0
+{"_tag":"phaseChanged","phase":"IDLE"}
+{"_tag":"phaseChanged","phase":"ASSEMBLING"}
+{"_tag":"phaseChanged","phase":"STREAMING"}
+{"_tag":"assistantText","text":"Plain answer."}
+{"_tag":"phaseChanged","phase":"SETTLING"}
+{"_tag":"turnSettled","revision":5,"stopReason":"done"}
+{"entries":[{"id":"<id-1>","kind":"session_root","parentId":null,"payload":{}},{"id":"<id-2>","kind":"message","parentId":"<id-1>","payload":{"content":"Run the plain turn.","role":"user"}},{"id":"<id-3>","kind":"message","parentId":"<id-2>","payload":{"content":"Plain answer.","role":"assistant","stopReason":"done"}}],"leafEntryId":"<id-3>","phase":"IDLE","revision":5,"sessionId":"<id-4>"}
+
+CASE tool
+PRINT EXIT 0
+Tool answer: contents:fixture.txt
+JSON EXIT 0
+{"_tag":"phaseChanged","phase":"IDLE"}
+{"_tag":"phaseChanged","phase":"ASSEMBLING"}
+{"_tag":"phaseChanged","phase":"STREAMING"}
+{"_tag":"phaseChanged","phase":"EXECUTING"}
+{"_tag":"toolStarted","name":"read-file","toolCallId":"<id-1>"}
+{"_tag":"toolCompleted","isError":false,"toolCallId":"<id-1>"}
+{"_tag":"phaseChanged","phase":"ASSEMBLING"}
+{"_tag":"phaseChanged","phase":"STREAMING"}
+{"_tag":"assistantText","text":"Tool answer: contents:fixture.txt"}
+{"_tag":"phaseChanged","phase":"SETTLING"}
+{"_tag":"turnSettled","revision":8,"stopReason":"done"}
+{"entries":[{"id":"<id-2>","kind":"session_root","parentId":null,"payload":{}},{"id":"<id-3>","kind":"message","parentId":"<id-2>","payload":{"content":"Run the tool turn.","role":"user"}},{"id":"<id-4>","kind":"message","parentId":"<id-3>","payload":{"content":"","role":"assistant","stopReason":"toolCalls","toolCalls":[{"argumentsJson":"{\"path\":\"fixture.txt\"}","id":"<id-1>","name":"read-file"}]}},{"id":"<id-5>","kind":"message","parentId":"<id-4>","payload":{"content":"contents:fixture.txt","isError":false,"role":"toolResult","toolCallId":"<id-1>","toolName":"read-file"}},{"id":"<id-6>","kind":"message","parentId":"<id-5>","payload":{"content":"Tool answer: contents:fixture.txt","role":"assistant","stopReason":"done"}}],"leafEntryId":"<id-6>","phase":"IDLE","revision":8,"sessionId":"<id-7>"}
+
+CASE error
+PRINT EXIT 1
+Error-settled answer.
+JSON EXIT 1
+{"_tag":"phaseChanged","phase":"IDLE"}
+{"_tag":"phaseChanged","phase":"ASSEMBLING"}
+{"_tag":"phaseChanged","phase":"STREAMING"}
+{"_tag":"assistantText","text":"Error-settled answer."}
+{"_tag":"phaseChanged","phase":"SETTLING"}
+{"_tag":"turnSettled","revision":5,"stopReason":"error"}
+{"entries":[{"id":"<id-1>","kind":"session_root","parentId":null,"payload":{}},{"id":"<id-2>","kind":"message","parentId":"<id-1>","payload":{"content":"Run the error turn.","role":"user"}},{"id":"<id-3>","kind":"message","parentId":"<id-2>","payload":{"content":"Error-settled answer.","role":"assistant","stopReason":"error"}}],"leafEntryId":"<id-3>","phase":"IDLE","revision":5,"sessionId":"<id-4>"}
+
+CASE abort
+PRINT EXIT 2
+Aborted answer.
+JSON EXIT 2
+{"_tag":"phaseChanged","phase":"IDLE"}
+{"_tag":"phaseChanged","phase":"ASSEMBLING"}
+{"_tag":"phaseChanged","phase":"STREAMING"}
+{"_tag":"assistantText","text":"Aborted answer."}
+{"_tag":"phaseChanged","phase":"SETTLING"}
+{"_tag":"turnSettled","revision":5,"stopReason":"aborted"}
+{"entries":[{"id":"<id-1>","kind":"session_root","parentId":null,"payload":{}},{"id":"<id-2>","kind":"message","parentId":"<id-1>","payload":{"content":"Run the aborted turn.","role":"user"}},{"id":"<id-3>","kind":"message","parentId":"<id-2>","payload":{"content":"Aborted answer.","role":"assistant","stopReason":"aborted"}}],"leafEntryId":"<id-3>","phase":"IDLE","revision":5,"sessionId":"<id-4>"}

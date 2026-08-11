@@ -5,7 +5,7 @@
 > file as features are implemented - never mark a milestone complete
 > until every current-cutoff checkbox under it is checked.
 
-> Current focus: Phase 4 - Wire protocol and heads
+> Current focus: Phase 5 - Verification hardening
 
 ## Phase 1: Foundations
 
@@ -243,41 +243,41 @@ Source: `implementation.md` (M19); D-005, D-021
 ### M20: Protocol schemas
 Source: `implementation.md` (M20); D-017, D-021
 
-- [ ] Schema frames exist for every kernel primitive and invoke-command
-- [ ] Snapshot schema carries full transcript, phase, revision, model, thinking level, capability grants, loaded generation
-- [ ] Entry-id addressing is present in the schema (pagination reserved)
-- [ ] Interaction request frames carry id, kind (select/confirm/input), timeout, and declared fallback
-- [ ] Malformed frames decode to typed `ProtocolError`
-- [ ] The protocol package has zero kernel imports (package graph verified)
+- [x] Schema frames exist for every kernel primitive and invoke-command
+- [x] Snapshot schema carries full transcript, phase, revision, model, thinking level, capability grants, loaded generation
+- [x] Entry-id addressing is present in the schema (pagination reserved)
+- [x] Interaction request frames carry id, kind (select/confirm/input), timeout, and declared fallback
+- [x] Malformed frames decode to typed `ProtocolError`
+- [x] The protocol package has zero kernel imports (package graph verified)
 
 ### M21: print and json heads
 Source: `implementation.md` (M21)
 
-- [ ] print head emits final assistant text only, exit 0 on stop reason `done`
-- [ ] print head exits non-zero on stop reasons `error` and `aborted`
-- [ ] json head emits one JSON item per line (progress and snapshots), pacing output by awaiting stdout
-- [ ] Golden transcripts for scripted sessions are stable, including error and abort exits
+- [x] print head emits final assistant text only, exit 0 on stop reason `done`
+- [x] print head exits non-zero on stop reasons `error` and `aborted`
+- [x] json head emits one JSON item per line (progress and snapshots), pacing output by awaiting stdout
+- [x] Golden transcripts for scripted sessions are stable, including error and abort exits
 
 ### M22: rpc head
 Source: `implementation.md` (M22); Normative Contracts (protocol rules)
 
-- [ ] Strict LF-only framing; U+2028/U+2029 inside JSON strings pass through as content (adversarial fixtures)
-- [ ] attach/detach lifecycle works; snapshots normalize `attached` per connection
-- [ ] invoke-command routes plugin commands end-to-end
-- [ ] Interaction request round-trips to an attached interactive head
-- [ ] Interaction timeout resolves the declared fallback and reports `InteractionTimeout` to the plugin
-- [ ] Head detach mid-interaction resolves the fallback
-- [ ] A newly attaching head receives current snapshot plus pending interaction requests
-- [ ] Per-subscriber progress buffers are bounded sliding; a slow subscriber drops progress but snapshots remain correct (drop counts reported)
-- [ ] Frame errors emit typed `ProtocolError` diagnostics without killing the session
-- [ ] An external process completes a full tool-using session via rpc (gate 4→5 evidence)
+- [x] Strict LF-only framing; U+2028/U+2029 inside JSON strings pass through as content (adversarial fixtures)
+- [x] attach/detach lifecycle works; snapshots normalize `attached` per connection
+- [x] invoke-command routes plugin commands end-to-end
+- [x] Interaction request round-trips to an attached interactive head
+- [x] Interaction timeout resolves the declared fallback and reports `InteractionTimeout` to the plugin
+- [x] Head detach mid-interaction resolves the fallback
+- [x] A newly attaching head receives current snapshot plus pending interaction requests
+- [x] Per-subscriber progress buffers are bounded sliding; a slow subscriber drops progress but snapshots remain correct (drop counts reported)
+- [x] Frame errors emit typed `ProtocolError` diagnostics without killing the session
+- [x] An external process completes a full tool-using session via rpc (gate 4→5 evidence)
 
 ### M23: Snapshot-size measurement
 Source: `implementation.md` (M23); D-017
 
-- [ ] Snapshot payload sizes measured across recorded long sessions
-- [ ] Report written to plan artifacts with thresholds comparison
-- [ ] Pagination go/no-go recorded as a plan decision
+- [x] Snapshot payload sizes measured across recorded long sessions
+- [x] Report written to plan artifacts with thresholds comparison
+- [x] Pagination go/no-go recorded as a plan decision
 
 ## Phase 5: Verification hardening
 
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 143
-- Remaining: 34
-- Current cutoff blockers: 34
+- Completed: 166
+- Remaining: 11
+- Current cutoff blockers: 11
 - Accepted/deferred follow-up: 5
 - Superseded/obsolete checklist debt: 0

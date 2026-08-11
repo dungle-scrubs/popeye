@@ -1,7 +1,14 @@
 import { expect, test } from "vitest";
 
-import { cliPackage } from "./index.js";
+import * as cli from "./index.js";
 
 test("exports the cli package marker", () => {
-  expect(cliPackage).toBe("@peye/cli");
+  expect(cli.cliPackage).toBe("@peye/cli");
+});
+
+test("exports the rpc Head and interaction transport", () => {
+  expect(cli.runRpcHead).toBeTypeOf("function");
+  expect(cli.strictLfFrames).toBeTypeOf("function");
+  expect(cli.RpcInteractions).toBeTypeOf("function");
+  expect(cli.RpcInteractionsLive).toBeDefined();
 });

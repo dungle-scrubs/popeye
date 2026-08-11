@@ -85,6 +85,10 @@ importers:
         version: 3.22.1
 
   packages/protocol:
+    dependencies:
+      '@peye/journal':
+        specifier: workspace:*
+        version: link:../journal
     devDependencies:
       effect:
         specifier: 3.22.1
