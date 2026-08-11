@@ -129,7 +129,21 @@ const toPiAiTool = (tool: RegisteredTool): PiAiTool => {
   const { $id: _id, $schema: _schema, ...parameters } = generated;
   // JSONSchema.make(Schema.Struct({})) emits anyOf[object,array] with no root type, which
   // OpenAI-compatible endpoints reject: parameters.type must be "object" for every tool.
-  const isEmptyStructArtifact = parameters.type === undefined && Array.isArray(parameters.anyOf);
+  const anyOfTypes =
+    parameters.type === undefined && Array.isArray(parameters.anyOf)
+      ? parameters.anyOf
+          .map((member: unknown) =>
+            typeof member === "object" && member !== null && Object.keys(member).length === 1
+              ? (member as { readonly type?: unknown }).type
+              : undefined,
+          )
+          .sort()
+      : undefined;
+  const isEmptyStructArtifact =
+    anyOfTypes !== undefined &&
+    anyOfTypes.length === 2 &&
+    anyOfTypes[0] === "array" &&
+    anyOfTypes[1] === "object";
   if (isEmptyStructArtifact) {
     return {
       description: tool.description,

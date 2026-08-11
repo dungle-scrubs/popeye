@@ -12,7 +12,19 @@ import {
   createAssistantMessageEventStream,
   isRetryableAssistantError,
 } from "@earendil-works/pi-ai";
-import { Chunk, Effect, Either, Exit, Fiber, Layer, Option, Schema, Stream, Tracer } from "effect";
+import {
+  Cause,
+  Chunk,
+  Effect,
+  Either,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Schema,
+  Stream,
+  Tracer,
+} from "effect";
 import { expect, test } from "vitest";
 import { ProviderError } from "../errors.js";
 import type { PiAiProviderLayerOptions } from "../index.js";
@@ -818,6 +830,31 @@ test("no-argument tool schemas normalize to an object root providers accept", as
       },
     },
   ]);
+});
+
+test("union-rooted tool schemas fail clearly instead of being rewritten", async () => {
+  const unionRooted = defineTool({
+    description: "Accept a union root.",
+    execute: () => Effect.succeed({ content: "never" }),
+    name: "union-root",
+    parameters: Schema.Union(Schema.String, Schema.Number) as never,
+  });
+  const providerLayer = makePiAiProviderLayer(fixtureModel, {
+    classifyError: () => false,
+    streamSimple: () => interleavedFixture().stream,
+  });
+
+  const exit = await Effect.runPromiseExit(
+    Effect.gen(function* () {
+      const provider = yield* Provider;
+      yield* Stream.runDrain(provider.streamAssistant([], { attempt: 1, turnOrdinal: 1 }));
+    }).pipe(Effect.provide(providerLayer), Effect.provide(ToolRegistryLive([unionRooted]))),
+  );
+
+  expect(Exit.isFailure(exit)).toBe(true);
+  expect(Cause.pretty(Exit.isFailure(exit) ? exit.cause : Cause.empty)).toContain(
+    "must have an object root",
+  );
 });
 
 test("transforming tool schemas with $defs/$ref fail clearly during layer build", async () => {
