@@ -293,12 +293,12 @@ Source: `implementation.md` (M24); D-022
 ### M25: Conformance publication and docs
 Source: `implementation.md` (M25)
 
-- [ ] Journal conformance suite published as a package export
-- [ ] ai-seam contract suite published as a package export
-- [ ] Recorded-journal fixture harness documented
-- [ ] Plugin-author guide covers manifest, contributions, hooks, capabilities, prohibited syntax, reload semantics
-- [ ] README opens with the problem peye solves
-- [ ] Clean-room `pnpm add` consumer runs both published suites green
+- [x] Journal conformance suite published as a package export
+- [x] ai-seam contract suite published as a package export
+- [x] Recorded-journal fixture harness documented
+- [x] Plugin-author guide covers manifest, contributions, hooks, capabilities, prohibited syntax, reload semantics
+- [x] README opens with the problem peye solves
+- [x] Clean-room `pnpm add` consumer runs both published suites green
 
 ## Deferred follow-up
 
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 171
-- Remaining: 6
-- Current cutoff blockers: 6
+- Completed: 177
+- Remaining: 0
+- Current cutoff blockers: 0
 - Accepted/deferred follow-up: 5
 - Superseded/obsolete checklist debt: 0
