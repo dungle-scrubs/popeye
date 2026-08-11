@@ -2,6 +2,12 @@
  * Owns Plugin generation construction and hot-reload lifetime routing.
  * It exists because D-027 needs two-phase native loading and A-003 requires each generation to
  * own an Effect Scope that can drain before reload closes its resources.
+ *
+ * Lease contract (D-005): a Turn checks out a generation at Turn open and holds the lease
+ * until the Turn settles. The generation's resources stay open while any lease Scope is open;
+ * reload drains leases before closing the old generation. checkout is the primitive; use and
+ * useSerialized are re-expressed over it.
+ * Not responsible for Session-scoped Tool views (kernel owns that) or reload orchestration (CLI host owns that).
  */
 import { randomUUID } from "node:crypto";
 
@@ -60,6 +66,7 @@ export interface PluginGeneration {
 export interface GenerationSwapDiagnostic {
   readonly closedResources: number;
   readonly drainDurationMillis: number;
+  readonly leaseCount: number;
   readonly newGenerationId: string;
   readonly oldGenerationId: string;
   readonly pluginsAdded: ReadonlyArray<string>;
@@ -74,7 +81,12 @@ export interface PluginRuntimeDebugInfo {
   readonly plugins: ReadonlyArray<string>;
 }
 
+export interface GenerationLease {
+  readonly generation: PluginGeneration;
+}
+
 export interface PluginRuntime {
+  readonly checkout: Effect.Effect<GenerationLease, never, Scope.Scope>;
   readonly close: Effect.Effect<void>;
   readonly debugInfo: Effect.Effect<PluginRuntimeDebugInfo>;
   readonly reload: Effect.Effect<GenerationSwapDiagnostic, GenerationLoadError, TrustStore>;
@@ -290,22 +302,22 @@ export const makePluginRuntime = (
         ),
       );
 
-    const use: PluginRuntime["use"] = (run) =>
-      Effect.uninterruptibleMask((restore) =>
+    const checkout: PluginRuntime["checkout"] = Effect.acquireRelease(
+      routeMutex.withPermits(1)(
         Effect.gen(function* () {
-          const generation = yield* routeMutex.withPermits(1)(
-            Effect.gen(function* () {
-              const selected = yield* Ref.get(current);
-              yield* Ref.update(selected.routing, (state) => ({
-                ...state,
-                inFlight: state.inFlight + 1,
-              }));
-              return selected;
-            }),
-          );
-          return yield* restore(run(generation)).pipe(Effect.ensuring(settle(generation)));
+          const selected = yield* Ref.get(current);
+          yield* Ref.update(selected.routing, (state) => ({
+            ...state,
+            inFlight: state.inFlight + 1,
+          }));
+          return { generation: selected } satisfies GenerationLease;
         }),
-      );
+      ),
+      (lease) => settle(lease.generation as RoutableGeneration),
+    );
+
+    const use: PluginRuntime["use"] = (run) =>
+      Effect.scoped(checkout.pipe(Effect.flatMap((lease) => run(lease.generation))));
 
     const useSerialized: PluginRuntime["useSerialized"] = (run) =>
       reloadMutex.withPermits(1)(use(run));
@@ -334,6 +346,7 @@ export const makePluginRuntime = (
           return {
             closedResources: yield* old.closedResources,
             drainDurationMillis: drainFinishedAt - drainStartedAt,
+            leaseCount: inFlight,
             newGenerationId: fresh.id,
             oldGenerationId: old.id,
             ...pluginChanges(old, fresh),
@@ -348,6 +361,7 @@ export const makePluginRuntime = (
               Effect.annotateCurrentSpan({
                 closedResources: diagnostic.closedResources,
                 drainDurationMillis: diagnostic.drainDurationMillis,
+                leaseCount: diagnostic.leaseCount,
                 newGenerationId: diagnostic.newGenerationId,
                 oldGenerationId: diagnostic.oldGenerationId,
                 pluginsAdded: JSON.stringify(diagnostic.pluginsAdded),
@@ -391,5 +405,5 @@ export const makePluginRuntime = (
       ),
     );
 
-    return { close, debugInfo, reload, use, useSerialized };
+    return { checkout, close, debugInfo, reload, use, useSerialized };
   });
