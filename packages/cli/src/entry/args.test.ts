@@ -103,6 +103,16 @@ test("--plugin is repeatable in both invocation shapes and defaults to an empty 
   expect(absent.pluginPaths).toEqual([]);
 });
 
+test("a blank --plugin value is rejected as invalid arguments", async () => {
+  const error = await Effect.runPromise(Effect.flip(parseArgs(["-p", "--plugin", "", "Explain."])));
+
+  expect(error).toMatchObject({
+    _tag: "CliArgsError",
+    message: "--plugin requires a non-empty path.",
+    reason: "invalid_arguments",
+  });
+});
+
 test("--no-project-plugins defaults to false and becomes true when present", async () => {
   const enabled = await parseRunArgs(["--no-project-plugins", "Explain."]);
   const absent = await parseRunArgs(["Explain."]);

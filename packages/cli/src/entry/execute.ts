@@ -32,8 +32,8 @@ const CLI_USAGE = `Usage:
 
 Options:
   --base-url <url>         Set the OpenAI-compatible endpoint. Env: PEYE_BASE_URL.
-  --help                   Print this usage text.
   -p, --headless           Run headless.
+  --help                   Print this usage text.
   --mode <print|json|rpc>  Select the Head. Default: print.
   --model <model>          Select the Provider model. Env: PEYE_MODEL.
   --no-project-plugins     Do not load project-local Plugins.

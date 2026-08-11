@@ -94,6 +94,9 @@ export const parseArgs = (argv: ReadonlyArray<string>): Effect.Effect<ParsedArgs
           ),
         );
       }
+      if (values.plugin?.some((path) => path.trim() === "")) {
+        return Effect.fail(invalidArguments("--plugin requires a non-empty path."));
+      }
       if (positionals.length > 1) {
         return Effect.fail(promptRequired());
       }

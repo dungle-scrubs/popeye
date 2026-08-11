@@ -143,6 +143,8 @@ export const resolveConfig = (
       prompt: parsed.prompt,
       resume: configured(parsed.resume),
       sessionDir: configured(parsed.sessionDir) ?? ".peye/sessions",
+      // PEYE_USER_PLUGIN_DIR is test-support and deliberately undocumented,
+      // the same posture as PEYE_FAKE_PROVIDER_SCRIPT.
       userPluginDir: configured(env.PEYE_USER_PLUGIN_DIR) ?? join(homedir(), ".peye", "plugins"),
     };
   });

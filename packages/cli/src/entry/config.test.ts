@@ -80,6 +80,22 @@ test("the user Plugin directory defaults below the operating-system home directo
   });
 });
 
+test("an empty PEYE_USER_PLUGIN_DIR falls back to the home-directory default", async () => {
+  const parsed = await Effect.runPromise(parseArgs(["-p", "Explain."]));
+  const config = await Effect.runPromise(
+    resolveConfig(parsed, {
+      PEYE_BASE_URL: "http://127.0.0.1:1234/v1",
+      PEYE_MODEL: "local-model",
+      PEYE_USER_PLUGIN_DIR: "",
+    }),
+  );
+
+  expect(config).toMatchObject({
+    action: "run",
+    userPluginDir: join(homedir(), ".peye", "plugins"),
+  });
+});
+
 test("PEYE_USER_PLUGIN_DIR overrides the user Plugin directory for tests", async () => {
   const parsed = await Effect.runPromise(parseArgs(["-p", "Explain."]));
   const config = await Effect.runPromise(

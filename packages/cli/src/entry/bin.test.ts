@@ -56,8 +56,8 @@ test("the built help documents plugin flags in alphabetical order", () => {
   );
   const orderedFlags = [
     "--base-url",
-    "--help",
     "--headless",
+    "--help",
     "--mode",
     "--model",
     "--no-project-plugins",
