@@ -36,12 +36,13 @@ export const fakeProviderEnvironment = (): NodeJS.ProcessEnv => ({
 export const runBuiltBin = (
   args: ReadonlyArray<string>,
   options: {
+    readonly cwd?: string;
     readonly env?: NodeJS.ProcessEnv;
     readonly input?: string;
   } = {},
 ) =>
   spawnSync(process.execPath, [BUILT_BIN_PATH, ...args], {
-    cwd: WORKSPACE_PATH,
+    cwd: options.cwd ?? WORKSPACE_PATH,
     encoding: "utf8",
     env: options.env ?? cleanCliEnvironment(),
     input: options.input,

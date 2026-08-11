@@ -158,6 +158,84 @@ test("the built RPC Head serves LF-delimited commands until stdin closes", () =>
   ]);
 });
 
+test("the built RPC Head invokes a project Plugin Command", () => {
+  const projectPath = sessionDirectory();
+  const projectPluginDir = join(projectPath, ".peye", "plugins");
+  const sessionDir = join(projectPath, "sessions");
+  const userPluginDir = join(projectPath, "user-plugins");
+  mkdirSync(projectPluginDir, { recursive: true });
+  mkdirSync(userPluginDir, { recursive: true });
+  writeFileSync(
+    join(projectPluginDir, "project-command.ts"),
+    [
+      `import { Effect, Schema } from ${JSON.stringify(new URL("../../node_modules/effect/dist/esm/index.js", import.meta.url).href)};`,
+      "export default () => ({",
+      "  contributions: [{",
+      "    kind: 'command',",
+      "    name: 'project-command',",
+      "    payload: {",
+      "      arguments: Schema.Struct({}),",
+      "      description: 'Run project-command.',",
+      "      execute: () => Effect.succeed('project-result'),",
+      "      name: 'project-command',",
+      "    },",
+      "    priority: 0,",
+      "  }],",
+      "  manifest: { capabilities: [], name: 'project-command', version: '1.0.0' },",
+      "});",
+      "",
+    ].join("\n"),
+  );
+  const env = { ...fakeProviderEnvironment(), PEYE_USER_PLUGIN_DIR: userPluginDir };
+  const create = runBuiltBin(["-p", "--mode", "rpc", "--session-dir", sessionDir], {
+    cwd: projectPath,
+    env,
+    input: `${JSON.stringify({ _tag: "create", id: "create-project-command" })}\n`,
+  });
+
+  expect(create.status).toBe(0);
+  const created = JSON.parse(create.stdout.trimEnd()) as {
+    readonly result?: { readonly sessionId?: unknown };
+  };
+  const sessionId = created.result?.sessionId;
+  expect(sessionId).toBeTypeOf("string");
+  if (typeof sessionId !== "string") {
+    throw new Error("RPC create response did not contain a Session id.");
+  }
+
+  const invoke = runBuiltBin(["-p", "--mode", "rpc", "--session-dir", sessionDir], {
+    cwd: projectPath,
+    env,
+    input: `${[
+      { _tag: "resume", id: "resume-project-command", sessionId },
+      {
+        _tag: "invoke-command",
+        args: {},
+        id: "invoke-project-command",
+        name: "project-command",
+        sessionId,
+      },
+    ]
+      .map((frame) => JSON.stringify(frame))
+      .join("\n")}\n`,
+  });
+
+  expect(invoke.status).toBe(0);
+  expect(
+    invoke.stdout
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line)),
+  ).toContainEqual({
+    id: "invoke-project-command",
+    result: {
+      _tag: "commandInvoked",
+      commandName: "project-command",
+      value: "project-result",
+    },
+  });
+});
+
 test("the built bin reports bad arguments and missing config on stderr", () => {
   const badArguments = runBuiltBin(["--api-key", "secret-value", "-p", FAKE_PROVIDER_PROMPT]);
   const missingConfig = runBuiltBin(["-p", FAKE_PROVIDER_PROMPT]);
