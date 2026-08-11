@@ -261,16 +261,16 @@ Source: `implementation.md` (M21)
 ### M22: rpc head
 Source: `implementation.md` (M22); Normative Contracts (protocol rules)
 
-- [ ] Strict LF-only framing; U+2028/U+2029 inside JSON strings pass through as content (adversarial fixtures)
-- [ ] attach/detach lifecycle works; snapshots normalize `attached` per connection
-- [ ] invoke-command routes plugin commands end-to-end
-- [ ] Interaction request round-trips to an attached interactive head
-- [ ] Interaction timeout resolves the declared fallback and reports `InteractionTimeout` to the plugin
-- [ ] Head detach mid-interaction resolves the fallback
-- [ ] A newly attaching head receives current snapshot plus pending interaction requests
-- [ ] Per-subscriber progress buffers are bounded sliding; a slow subscriber drops progress but snapshots remain correct (drop counts reported)
-- [ ] Frame errors emit typed `ProtocolError` diagnostics without killing the session
-- [ ] An external process completes a full tool-using session via rpc (gate 4→5 evidence)
+- [x] Strict LF-only framing; U+2028/U+2029 inside JSON strings pass through as content (adversarial fixtures)
+- [x] attach/detach lifecycle works; snapshots normalize `attached` per connection
+- [x] invoke-command routes plugin commands end-to-end
+- [x] Interaction request round-trips to an attached interactive head
+- [x] Interaction timeout resolves the declared fallback and reports `InteractionTimeout` to the plugin
+- [x] Head detach mid-interaction resolves the fallback
+- [x] A newly attaching head receives current snapshot plus pending interaction requests
+- [x] Per-subscriber progress buffers are bounded sliding; a slow subscriber drops progress but snapshots remain correct (drop counts reported)
+- [x] Frame errors emit typed `ProtocolError` diagnostics without killing the session
+- [x] An external process completes a full tool-using session via rpc (gate 4→5 evidence)
 
 ### M23: Snapshot-size measurement
 Source: `implementation.md` (M23); D-017
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 153
-- Remaining: 24
-- Current cutoff blockers: 24
+- Completed: 163
+- Remaining: 14
+- Current cutoff blockers: 14
 - Accepted/deferred follow-up: 5
 - Superseded/obsolete checklist debt: 0
