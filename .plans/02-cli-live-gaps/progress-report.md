@@ -40,16 +40,16 @@ Source: `implementation.md` (M2); D-002, D-008, D-010, D-011, D-014
 ### M3: Tool adapter
 Source: `implementation.md` (M3); D-003, D-006, D-007, D-009, D-015
 
-- [ ] `PluginGeneration` exposes each loaded plugin's manifest via an additive accessor (D-022), test-covered in `@pop-eye/plugins`, existing tests unchanged
-- [ ] A fixture tool contribution adapts with every field intact (name, description, parameters schema, execute, executionMode, replay, requiredCapabilities)
-- [ ] Session grants are the union of loaded manifests' capabilities
-- [ ] A tool requiring a capability its own plugin does not declare is skipped with a diagnostic naming the plugin and the missing declaration, even when another plugin declares that capability
-- [ ] Duplicate tool name across scopes: project-local shadows user-global shadows first-party
-- [ ] Duplicate tool name within one scope: contribution priority wins, then lexical plugin-name order (D-023)
-- [ ] Every shadowing emits a diagnostic naming both plugins and the survivor; startup does not fail
-- [ ] The per-process registry built after generation load replaces `ToolRegistryLive([])` in `run.ts`
-- [ ] An empty adapted tool set is valid; the startup line reports the tool count (0 and N cases)
-- [ ] An adapted tool executes through the kernel with Schema-validated arguments; invalid arguments become a model-visible error result
+- [x] `PluginGeneration` exposes each loaded plugin's manifest via an additive accessor (D-022), test-covered in `@pop-eye/plugins`, existing tests unchanged
+- [x] A fixture tool contribution adapts with every field intact (name, description, parameters schema, execute, executionMode, replay, requiredCapabilities)
+- [x] Session grants are the union of loaded manifests' capabilities
+- [x] A tool requiring a capability its own plugin does not declare is skipped with a diagnostic naming the plugin and the missing declaration, even when another plugin declares that capability
+- [x] Duplicate tool name across scopes: project-local shadows user-global shadows first-party
+- [x] Duplicate tool name within one scope: contribution priority wins, then lexical plugin-name order (D-023)
+- [x] Every shadowing emits a diagnostic naming both plugins and the survivor; startup does not fail
+- [x] The per-process registry built after generation load replaces `ToolRegistryLive([])` in `run.ts`
+- [x] An empty adapted tool set is valid; the startup line reports the tool count (0 and N cases)
+- [x] An adapted tool executes through the kernel with Schema-validated arguments; invalid arguments become a model-visible error result
 
 ### M4: Snapshot audit fields
 Source: `implementation.md` (M4); D-012
@@ -113,8 +113,8 @@ Source: `implementation.md` (Deferred follow-up); D-006, D-010
 
 ## Summary
 - Total features: 53
-- Completed: 18
-- Remaining: 35
-- Current cutoff blockers: 35
+- Completed: 28
+- Remaining: 25
+- Current cutoff blockers: 25
 - Accepted/deferred follow-up: 4
 - Superseded/obsolete checklist debt: 0
