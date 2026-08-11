@@ -13,7 +13,13 @@ import {
   type ProviderService,
   ToolRegistryLive,
 } from "../compose.js";
-import { RpcInteractions, RpcInteractionsLive, runRpcHead, strictLfFrames } from "./rpc.js";
+import {
+  MAX_RPC_FRAME_BYTES,
+  RpcInteractions,
+  RpcInteractionsLive,
+  runRpcHead,
+  strictLfFrames,
+} from "./rpc.js";
 import type { HeadWriter } from "./shared.js";
 
 const idleProvider: ProviderService = {
@@ -534,6 +540,178 @@ test("rpc frame errors emit typed ProtocolError diagnostics without killing the 
   ]);
 });
 
+test("rpc operational failures are correlated per frame and isolated between Sessions", async () => {
+  const capture = captureWriter();
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const sessionA = yield* driver.createSession();
+      const sessionB = yield* driver.createSession();
+      const missingSessionId = "missing-rpc-session";
+      const input = Readable.from(
+        `${[
+          {
+            _tag: "set-model",
+            expectedRevision: 999,
+            id: "stale-a",
+            model: "provider/stale",
+            sessionId: sessionA.id,
+          },
+          { _tag: "get-snapshot", id: "missing", sessionId: missingSessionId },
+          {
+            _tag: "invoke-command",
+            args: {},
+            id: "unknown-command",
+            name: "does-not-exist",
+            sessionId: sessionA.id,
+          },
+          {
+            _tag: "invoke-command",
+            args: { name: "x".repeat(201) },
+            id: "invalid-session-name",
+            name: "session-name",
+            sessionId: sessionA.id,
+          },
+          {
+            _tag: "set-model",
+            id: "model-b",
+            model: "provider/session-b",
+            sessionId: sessionB.id,
+          },
+          { _tag: "get-snapshot", id: "snapshot-a", sessionId: sessionA.id },
+          { _tag: "get-snapshot", id: "snapshot-b", sessionId: sessionB.id },
+        ]
+          .map((frame) => JSON.stringify(frame))
+          .join("\n")}\n`,
+      );
+
+      const exitCode = yield* runRpcHead({ input, writer: capture.writer });
+      expect(exitCode).toBe(0);
+    }).pipe(Effect.provide(rpcDriverLayer)),
+  );
+
+  expect(capture.lines()).toMatchObject([
+    {
+      error: {
+        code: "stale_revision",
+        details: { actual: expect.any(Number), expected: 999, tag: "StaleRevision" },
+      },
+      id: "stale-a",
+    },
+    {
+      error: {
+        code: "session_not_found",
+        details: { sessionId: "missing-rpc-session", tag: "MailboxSessionNotFound" },
+      },
+      id: "missing",
+    },
+    {
+      error: {
+        code: "invoke_command_error",
+        details: {
+          commandName: "does-not-exist",
+          reason: "command_not_found",
+          tag: "InvokeCommandError",
+        },
+      },
+      id: "unknown-command",
+    },
+    {
+      error: {
+        code: "invoke_command_error",
+        details: {
+          commandName: "session-name",
+          reason: "arguments_invalid",
+          tag: "InvokeCommandError",
+        },
+      },
+      id: "invalid-session-name",
+    },
+    {
+      id: "model-b",
+      result: { _tag: "snapshot", model: "provider/session-b" },
+    },
+    { id: "snapshot-a", result: { _tag: "snapshot", sessionId: expect.any(String) } },
+    {
+      id: "snapshot-b",
+      result: {
+        _tag: "snapshot",
+        model: "provider/session-b",
+        sessionId: expect.any(String),
+      },
+    },
+  ]);
+});
+
+test("rpc converts a driver defect into a correlated error and continues", async () => {
+  const capture = captureWriter();
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      let listCount = 0;
+      const defectDriver = {
+        ...driver,
+        listSessions: () => {
+          listCount += 1;
+          return listCount === 1
+            ? Effect.die(new Error("Injected rpc driver defect."))
+            : driver.listSessions();
+        },
+      };
+      const input = Readable.from(
+        `${[
+          { _tag: "list", id: "defect" },
+          { _tag: "list", id: "after-defect" },
+        ]
+          .map((frame) => JSON.stringify(frame))
+          .join("\n")}\n`,
+      );
+
+      const exitCode = yield* runRpcHead({ input, writer: capture.writer }).pipe(
+        Effect.provide(Layer.merge(Layer.succeed(Driver, defectDriver), RpcInteractionsLive)),
+      );
+      expect(exitCode).toBe(0);
+    }).pipe(Effect.provide(rpcDriverLayer)),
+  );
+
+  expect(capture.lines()).toMatchObject([
+    {
+      error: {
+        code: "protocol_error",
+        details: { kind: "defect", tag: "Error" },
+        message: "Injected rpc driver defect.",
+      },
+      id: "defect",
+    },
+    {
+      id: "after-defect",
+      result: { _tag: "sessionList", sessions: expect.any(Array) },
+    },
+  ]);
+});
+
+test("rpc bounds a never-terminated frame and closes with a ProtocolError response", async () => {
+  const capture = captureWriter();
+  const input = Readable.from("x".repeat(MAX_RPC_FRAME_BYTES + 1));
+
+  const exitCode = await Effect.runPromise(
+    runRpcHead({ input, writer: capture.writer }).pipe(Effect.provide(rpcDriverLayer)),
+  );
+
+  expect(exitCode).toBe(0);
+  expect(capture.lines()).toMatchObject([
+    {
+      error: {
+        code: "protocol_error",
+        details: { reason: "malformed_frame" },
+        message: expect.stringContaining(String(MAX_RPC_FRAME_BYTES)),
+      },
+    },
+  ]);
+});
+
 test("an external process completes a full tool-using Session through rpc pipes", async () => {
   const child = spawn(
     process.execPath,
@@ -544,7 +722,9 @@ test("an external process completes a full tool-using Session through rpc pipes"
     },
   );
   let buffered = "";
+  let stderr = "";
   const frames: Array<Record<string, unknown>> = [];
+  const stdoutParseErrors: Array<unknown> = [];
   const waiters: Array<(frame: Record<string, unknown>) => void> = [];
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => {
@@ -554,12 +734,20 @@ test("an external process completes a full tool-using Session through rpc pipes"
       const line = buffered.slice(0, separator);
       buffered = buffered.slice(separator + 1);
       if (line.length > 0) {
-        const frame = JSON.parse(line) as Record<string, unknown>;
-        frames.push(frame);
-        waiters.shift()?.(frame);
+        try {
+          const frame = JSON.parse(line) as Record<string, unknown>;
+          frames.push(frame);
+          waiters.shift()?.(frame);
+        } catch (cause) {
+          stdoutParseErrors.push(cause);
+        }
       }
       separator = buffered.indexOf("\n");
     }
+  });
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
   });
   const nextFrame = (): Promise<Record<string, unknown>> =>
     new Promise((resolve) => waiters.push(resolve));
@@ -574,6 +762,25 @@ test("an external process completes a full tool-using Session through rpc pipes"
   if (typeof sessionId !== "string") {
     throw new Error("RPC create response did not contain a Session id.");
   }
+
+  child.stdin.write('{"_tag":"list"\n');
+  expect(await nextFrame()).toMatchObject({ error: { code: "protocol_error" } });
+  send({
+    _tag: "invoke-command",
+    args: {},
+    id: "bad-command-process",
+    name: "does-not-exist",
+    sessionId,
+  });
+  expect(await nextFrame()).toMatchObject({
+    error: { code: "invoke_command_error" },
+    id: "bad-command-process",
+  });
+  send({ _tag: "get-snapshot", id: "missing-process", sessionId: "missing-process-session" });
+  expect(await nextFrame()).toMatchObject({
+    error: { code: "session_not_found" },
+    id: "missing-process",
+  });
 
   send({ _tag: "attach", id: "attach-process", sessionId });
   await nextFrame();
@@ -592,6 +799,11 @@ test("an external process completes a full tool-using Session through rpc pipes"
   const exitCode = await new Promise<number | null>((resolve) => child.on("exit", resolve));
 
   expect(exitCode).toBe(0);
+  expect(buffered).toBe("");
+  expect(stdoutParseErrors).toEqual([]);
+  expect(stderr).toContain("RPC protocol frame rejected.");
+  expect(stderr).toContain("RPC command failed.");
+  expect(stderr).toContain("RPC fixture provider warning.");
   expect(frames).toContainEqual(
     expect.objectContaining({ _tag: "toolStarted", name: "read-file", sessionId }),
   );
@@ -616,7 +828,7 @@ test("an external process completes a full tool-using Session through rpc pipes"
       sessionId,
     },
   });
-});
+}, 30_000);
 
 test("rpc routes the remaining M20 Driver commands with correlated protocol results", async () => {
   const capture = captureWriter();

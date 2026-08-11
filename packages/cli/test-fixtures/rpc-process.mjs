@@ -12,7 +12,7 @@ import { RpcInteractionsLive, runRpcHead } from "../dist/heads/rpc.js";
 const provider = {
   streamAssistant: (context) => {
     const toolFinished = context.some((item) => item.role === "toolResult");
-    return toolFinished
+    const response = toolFinished
       ? Stream.fromIterable([
           { _tag: "textDelta", text: "Tool answer: contents:fixture.txt" },
           { _tag: "done", stopReason: "done" },
@@ -26,6 +26,9 @@ const provider = {
           },
           { _tag: "done", stopReason: "toolCalls" },
         ]);
+    return Stream.unwrap(
+      Effect.logWarning("RPC fixture provider warning.").pipe(Effect.as(response)),
+    );
   },
 };
 

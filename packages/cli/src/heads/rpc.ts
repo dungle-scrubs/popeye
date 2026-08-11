@@ -16,18 +16,36 @@ import {
   type InteractionResponse,
   InteractionTimeout,
   ProtocolError,
+  type WireError,
 } from "@peye/protocol";
-import { Context, Data, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect";
+import {
+  Cause,
+  Chunk,
+  Context,
+  Data,
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  Logger,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 
 import { Driver, type DriverSnapshot } from "../compose.js";
 import {
   HEAD_EXIT_CODES,
   type HeadExitCode,
-  type HeadWriteError,
+  HeadWriteError,
   type HeadWriter,
   runHeadBoundary,
+  stderrHeadWriter,
   stdoutHeadWriter,
 } from "./shared.js";
+
+export const MAX_RPC_FRAME_BYTES = 1024 * 1024;
 
 export class RpcReadError extends Data.TaggedError("RpcReadError")<{
   readonly cause: unknown;
@@ -71,6 +89,8 @@ interface PendingInteraction {
 }
 
 interface RpcInteractionState {
+  // One Head per Session is safe for today's single stdio connection. A future multi-connection
+  // host must key ownership by connection as well, or one connection could replace another's Head.
   readonly heads: ReadonlyMap<string, RpcInteractiveHead>;
   readonly pending: ReadonlyMap<string, PendingInteraction>;
 }
@@ -294,11 +314,24 @@ const readStrictLfFrames = async function* (input: Readable): AsyncGenerator<str
     while (separator >= 0) {
       const raw = pending.slice(0, separator);
       pending = pending.slice(separator + 1);
+      const frameBytes = Buffer.byteLength(raw);
+      if (frameBytes > MAX_RPC_FRAME_BYTES) {
+        throw new ProtocolError({
+          message: `RPC frame exceeded the ${MAX_RPC_FRAME_BYTES}-byte limit.`,
+          reason: "malformed_frame",
+        });
+      }
       const frame = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
       if (frame.length > 0) {
         yield frame;
       }
       separator = pending.indexOf("\n");
+    }
+    if (Buffer.byteLength(pending) > MAX_RPC_FRAME_BYTES) {
+      throw new ProtocolError({
+        message: `RPC frame exceeded the ${MAX_RPC_FRAME_BYTES}-byte limit before LF.`,
+        reason: "malformed_frame",
+      });
     }
   }
 
@@ -306,10 +339,13 @@ const readStrictLfFrames = async function* (input: Readable): AsyncGenerator<str
   // A partial trailing line at EOF is not a frame.
 };
 
-export const strictLfFrames = (input: Readable): Stream.Stream<string, RpcReadError> =>
-  Stream.fromAsyncIterable(
-    readStrictLfFrames(input),
-    (cause) => new RpcReadError({ cause, message: `RPC input failed: ${String(cause)}` }),
+export const strictLfFrames = (
+  input: Readable,
+): Stream.Stream<string, ProtocolError | RpcReadError> =>
+  Stream.fromAsyncIterable(readStrictLfFrames(input), (cause) =>
+    cause instanceof ProtocolError
+      ? cause
+      : new RpcReadError({ cause, message: `RPC input failed: ${String(cause)}` }),
   );
 
 const parseJsonFrame = (frame: string): Effect.Effect<unknown, ProtocolError> =>
@@ -329,6 +365,7 @@ const frameTag = (frame: unknown): string | undefined =>
     : undefined;
 
 const frameStringField = (frame: string, field: "_tag" | "id"): string | undefined => {
+  // Best-effort correlation for malformed JSON only. Decoded frames use their Schema-owned id.
   const match = new RegExp(`"${field}"\\s*:\\s*"([^"]+)"`, "u").exec(frame);
   return match?.[1];
 };
@@ -397,21 +434,277 @@ const writeSnapshotResponse = (
 
 const writeProtocolError = (
   writer: HeadWriter,
-  frame: string,
+  id: string | undefined,
   error: ProtocolError,
-): Effect.Effect<void, HeadWriteError> => {
-  const id = frameStringField(frame, "id");
-  return writer.write(
+): Effect.Effect<void, HeadWriteError> =>
+  writer.write(
     `${JSON.stringify({
       error: {
         code: "protocol_error",
-        details: { reason: error.reason },
+        details: { reason: error.reason, tag: error._tag },
         message: error.message,
       },
       ...(id === undefined ? {} : { id }),
     })}\n`,
   );
+
+const unknownRecord = (value: unknown): Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null ? (value as Readonly<Record<string, unknown>>) : {};
+
+const taggedErrorName = (value: unknown, fallback: string): string => {
+  const record = unknownRecord(value);
+  if (typeof record._tag === "string") {
+    return record._tag;
+  }
+  return value instanceof Error ? value.name : fallback;
 };
+
+const taggedErrorMessage = (value: unknown): string => {
+  const record = unknownRecord(value);
+  return typeof record.message === "string" ? record.message : String(value);
+};
+
+const numberField = (
+  record: Readonly<Record<string, unknown>>,
+  field: string,
+): number | undefined => (typeof record[field] === "number" ? record[field] : undefined);
+
+const stringField = (
+  record: Readonly<Record<string, unknown>>,
+  field: string,
+): string | undefined => (typeof record[field] === "string" ? record[field] : undefined);
+
+const wireErrorFromFailure = (
+  failure: unknown,
+  kind: "defect" | "failure" = "failure",
+): WireError => {
+  const record = unknownRecord(failure);
+  const tag = taggedErrorName(failure, kind === "defect" ? "Defect" : "Failure");
+  const message = taggedErrorMessage(failure);
+
+  switch (tag) {
+    case "BudgetExceeded":
+      return {
+        code: "budget_exceeded",
+        details: {
+          budget: numberField(record, "budget"),
+          compactionApplied: stringField(record, "compactionApplied"),
+          optionsDiagnostic: stringField(record, "optionsDiagnostic"),
+          required: numberField(record, "required"),
+          tag,
+        },
+        message,
+      };
+    case "CompactionDisabled":
+      return {
+        code: "compaction_disabled",
+        details: { sessionId: stringField(record, "sessionId"), tag },
+        message,
+      };
+    case "GateRejected":
+      return {
+        code: "gate_rejected",
+        details: {
+          plugin: stringField(record, "plugin"),
+          reason: stringField(record, "reason"),
+          tag,
+        },
+        message,
+      };
+    case "InteractionTimeout":
+      return {
+        code: "interaction_timeout",
+        details: {
+          requestId: stringField(record, "requestId"),
+          tag,
+          timeoutMs: numberField(record, "timeoutMs"),
+        },
+        message,
+      };
+    case "InvokeCommandError":
+      return {
+        code: "invoke_command_error",
+        details: {
+          commandName: stringField(record, "commandName"),
+          reason: stringField(record, "reason"),
+          tag,
+        },
+        message,
+      };
+    case "JournalDraftRejected":
+      return {
+        code: "journal_error",
+        details: {
+          kind: stringField(record, "kind"),
+          reason: stringField(record, "reason"),
+          tag,
+        },
+        message,
+      };
+    case "JournalError":
+      return {
+        code: "journal_error",
+        details: {
+          corruptionClass: stringField(record, "corruptionClass"),
+          file: stringField(record, "file"),
+          tag,
+        },
+        message,
+      };
+    case "JournalNotFound": {
+      const what = stringField(record, "what");
+      return {
+        code: what === "session" ? "session_not_found" : "journal_error",
+        details: { id: stringField(record, "id"), tag, what },
+        message,
+      };
+    }
+    case "MailboxClosed":
+      return {
+        code: "mailbox_closed",
+        details: { sessionId: stringField(record, "sessionId"), tag },
+        message,
+      };
+    case "MailboxFull":
+      return {
+        code: "mailbox_full",
+        details: {
+          capacity: numberField(record, "capacity"),
+          sessionId: stringField(record, "sessionId"),
+          tag,
+        },
+        message,
+      };
+    case "MailboxSessionNotFound":
+      return {
+        code: "session_not_found",
+        details: { sessionId: stringField(record, "sessionId"), tag },
+        message: `Session ${stringField(record, "sessionId") ?? "unknown"} was not found.`,
+      };
+    case "NothingToCompact":
+      return {
+        code: "nothing_to_compact",
+        details: { sessionId: stringField(record, "sessionId"), tag },
+        message,
+      };
+    case "ProtocolError":
+      return {
+        code: "protocol_error",
+        details: { reason: stringField(record, "reason"), tag },
+        message,
+      };
+    case "ProviderError":
+      return {
+        code: "provider_error",
+        details: {
+          status: numberField(record, "status"),
+          tag,
+          transient: record.transient,
+        },
+        message,
+      };
+    case "StaleRevision": {
+      const actual = numberField(record, "actual");
+      const expected = numberField(record, "expected");
+      return {
+        code: "stale_revision",
+        details: { actual, expected, tag },
+        message: `Expected revision ${expected ?? "unknown"}, current revision is ${actual ?? "unknown"}.`,
+      };
+    }
+    case "ToolError":
+      return {
+        code: "tool_error",
+        details: {
+          tag,
+          toolCallId: stringField(record, "toolCallId"),
+          toolName: stringField(record, "toolName"),
+        },
+        message,
+      };
+    case "TurnQueueFull":
+      return {
+        code: "turn_queue_full",
+        details: {
+          capacity: numberField(record, "capacity"),
+          queue: stringField(record, "queue"),
+          sessionId: stringField(record, "sessionId"),
+          tag,
+        },
+        message,
+      };
+    default:
+      return {
+        code: "protocol_error",
+        details: { kind, tag },
+        message,
+      };
+  }
+};
+
+const writeWireError = (
+  writer: HeadWriter,
+  id: string | undefined,
+  error: WireError,
+): Effect.Effect<void, HeadWriteError> =>
+  writer.write(`${JSON.stringify({ error, ...(id === undefined ? {} : { id }) })}\n`);
+
+const firstCauseError = <TFailure>(
+  cause: Cause.Cause<TFailure>,
+): { readonly kind: "defect" | "failure"; readonly value: unknown } | undefined => {
+  const failure = Option.getOrUndefined(Cause.failureOption(cause));
+  if (failure !== undefined) {
+    return { kind: "failure", value: failure };
+  }
+  const defect = Option.getOrUndefined(Chunk.head(Cause.defects(cause)));
+  return defect === undefined ? undefined : { kind: "defect", value: defect };
+};
+
+const handleFrameCause = <TFailure>(
+  writer: HeadWriter,
+  id: string | undefined,
+  commandName: string,
+  cause: Cause.Cause<TFailure>,
+): Effect.Effect<void, unknown> => {
+  const selected = firstCauseError(cause);
+  if (
+    Cause.isInterruptedOnly(cause) ||
+    (selected?.kind === "failure" && selected.value instanceof HeadWriteError)
+  ) {
+    return Effect.failCause(cause);
+  }
+  if (selected === undefined) {
+    return Effect.failCause(cause);
+  }
+
+  const error = wireErrorFromFailure(selected.value, selected.kind);
+  const report =
+    error.code === "protocol_error" && taggedErrorName(selected.value, "") === "ProtocolError"
+      ? Effect.logWarning("RPC protocol frame rejected.").pipe(
+          Effect.annotateLogs({
+            command: commandName,
+            diagnostic: "protocol_error",
+            reason: stringField(unknownRecord(selected.value), "reason"),
+          }),
+        )
+      : Effect.logError("RPC command failed.").pipe(
+          Effect.annotateLogs({
+            command: commandName,
+            diagnostic: "command_error",
+            errorCode: error.code,
+            errorTag: taggedErrorName(selected.value, selected.kind),
+          }),
+        );
+
+  return Effect.annotateCurrentSpan({ outcome: error.code }).pipe(
+    Effect.zipRight(report),
+    Effect.zipRight(writeWireError(writer, id, error)),
+  );
+};
+
+const rpcStderrLogger = Logger.make((options) => {
+  process.stderr.write(`${Logger.logfmtLogger.log(options)}\n`);
+});
 
 const writeProgress = (
   writer: HeadWriter,
@@ -462,7 +755,13 @@ export const runRpcHead = (options: RpcHeadOptions) => {
       const run = strictLfFrames(options.input).pipe(
         Stream.runForEach((frame) => {
           const commandName = frameStringField(frame, "_tag") ?? "malformed";
+          let correlationId = frameStringField(frame, "id");
           return decodeRpcInboundCommand(frame).pipe(
+            Effect.tap((command) =>
+              Effect.sync(() => {
+                correlationId = command.id;
+              }),
+            ),
             Effect.flatMap((command): Effect.Effect<void, unknown> => {
               if (command._tag === "attach") {
                 return driver.getSnapshot(command.sessionId).pipe(
@@ -700,21 +999,8 @@ export const runRpcHead = (options: RpcHeadOptions) => {
               return Effect.die("RPC command routing is incomplete.");
             }),
             Effect.tap(() => Effect.annotateCurrentSpan({ outcome: "ok" })),
-            Effect.catchIf(
-              (error): error is ProtocolError => error instanceof ProtocolError,
-              (error) =>
-                Effect.annotateCurrentSpan({ outcome: "protocol_error" }).pipe(
-                  Effect.zipRight(
-                    Effect.logWarning("RPC protocol frame rejected.").pipe(
-                      Effect.annotateLogs({
-                        command: commandName,
-                        diagnostic: "protocol_error",
-                        reason: error.reason,
-                      }),
-                    ),
-                  ),
-                  Effect.zipRight(writeProtocolError(writer, frame, error)),
-                ),
+            Effect.catchAllCause((cause) =>
+              handleFrameCause(writer, correlationId, commandName, cause),
             ),
             Effect.withSpan("rpc.frame", { attributes: { command: commandName } }),
           );
@@ -722,6 +1008,17 @@ export const runRpcHead = (options: RpcHeadOptions) => {
       );
 
       yield* run.pipe(
+        Effect.catchIf(
+          (error): error is ProtocolError => error instanceof ProtocolError,
+          (error) =>
+            Effect.logWarning("RPC input closed after an oversized frame.").pipe(
+              Effect.annotateLogs({
+                diagnostic: "protocol_error",
+                reason: error.reason,
+              }),
+              Effect.zipRight(writeProtocolError(writer, undefined, error)),
+            ),
+        ),
         Effect.ensuring(
           Effect.all(
             [
@@ -739,6 +1036,6 @@ export const runRpcHead = (options: RpcHeadOptions) => {
 
       return HEAD_EXIT_CODES.done satisfies HeadExitCode;
     }),
-    writer,
-  );
+    stderrHeadWriter,
+  ).pipe(Effect.provide(Logger.replace(Logger.defaultLogger, rpcStderrLogger)));
 };
