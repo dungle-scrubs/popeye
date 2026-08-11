@@ -4,7 +4,9 @@
  * It exists so run.ts stays an I/O boundary and the pipeline remains testable without a process.
  * Tool adaptation is not owned here; a later milestone adapts Plugin tools into the kernel.
  */
-import { stat } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -41,14 +43,14 @@ export class PluginPipelineError extends Data.TaggedError("PluginPipelineError")
   readonly phase1Path: string;
   readonly phase2Path: string;
   readonly pluginName: string;
-  readonly reason: "phase2_displacement";
+  readonly reason: "name_collision" | "phase2_displacement";
 }> {}
 
 export class PluginPipelineConfigError extends Data.TaggedError("PluginPipelineConfigError")<{
   readonly cause: unknown;
   readonly message: string;
   readonly path: string;
-  readonly reason: "user_plugin_directory_unavailable";
+  readonly reason: "decoy_directory_unavailable" | "user_plugin_directory_unavailable";
 }> {}
 
 const firstPartyPath = (plugin: FirstPartyPlugin): string =>
@@ -67,6 +69,43 @@ const firstPartyGenerationPlugins = (
     scope: "external" as const,
     version: plugin.manifest.version,
   }));
+
+const pluginNameCollision = (
+  plugins: ReadonlyArray<GenerationPlugin>,
+): readonly [GenerationPlugin, GenerationPlugin] | undefined => {
+  const pluginByName = new Map<string, GenerationPlugin>();
+  for (const plugin of plugins) {
+    const existing = pluginByName.get(plugin.name);
+    if (existing !== undefined && existing.path !== plugin.path) {
+      return [existing, plugin];
+    }
+    pluginByName.set(plugin.name, plugin);
+  }
+  return undefined;
+};
+
+const pluginNameCollisionError = (
+  collision: readonly [GenerationPlugin, GenerationPlugin],
+): PluginPipelineError => {
+  const [first, second] = collision;
+  const phase1 = first.scope === "external" ? first : second;
+  const phase2 = first.scope === "project-local" ? first : second;
+  return phase1.scope === "external" && phase2.scope === "project-local"
+    ? new PluginPipelineError({
+        message: `Project Plugin ${phase2.path} cannot displace phase-1 Plugin ${phase1.path} with manifest name ${JSON.stringify(phase2.name)}.`,
+        phase1Path: phase1.path,
+        phase2Path: phase2.path,
+        pluginName: phase2.name,
+        reason: "phase2_displacement",
+      })
+    : new PluginPipelineError({
+        message: `Plugin ${first.path} and Plugin ${second.path} share manifest name ${JSON.stringify(first.name)}.`,
+        phase1Path: first.path,
+        phase2Path: second.path,
+        pluginName: first.name,
+        reason: "name_collision",
+      });
+};
 
 type DiagnosticFamily = "generation" | "hook" | "registry" | "trust";
 
@@ -91,7 +130,7 @@ const discoveryConfig = (
                 path: userPluginDir,
                 reason: "user_plugin_directory_unavailable",
               }),
-            try: () => stat(userPluginDir),
+            try: () => readdir(userPluginDir),
           }).pipe(
             Effect.as([userPluginDir]),
             Effect.catchIf(
@@ -112,12 +151,39 @@ const discoveryConfig = (
       return config;
     }
     const sources = yield* phase1Sources(config);
+    const decoyProjectPath = yield* Effect.tryPromise({
+      catch: (cause) =>
+        new PluginPipelineConfigError({
+          cause,
+          message: `Could not create temporary Plugin discovery directory: ${String(cause)}`,
+          path: tmpdir(),
+          reason: "decoy_directory_unavailable",
+        }),
+      try: () => mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-no-project-")),
+    });
     return {
       cliPaths: sources.filter((source) => source.origin === "cli").map((source) => source.path),
-      projectPath: fileURLToPath(new URL(".", import.meta.url)),
+      projectPath: decoyProjectPath,
       userGlobalDirectories: config.userGlobalDirectories,
     };
   });
+
+const removeDecoyProjectPath = (
+  options: ComposePluginRuntimeOptions,
+  config: PluginDiscoveryConfig,
+): Effect.Effect<void> =>
+  options.noProjectPlugins
+    ? Effect.tryPromise({
+        catch: (cause) =>
+          new PluginPipelineConfigError({
+            cause,
+            message: `Could not remove temporary Plugin discovery directory ${config.projectPath}: ${String(cause)}`,
+            path: config.projectPath,
+            reason: "decoy_directory_unavailable",
+          }),
+        try: () => rm(config.projectPath, { force: true, recursive: true }),
+      }).pipe(Effect.orDie)
+    : Effect.void;
 
 export const composePluginRuntime = (
   options: ComposePluginRuntimeOptions,
@@ -125,49 +191,36 @@ export const composePluginRuntime = (
   PluginGeneration,
   GenerationLoadError | PluginPipelineConfigError | PluginPipelineError
 > =>
-  Effect.gen(function* () {
-    const config = yield* discoveryConfig(options);
-    const generation = yield* loadGeneration({
-      config,
-      generationDiagnosticSink: diagnosticSink("generation"),
-      hookDiagnosticSink: diagnosticSink("hook"),
-      registryDiagnosticSink: diagnosticSink("registry"),
-      trust: "trusted",
-      trustDiagnosticSink: diagnosticSink("trust"),
-    });
-    const firstPartyPlugins = options.firstPartyPlugins ?? [compactPlugin, sessionNamePlugin];
-    const firstPartyGeneration = firstPartyGenerationPlugins(firstPartyPlugins);
-    return yield* Effect.gen(function* () {
-      const phase1ByName = new Map(
-        [...firstPartyGeneration, ...generation.plugins]
-          .filter((plugin) => plugin.scope === "external")
-          .map((plugin) => [plugin.name, plugin] as const),
-      );
-      const displaced = generation.plugins.find(
-        (plugin) => plugin.scope === "project-local" && phase1ByName.has(plugin.name),
-      );
-      if (displaced !== undefined) {
-        const existing = phase1ByName.get(displaced.name);
-        if (existing === undefined) {
-          return yield* Effect.die("Displacement lookup lost its phase-1 Plugin.");
-        }
-        return yield* new PluginPipelineError({
-          message: `Project Plugin ${displaced.path} cannot displace phase-1 Plugin ${existing.path} with manifest name ${JSON.stringify(displaced.name)}.`,
-          phase1Path: existing.path,
-          phase2Path: displaced.path,
-          pluginName: displaced.name,
-          reason: "phase2_displacement",
+  Effect.acquireUseRelease(
+    discoveryConfig(options),
+    (config) =>
+      Effect.gen(function* () {
+        const generation = yield* loadGeneration({
+          config,
+          generationDiagnosticSink: diagnosticSink("generation"),
+          hookDiagnosticSink: diagnosticSink("hook"),
+          registryDiagnosticSink: diagnosticSink("registry"),
+          trust: "trusted",
+          trustDiagnosticSink: diagnosticSink("trust"),
         });
-      }
-      yield* Effect.forEach(
-        firstPartyPlugins,
-        (plugin) =>
-          generation.registry.registerPlugin(plugin.manifest, plugin.contributions, "external"),
-        { discard: true },
-      );
-      return {
-        ...generation,
-        plugins: [...firstPartyGeneration, ...generation.plugins],
-      };
-    }).pipe(Effect.onError(() => generation.close));
-  }).pipe(Effect.provide(TrustStoreMemory()));
+        const firstPartyPlugins = options.firstPartyPlugins ?? [compactPlugin, sessionNamePlugin];
+        const firstPartyGeneration = firstPartyGenerationPlugins(firstPartyPlugins);
+        return yield* Effect.gen(function* () {
+          const collision = pluginNameCollision([...firstPartyGeneration, ...generation.plugins]);
+          if (collision !== undefined) {
+            return yield* pluginNameCollisionError(collision);
+          }
+          yield* Effect.forEach(
+            firstPartyPlugins,
+            (plugin) =>
+              generation.registry.registerPlugin(plugin.manifest, plugin.contributions, "external"),
+            { discard: true },
+          );
+          return {
+            ...generation,
+            plugins: [...firstPartyGeneration, ...generation.plugins],
+          };
+        }).pipe(Effect.onError(() => generation.close));
+      }),
+    (config) => removeDecoyProjectPath(options, config),
+  ).pipe(Effect.provide(TrustStoreMemory()));

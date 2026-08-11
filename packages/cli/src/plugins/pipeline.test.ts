@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { SessionIdSchema } from "@pop-eye/journal";
 import {
@@ -14,7 +15,12 @@ import { Effect, Logger, Schema } from "effect";
 import { expect, test } from "vitest";
 
 import { GenerationPluginHostLive, PluginHost } from "../compose.js";
-import { composePluginRuntime } from "./pipeline.js";
+import { compactPlugin } from "../features/compact.js";
+import {
+  composePluginRuntime,
+  PluginPipelineConfigError,
+  PluginPipelineError,
+} from "./pipeline.js";
 
 const testSessionId = (name: string) => Schema.decodeSync(SessionIdSchema)(name);
 
@@ -221,6 +227,79 @@ test("a user-global Plugin loads in phase 1", async () => {
   }
 });
 
+test("a user-global Plugin cannot reuse a first-party manifest name", async () => {
+  const root = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-first-party-collision-"));
+  const projectPath = join(root, "project");
+  const userPluginDir = join(root, "user-plugins");
+  const pluginPath = join(userPluginDir, "compact.ts");
+
+  try {
+    await mkdir(projectPath, { recursive: true });
+    await mkdir(userPluginDir, { recursive: true });
+    await writeFile(
+      pluginPath,
+      commandPluginSource(compactPlugin.manifest.name, "user-compact-result"),
+    );
+
+    const error = await Effect.runPromise(
+      Effect.flip(
+        composePluginRuntime({
+          noProjectPlugins: false,
+          pluginPaths: [],
+          projectPath,
+          userPluginDir,
+        }),
+      ),
+    );
+
+    expect(error).toBeInstanceOf(PluginPipelineError);
+    expect(error).toMatchObject({
+      pluginName: compactPlugin.manifest.name,
+      reason: "name_collision",
+    });
+    expect(String(error)).toContain(await realpath(pluginPath));
+    expect(String(error)).toContain("features/compact");
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("two external Plugins cannot share a manifest name", async () => {
+  const root = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-external-collision-"));
+  const projectPath = join(root, "project");
+  const userPluginDir = join(root, "user-plugins");
+  const userPluginPath = join(userPluginDir, "shared-user.ts");
+  const cliPluginPath = join(root, "shared-cli.ts");
+
+  try {
+    await mkdir(projectPath, { recursive: true });
+    await mkdir(userPluginDir, { recursive: true });
+    await writeFile(userPluginPath, commandPluginSource("shared-external", "user-result"));
+    await writeFile(cliPluginPath, commandPluginSource("shared-external", "cli-result"));
+
+    const error = await Effect.runPromise(
+      Effect.flip(
+        composePluginRuntime({
+          noProjectPlugins: false,
+          pluginPaths: [cliPluginPath],
+          projectPath,
+          userPluginDir,
+        }),
+      ),
+    );
+
+    expect(error).toBeInstanceOf(PluginPipelineError);
+    expect(error).toMatchObject({
+      pluginName: "shared-external",
+      reason: "name_collision",
+    });
+    expect(String(error)).toContain(await realpath(userPluginPath));
+    expect(String(error)).toContain(await realpath(cliPluginPath));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 test("CLI Plugin paths use package classification for phase 1 outside and phase 2 inside the project", async () => {
   const root = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-cli-paths-"));
   const projectPath = join(root, "project");
@@ -320,6 +399,37 @@ test("noProjectPlugins skips discovered and CLI project-local Plugins but keeps 
   }
 });
 
+test("a user Plugin directory path that is a file fails as a pipeline config error", async () => {
+  const root = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-user-file-"));
+  const projectPath = join(root, "project");
+  const userPluginDir = join(root, "user-plugins");
+
+  try {
+    await mkdir(projectPath, { recursive: true });
+    await writeFile(userPluginDir, "not a directory");
+
+    const error = await Effect.runPromise(
+      Effect.flip(
+        composePluginRuntime({
+          noProjectPlugins: false,
+          pluginPaths: [],
+          projectPath,
+          userPluginDir,
+        }),
+      ),
+    );
+
+    expect(error).toBeInstanceOf(PluginPipelineConfigError);
+    expect(error).toMatchObject({
+      cause: { code: "ENOTDIR" },
+      path: userPluginDir,
+      reason: "user_plugin_directory_unavailable",
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 test("trusted composition uses fresh memory stores and never writes Trust state", async () => {
   const projectPath = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-trust-memory-"));
   const projectPluginDir = join(projectPath, ".peye", "plugins");
@@ -404,12 +514,16 @@ test("phase-2 Plugins cannot displace phase-1 or first-party Plugin names", asyn
     );
 
     expect(externalError).toMatchObject({
+      phase1Path: await realpath(externalPath),
+      phase2Path: await realpath(projectPath),
       pluginName: "shared-plugin",
       reason: "phase2_displacement",
     });
     expect(String(externalError)).toContain(await realpath(externalPath));
     expect(String(externalError)).toContain(await realpath(projectPath));
     expect(firstPartyError).toMatchObject({
+      phase1Path: fileURLToPath(new URL("../features/compact.js", import.meta.url)),
+      phase2Path: await realpath(compactDisplacerPath),
       pluginName: "compact",
       reason: "phase2_displacement",
     });
