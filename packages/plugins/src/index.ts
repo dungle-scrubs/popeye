@@ -14,6 +14,7 @@ export {
 } from "./capability.js";
 export {
   type AnyToolDeclaration,
+  type CommandCompactionResult,
   type CommandContribution,
   type CommandDeclaration,
   type CommandExecutionContext,

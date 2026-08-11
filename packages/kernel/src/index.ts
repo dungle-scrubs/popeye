@@ -52,6 +52,14 @@ export {
   type MailboxService,
 } from "./mailbox.js";
 export {
+  InvokeCommandError,
+  type PluginCommandContext,
+  type PluginCompactionResult,
+  PluginHost,
+  PluginHostNone,
+  type PluginHostService,
+} from "./plugin-host.js";
+export {
   PROGRESS_CAPACITY,
   type Progress,
   ProgressHub,

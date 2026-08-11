@@ -43,13 +43,13 @@ function runBoundaryCheck(root: string) {
 }
 
 describe("import boundaries", () => {
-  test("real package sources pass", async () => {
+  test("first-party feature sources pass the kernel-internal boundary", async () => {
     const violations = await checkBoundaries(process.cwd());
 
     expect(violations).toEqual([]);
   });
 
-  test("fixtures report exactly the expected violations", async () => {
+  test("first-party feature boundary rejects kernel internal imports and reports all fixtures", async () => {
     const violations = await checkBoundaries(fixtures);
 
     expect(violations).toHaveLength(expectedViolations.length);

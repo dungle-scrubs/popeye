@@ -29,9 +29,19 @@ importers:
       '@peye/kernel':
         specifier: workspace:*
         version: link:../kernel
+      '@peye/plugins':
+        specifier: workspace:*
+        version: link:../plugins
       '@peye/protocol':
         specifier: workspace:*
         version: link:../protocol
+    devDependencies:
+      '@peye/journal':
+        specifier: workspace:*
+        version: link:../journal
+      effect:
+        specifier: 3.22.1
+        version: 3.22.1
 
   packages/journal:
     devDependencies:

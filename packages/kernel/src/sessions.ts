@@ -4,13 +4,16 @@
  */
 
 import {
+  EntryDraftSchema,
   EntrySchema,
   Journal,
+  JournalDraftRejected,
   type JournalFailure,
   type SessionId,
   SessionIdSchema,
 } from "@peye/journal";
 import { Context, Effect, Layer, Schema } from "effect";
+import { SessionNamePayloadSchema } from "./entry-payloads.js";
 import { Mailbox, type MailboxFailure } from "./mailbox.js";
 import {
   applyRecoveryPlan,
@@ -55,6 +58,11 @@ export interface SessionsService {
   readonly create: () => Effect.Effect<SessionInfo, SessionsFailure>;
   readonly list: () => Effect.Effect<ReadonlyArray<SessionSummary>, JournalFailure>;
   readonly resume: (sessionId: SessionId) => Effect.Effect<ResumedSessionInfo, SessionsFailure>;
+  readonly setSessionName: (
+    sessionId: SessionId,
+    name: string,
+    expectedRevision?: number,
+  ) => Effect.Effect<void, SessionsFailure>;
 }
 
 export class Sessions extends Context.Tag("@peye/kernel/Sessions")<Sessions, SessionsService>() {}
@@ -133,6 +141,30 @@ export const SessionsLive = (
               revision: recovered.revision,
             };
           }),
+        setSessionName: (sessionId, name, expectedRevision) =>
+          mailbox
+            .enqueue(sessionId, {
+              ...(expectedRevision === undefined ? {} : { expectedRevision }),
+              name: "set-session-name",
+              run: () =>
+                Schema.decodeUnknown(SessionNamePayloadSchema)({ name }).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new JournalDraftRejected({
+                        cause,
+                        kind: "session_name",
+                        reason: "invalid_payload",
+                      }),
+                  ),
+                  Effect.flatMap((payload) =>
+                    journal.appendEntry(
+                      sessionId,
+                      EntryDraftSchema.make({ kind: "session_name", payload }),
+                    ),
+                  ),
+                ),
+            })
+            .pipe(Effect.asVoid),
       };
     }),
   );

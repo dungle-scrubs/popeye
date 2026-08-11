@@ -20,6 +20,12 @@ export const ThinkingChangePayloadSchema = Schema.Struct({
 
 export type ThinkingChangePayload = Schema.Schema.Type<typeof ThinkingChangePayloadSchema>;
 
+export const SessionNamePayloadSchema = Schema.Struct({
+  name: Schema.NonEmptyString,
+});
+
+export type SessionNamePayload = Schema.Schema.Type<typeof SessionNamePayloadSchema>;
+
 export const AssistantDiagnosticSchema = Schema.Union(
   Schema.Struct({
     compactionApplied: Schema.optional(EntryIdSchema),

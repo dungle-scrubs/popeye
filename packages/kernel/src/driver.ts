@@ -42,11 +42,13 @@ import {
   MessageEntryPayloadSchema,
   type MessageToolCall,
   ModelChangePayloadSchema,
+  SessionNamePayloadSchema,
   ThinkingChangePayloadSchema,
   ToolResultMessagePayloadSchema,
 } from "./entry-payloads.js";
 import type { TurnQueueFull } from "./errors.js";
 import { Mailbox, type MailboxFailure, MailboxLive, type MailboxOptions } from "./mailbox.js";
+import { type InvokeCommandError, PluginHost, PluginHostNone } from "./plugin-host.js";
 import { type Progress, ProgressHub, ProgressHubLive, TurnPhaseSchema } from "./progress.js";
 import { type Provider, type ThinkingLevel, ThinkingLevelSchema } from "./provider.js";
 import {
@@ -72,6 +74,7 @@ export const DriverSnapshotSchema = Schema.Struct({
   entries: Schema.Array(EntrySchema),
   leaf: EntrySchema,
   model: Schema.optional(Schema.String),
+  name: Schema.optional(Schema.String),
   phase: TurnPhaseSchema,
   revision: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
   sessionId: SessionIdSchema,
@@ -84,6 +87,7 @@ interface DriverSnapshotCore {
   readonly entries: ReadonlyArray<Entry>;
   readonly leaf: Entry;
   readonly model?: string;
+  readonly name?: string;
   readonly phase: DriverSnapshot["phase"];
   readonly sessionId: SessionId;
   readonly thinkingLevel?: ThinkingLevel;
@@ -91,6 +95,7 @@ interface DriverSnapshotCore {
 
 interface SessionSettings {
   readonly model?: string;
+  readonly name?: string;
   readonly thinkingLevel?: ThinkingLevel;
 }
 
@@ -121,6 +126,11 @@ export interface DriverService {
   readonly getSnapshot: (
     sessionId: SessionId,
   ) => Effect.Effect<DriverSnapshot, JournalFailure | MailboxFailure>;
+  readonly invokeCommand: (
+    sessionId: SessionId,
+    name: string,
+    args: unknown,
+  ) => Effect.Effect<unknown, InvokeCommandError>;
   readonly listSessions: () => Effect.Effect<ReadonlyArray<SessionSummary>, JournalFailure>;
   readonly prompt: (
     sessionId: SessionId,
@@ -153,6 +163,7 @@ const strict: { readonly onExcessProperty: "error" } = { onExcessProperty: "erro
 const decodeCompaction = Schema.decodeUnknown(CompactionPayloadSchema, strict);
 const decodeMessage = Schema.decodeUnknown(MessageEntryPayloadSchema, strict);
 const decodeModelChange = Schema.decodeUnknown(ModelChangePayloadSchema, strict);
+const decodeSessionName = Schema.decodeUnknown(SessionNamePayloadSchema, strict);
 const decodeThinkingChange = Schema.decodeUnknown(ThinkingChangePayloadSchema, strict);
 const decodeToolResult = Schema.decodeUnknown(ToolResultMessagePayloadSchema, strict);
 
@@ -171,6 +182,7 @@ const deriveSettings = (
 ): Effect.Effect<SessionSettings, JournalError> =>
   Effect.gen(function* () {
     let model: string | undefined;
+    let name: string | undefined;
     let thinkingLevel: ThinkingLevel | undefined;
     for (const entry of entries) {
       if (entry.kind === "model_change") {
@@ -178,6 +190,12 @@ const deriveSettings = (
           Effect.mapError((cause) => entrySchemaMismatch(entry, cause)),
         );
         model = payload.model;
+      }
+      if (entry.kind === "session_name") {
+        const payload = yield* decodeSessionName(entry.payload).pipe(
+          Effect.mapError((cause) => entrySchemaMismatch(entry, cause)),
+        );
+        name = payload.name;
       }
       if (entry.kind === "thinking_change") {
         const payload = yield* decodeThinkingChange(entry.payload).pipe(
@@ -188,6 +206,7 @@ const deriveSettings = (
     }
     return {
       ...(model === undefined ? {} : { model }),
+      ...(name === undefined ? {} : { name }),
       ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     };
   });
@@ -274,13 +293,14 @@ const makeSnapshot = (core: DriverSnapshotCore, revision: number): DriverSnapsho
 export const DriverLive: Layer.Layer<
   Driver,
   never,
-  Compaction | Journal | Mailbox | ProgressHub | Sessions | Turns
+  Compaction | Journal | Mailbox | PluginHost | ProgressHub | Sessions | Turns
 > = Layer.effect(
   Driver,
   Effect.gen(function* () {
     const compaction = yield* Compaction;
     const journal = yield* Journal;
     const mailbox = yield* Mailbox;
+    const pluginHost = yield* PluginHost;
     const progress = yield* ProgressHub;
     const sessions = yield* Sessions;
     const turns = yield* Turns;
@@ -308,6 +328,7 @@ export const DriverLive: Layer.Layer<
           entries,
           leaf,
           ...(settings.model === undefined ? {} : { model: settings.model }),
+          ...(settings.name === undefined ? {} : { name: settings.name }),
           phase,
           sessionId,
           ...(settings.thinkingLevel === undefined
@@ -465,6 +486,13 @@ export const DriverLive: Layer.Layer<
           })
           .pipe(Effect.map((result) => result.value)),
       getSnapshot: readSnapshot,
+      invokeCommand: (sessionId, name, args) =>
+        pluginHost.invokeCommand(name, args, {
+          compactNow: (expectedRevision) => compaction.compactNow(sessionId, expectedRevision),
+          sessionId,
+          setSessionName: (sessionName, expectedRevision) =>
+            sessions.setSessionName(sessionId, sessionName, expectedRevision),
+        }),
       listSessions: () => sessions.list(),
       prompt: (sessionId, content, options = {}) =>
         turns.runTurn(sessionId, content, options, (turnOptions) =>
@@ -491,6 +519,7 @@ export const DriverLive: Layer.Layer<
 
 export const DriverDefault = (
   options: DriverDefaultOptions = {},
+  pluginHost: Layer.Layer<PluginHost> = PluginHostNone,
 ): Layer.Layer<Driver, never, Journal | Provider | ToolRegistry> => {
   const mailbox = MailboxLive(options.mailbox);
   const progress = ProgressHubLive(options.progressCapacity);
@@ -499,6 +528,6 @@ export const DriverDefault = (
   const kernel = Layer.mergeAll(shared, compaction);
   const sessions = SessionsLive(options.sessions).pipe(Layer.provide(kernel));
   const turns = TurnsLive().pipe(Layer.provide(kernel));
-  const dependencies = Layer.mergeAll(kernel, sessions, turns);
+  const dependencies = Layer.mergeAll(kernel, pluginHost, sessions, turns);
   return DriverLive.pipe(Layer.provide(dependencies));
 };

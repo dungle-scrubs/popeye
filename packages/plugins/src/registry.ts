@@ -75,7 +75,7 @@ export const defineContributionKind = <const TKind extends string, TPayload, TEn
   requiredCapabilities: options.requiredCapabilities ?? noRequiredCapabilities,
 });
 
-type AnyCommandDeclaration = CommandDeclaration<never, unknown, unknown, unknown, unknown>;
+type AnyCommandDeclaration = CommandDeclaration<never, unknown, unknown, never, unknown>;
 interface AnyHookDeclaration {
   readonly mergeClass: HookMergeClass;
   readonly name: string;

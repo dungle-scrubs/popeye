@@ -39,8 +39,24 @@ export interface RegisteredContribution<TKind extends string = string, TPayload 
   readonly registrationRevision: number;
 }
 
+export type CommandCompactionResult =
+  | {
+      readonly compactionEntryId: string;
+      readonly entriesCovered: number;
+      readonly sliceCount: number;
+      readonly summaryLength: number;
+    }
+  | { readonly reason: string; readonly skipped: true };
+
 export interface CommandExecutionContext {
+  readonly compactNow: (
+    expectedRevision?: number,
+  ) => Effect.Effect<CommandCompactionResult, unknown>;
   readonly sessionId: SessionId;
+  readonly setSessionName: (
+    name: string,
+    expectedRevision?: number,
+  ) => Effect.Effect<void, unknown>;
 }
 
 export interface CommandDeclaration<

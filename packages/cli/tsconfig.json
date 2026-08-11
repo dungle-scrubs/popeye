@@ -7,5 +7,10 @@
   },
   "exclude": ["src/**/*.test.ts"],
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../kernel" }, { "path": "../protocol" }]
+  "references": [
+    { "path": "../journal" },
+    { "path": "../kernel" },
+    { "path": "../plugins" },
+    { "path": "../protocol" }
+  ]
 }

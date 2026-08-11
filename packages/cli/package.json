@@ -14,6 +14,14 @@
   },
   "dependencies": {
     "@peye/kernel": "workspace:*",
+    "@peye/plugins": "workspace:*",
     "@peye/protocol": "workspace:*"
+  },
+  "peerDependencies": {
+    "effect": "^3.22.1"
+  },
+  "devDependencies": {
+    "@peye/journal": "workspace:*",
+    "effect": "3.22.1"
   }
 }
