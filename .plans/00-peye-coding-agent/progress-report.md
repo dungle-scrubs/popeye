@@ -253,10 +253,10 @@ Source: `implementation.md` (M20); D-017, D-021
 ### M21: print and json heads
 Source: `implementation.md` (M21)
 
-- [ ] print head emits final assistant text only, exit 0 on stop reason `done`
-- [ ] print head exits non-zero on stop reasons `error` and `aborted`
-- [ ] json head emits one JSON item per line (progress and snapshots), pacing output by awaiting stdout
-- [ ] Golden transcripts for scripted sessions are stable, including error and abort exits
+- [x] print head emits final assistant text only, exit 0 on stop reason `done`
+- [x] print head exits non-zero on stop reasons `error` and `aborted`
+- [x] json head emits one JSON item per line (progress and snapshots), pacing output by awaiting stdout
+- [x] Golden transcripts for scripted sessions are stable, including error and abort exits
 
 ### M22: rpc head
 Source: `implementation.md` (M22); Normative Contracts (protocol rules)
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 149
-- Remaining: 28
-- Current cutoff blockers: 28
+- Completed: 153
+- Remaining: 24
+- Current cutoff blockers: 24
 - Accepted/deferred follow-up: 5
 - Superseded/obsolete checklist debt: 0
