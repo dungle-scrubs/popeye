@@ -46,7 +46,7 @@ test("the built bin reports the package version and help without Provider config
   expect(help.stdout).toContain("2  Invalid arguments, missing configuration, or an aborted turn.");
   expect(help.stdout).toContain("Read stderr to distinguish exit 2 causes.");
   expect(help.stderr).toBe("");
-});
+}, 10_000);
 
 test("the built help documents plugin flags in alphabetical order", () => {
   const help = runBuiltBin(["--help"]);

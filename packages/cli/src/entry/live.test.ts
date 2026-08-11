@@ -74,11 +74,6 @@ const hostedConfig =
         hostedApiKey,
       );
 
-// runRpcHead awaits each frame handler. A prompt therefore blocks the same input loop from reading
-// an abort frame until the Turn has already settled. Keep the complete test body ready for when RPC
-// command dispatch supports an in-flight abort.
-const RPC_MID_STREAM_ABORT_UNAVAILABLE = true;
-
 interface ProcessExit {
   readonly code: number | null;
   readonly signal: NodeJS.Signals | null;
@@ -233,8 +228,12 @@ const startupRecords = (stderr: string): ReadonlyArray<Readonly<Record<string, u
     .filter((line) => line.startsWith("STARTUP "))
     .map((line) => record(JSON.parse(line.slice("STARTUP ".length)) as unknown));
 
-const startLiveRpc = (directory: string): LiveRpcProcess => {
-  const processRun = spawnLiveBin(["-p", "--mode", "rpc", "--session-dir", directory]);
+const startLiveRpc = (directory: string, options: LiveProcessOptions = {}): LiveRpcProcess => {
+  const processRun = spawnLiveBin(
+    ["-p", "--mode", "rpc", "--session-dir", directory],
+    requireLiveConfig(),
+    options,
+  );
   const output = createInterface({
     crlfDelay: Number.POSITIVE_INFINITY,
     input: processRun.child.stdout,
@@ -522,10 +521,11 @@ test.skipIf(liveConfig === undefined || liveModelAlt === undefined)(
   LIVE_TEST_TIMEOUT_MS,
 );
 
-test.skipIf(liveConfig === undefined || RPC_MID_STREAM_ABORT_UNAVAILABLE)(
-  "live CLI: RPC abort interrupts a streaming Turn and leaves the Session usable [blocked: RPC frame dispatch is sequential]",
+test.skipIf(liveConfig === undefined)(
+  "live CLI: RPC abort interrupts a streaming Turn and leaves the Session usable",
   async () => {
-    const rpc = startLiveRpc(sessionDirectory());
+    const projectPath = sessionDirectory();
+    const rpc = startLiveRpc(join(projectPath, "sessions"), { cwd: projectPath });
 
     try {
       const sessionId = await createRpcSession(rpc, "create-abort");
@@ -533,20 +533,33 @@ test.skipIf(liveConfig === undefined || RPC_MID_STREAM_ABORT_UNAVAILABLE)(
       await rpc.readResponse("subscribe-abort");
       rpc.writeCommand({
         _tag: "prompt",
-        content: "Write a detailed answer with at least 2,000 words about distributed systems.",
+        content: "Count upward from 1, one integer per line, until interrupted.",
         id: "long-turn",
         sessionId,
       });
-      const textFrame = await rpc.readFrame((frame) => frame._tag === "assistantText");
-      await Effect.runPromise(decodeProgress(textFrame));
+      const streamingFrame = await rpc.readFrame(
+        (frame) =>
+          frame._tag === "phaseChanged" &&
+          frame.phase === "STREAMING" &&
+          frame.sessionId === sessionId,
+      );
+      await Effect.runPromise(decodeProgress(streamingFrame));
 
-      rpc.writeCommand({ _tag: "abort", id: "abort-live", sessionId });
-      expect(await rpc.readResponse("abort-live")).toMatchObject({
-        id: "abort-live",
+      const abortId = "abort-live";
+      rpc.writeCommand({ _tag: "abort", id: abortId, sessionId });
+      expect(await rpc.readResponse(abortId)).toMatchObject({
+        id: abortId,
         result: { _tag: "abortTurnAborted", aborted: true },
       });
-      const aborted = await rpcSnapshot(await rpc.readResponse("long-turn"), "long-turn");
+
+      rpc.writeCommand({ _tag: "get-snapshot", id: "snapshot-after-abort", sessionId });
+      const aborted = await rpcSnapshot(
+        await rpc.readResponse("snapshot-after-abort"),
+        "snapshot-after-abort",
+      );
       expect(assistantStopReasons(aborted).at(-1)).toBe("aborted");
+      const promptResponse = await rpcSnapshot(await rpc.readResponse("long-turn"), "long-turn");
+      expect(assistantStopReasons(promptResponse).at(-1)).toBe("aborted");
 
       rpc.writeCommand({
         _tag: "prompt",

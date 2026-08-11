@@ -72,32 +72,33 @@ Source: `implementation.md` (M5)
 ### M6: Serialized writer
 Source: `implementation.md` (M6); D-005
 
-- [ ] N concurrent fibers writing M frames each produce N*M intact LF-terminated frames with no interleaving (adversarial scheduling test)
-- [ ] An underlying write failure surfaces `HeadWriteError` to the writing fiber and poisons the writer (subsequent writes fail fast)
+- [x] N concurrent fibers writing M frames each produce N*M intact LF-terminated frames with no interleaving (adversarial scheduling test)
+- [x] An underlying write failure surfaces `HeadWriteError` to the writing fiber and poisons the writer (subsequent writes fail fast)
 
 ### M7: Session queues and control bypass
 Source: `implementation.md` (M7); D-005
 
-- [ ] `set-model` then `prompt` on one session apply in stdin order under adversarial completion order
-- [ ] `abort` dispatches while that session's `prompt` handler is mid-turn; the turn aborts; both responses correlate
-- [ ] An `abort` outracing its prompt returns `abortTurnNotAborted` (client may retry)
-- [ ] `interaction-response` resolves a pending interaction while a turn runs
-- [ ] Two concurrent responses to one interaction id: exactly one wins; the loser gets the existing no-pending-request protocol error (atomic claim)
-- [ ] Distinct sessions' prompts run concurrently (clocked: total under sequential sum)
-- [ ] Sessionless commands (`create`, `list`) dispatch on their own queue in arrival order
-- [ ] Exceeding a queue or bypass bound rejects the frame with a wire error naming the bound; the connection stays up
-- [ ] A handler completes side effects before writing its response (attach installs the interactive head before responding)
-- [ ] Writer failure terminates the head through the boundary; no further frames are read
-- [ ] EOF: reading stops, waiting fibers interrupt without wire errors, accepted kernel work settles, exit follows the existing contract
-- [ ] `rpc.frame` spans carry session, queue-depth, and bypass attributes
+- [x] `set-model` then `prompt` on one session apply in stdin order under adversarial completion order
+- [x] `abort` dispatches while that session's `prompt` handler is mid-turn; the turn aborts; both responses correlate
+- [x] An `abort` outracing its prompt returns `abortTurnNotAborted` (client may retry)
+- [x] `interaction-response` resolves a pending interaction while a turn runs
+- [x] Two concurrent responses to one interaction id: exactly one wins; the loser gets the existing no-pending-request protocol error (atomic claim)
+- [x] Distinct sessions' prompts run concurrently (clocked: total under sequential sum)
+- [x] Sessionless commands (`create`, `list`) dispatch on their own queue in arrival order
+- [x] Exceeding a queue or bypass bound rejects the frame with a wire error naming the bound; the connection stays up
+- [x] A handler completes side effects before writing its response (attach installs the interactive head before responding)
+- [x] Writer failure terminates the head through the boundary; no further frames are read
+- [x] EOF: reading stops, waiting fibers interrupt without wire errors, accepted kernel work settles, exit follows the existing contract
+- [x] `rpc.frame` spans carry session, queue-depth, and bypass attributes
+- [x] Queue workers survive handler failures (head terminates only via writer failure); control forks interrupted at EOF; post-poison dispatch fails fast; session map capped (M7 cross-family review remediation)
 
 ### M8: rpc live proof
 Source: `implementation.md` (M8)
 
-- [ ] Live harness aborts a mid-turn prompt through the shipped bin; the snapshot shows stop reason `aborted`
-- [ ] Adversarial soak (3+ interleaved sessions, dropped subscriber, oversized frame) keeps existing contracts
-- [ ] `01-cli-entry` ledger finding 3 (rpc abort dispatch) resolved with harness evidence
-- [ ] README documents `--plugin`, `--no-project-plugins`, and concurrent dispatch semantics
+- [x] Live harness aborts a mid-turn prompt through the shipped bin; the snapshot shows stop reason `aborted`
+- [x] Adversarial soak (3+ interleaved sessions, dropped subscriber, oversized frame) keeps existing contracts
+- [x] `01-cli-entry` ledger finding 3 (rpc abort dispatch) resolved with harness evidence
+- [x] README documents `--plugin`, `--no-project-plugins`, and concurrent dispatch semantics
 
 ## Deferred follow-up
 
@@ -113,9 +114,9 @@ Source: `implementation.md` (Deferred follow-up); D-006, D-010
 (none)
 
 ## Summary
-- Total features: 54
-- Completed: 36
-- Remaining: 18
-- Current cutoff blockers: 18
+- Total features: 55
+- Completed: 55
+- Remaining: 0
+- Current cutoff blockers: 0
 - Accepted/deferred follow-up: 4
 - Superseded/obsolete checklist debt: 0

@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import { PassThrough, Readable } from "node:stream";
 
 import { createMemoryJournalBacking, JournalMemory } from "@pop-eye/journal";
-import { InteractionTimeout } from "@pop-eye/protocol";
-import { Effect, Layer, Stream } from "effect";
+import { InteractionTimeout, ProtocolError } from "@pop-eye/protocol";
+import { Deferred, Effect, Either, Fiber, Layer, Stream, Tracer } from "effect";
 import { expect, test } from "vitest";
 
 import {
@@ -20,7 +20,8 @@ import {
   runRpcHead,
   strictLfFrames,
 } from "./rpc.js";
-import type { HeadWriter } from "./shared.js";
+import { RPC_SESSION_QUEUE_CAPACITY } from "./rpc-dispatch.js";
+import { HeadWriteError, type HeadWriter } from "./shared.js";
 
 const idleProvider: ProviderService = {
   streamAssistant: () => Stream.empty,
@@ -81,6 +82,802 @@ test("rpc framing uses LF only and preserves Unicode separators, CRLF, empty lin
   ]);
 });
 
+test("rpc abort bypasses a stalled prompt and correlates both responses", async () => {
+  const input = new PassThrough();
+  const providerEntered = Promise.withResolvers<void>();
+  const releaseProvider = Promise.withResolvers<void>();
+  const abortWritten = Promise.withResolvers<Record<string, unknown>>();
+  const promptWritten = Promise.withResolvers<Record<string, unknown>>();
+  const stalledProvider: ProviderService = {
+    streamAssistant: () =>
+      Stream.fromEffect(
+        Effect.sync(() => providerEntered.resolve()).pipe(
+          Effect.as({ _tag: "textDelta" as const, text: "Partial answer." }),
+        ),
+      ).pipe(
+        Stream.concat(
+          Stream.fromEffect(
+            Effect.promise(() => releaseProvider.promise).pipe(
+              Effect.as({ _tag: "done" as const, stopReason: "done" as const }),
+            ),
+          ),
+        ),
+      ),
+  };
+  const stalledLayer = Layer.merge(
+    FirstPartyDriverDefault().pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          JournalMemory(createMemoryJournalBacking()),
+          Layer.succeed(Provider, stalledProvider),
+          ToolRegistryLive([]),
+        ),
+      ),
+    ),
+    RpcInteractionsLive,
+  );
+  const writer: HeadWriter = {
+    write: (text) =>
+      Effect.sync(() => {
+        const frame = JSON.parse(text) as Record<string, unknown>;
+        if (frame.id === "abort-stalled") {
+          abortWritten.resolve(frame);
+        }
+        if (frame.id === "prompt-stalled") {
+          promptWritten.resolve(frame);
+        }
+      }),
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const session = yield* driver.createSession();
+      const head = yield* runRpcHead({ input, writer }).pipe(Effect.forkDaemon);
+      input.write(
+        `${JSON.stringify({
+          _tag: "prompt",
+          content: "Stall until aborted.",
+          id: "prompt-stalled",
+          sessionId: session.id,
+        })}\n`,
+      );
+      yield* Effect.promise(() => providerEntered.promise);
+      input.write(
+        `${JSON.stringify({ _tag: "abort", id: "abort-stalled", sessionId: session.id })}\n`,
+      );
+
+      const abort = yield* Effect.raceFirst(
+        Effect.promise(() => abortWritten.promise).pipe(
+          Effect.map((frame) => frame as Record<string, unknown> | undefined),
+        ),
+        Effect.sleep("200 millis").pipe(Effect.as(undefined)),
+      );
+      if (abort === undefined) {
+        releaseProvider.resolve();
+        input.end();
+        yield* Fiber.join(head);
+        return undefined;
+      }
+      const prompt = yield* Effect.promise(() => promptWritten.promise).pipe(
+        Effect.timeout("200 millis"),
+      );
+      input.end();
+      const exitCode = yield* Fiber.join(head);
+      return { abort, exitCode, prompt };
+    }).pipe(Effect.ensuring(Effect.sync(() => input.end())), Effect.provide(stalledLayer)),
+  );
+
+  expect(result).toBeDefined();
+  if (result === undefined) {
+    return;
+  }
+  expect(result.exitCode).toBe(0);
+  expect(result.abort).toMatchObject({
+    id: "abort-stalled",
+    result: { _tag: "abortTurnAborted", aborted: true },
+  });
+  expect(result.prompt).toMatchObject({
+    id: "prompt-stalled",
+    result: {
+      entries: expect.arrayContaining([
+        expect.objectContaining({
+          kind: "message",
+          payload: expect.objectContaining({ role: "assistant", stopReason: "aborted" }),
+        }),
+      ]),
+    },
+  });
+});
+
+test("rpc abort outracing a queued prompt reports that no turn was aborted", async () => {
+  const input = new PassThrough();
+  const setModelStarted = Promise.withResolvers<void>();
+  const releaseSetModel = Promise.withResolvers<void>();
+  const abortWritten = Promise.withResolvers<Record<string, unknown>>();
+  const promptWritten = Promise.withResolvers<Record<string, unknown>>();
+  const modelWritten = Promise.withResolvers<Record<string, unknown>>();
+  const writer: HeadWriter = {
+    write: (text) =>
+      Effect.sync(() => {
+        const frame = JSON.parse(text) as Record<string, unknown>;
+        if (frame.id === "abort-before-prompt") {
+          abortWritten.resolve(frame);
+        }
+        if (frame.id === "prompt-after-blocker") {
+          promptWritten.resolve(frame);
+        }
+        if (frame.id === "model-blocker") {
+          modelWritten.resolve(frame);
+        }
+      }),
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const session = yield* driver.createSession();
+      const blockedDriver = {
+        ...driver,
+        setModel: (...args: Parameters<typeof driver.setModel>) =>
+          Effect.sync(() => setModelStarted.resolve()).pipe(
+            Effect.zipRight(Effect.promise(() => releaseSetModel.promise)),
+            Effect.zipRight(driver.setModel(...args)),
+          ),
+      } satisfies typeof driver;
+      const head = yield* runRpcHead({ input, writer }).pipe(
+        Effect.provide(Layer.merge(Layer.succeed(Driver, blockedDriver), RpcInteractionsLive)),
+        Effect.fork,
+      );
+      input.write(
+        `${JSON.stringify({
+          _tag: "set-model",
+          id: "model-blocker",
+          model: "provider/blocked",
+          sessionId: session.id,
+        })}\n`,
+      );
+      yield* Effect.promise(() => setModelStarted.promise);
+      input.write(
+        `${JSON.stringify({
+          _tag: "prompt",
+          content: "This prompt must still be queued.",
+          id: "prompt-after-blocker",
+          sessionId: session.id,
+        })}\n`,
+      );
+      input.write(
+        `${JSON.stringify({
+          _tag: "abort",
+          id: "abort-before-prompt",
+          sessionId: session.id,
+        })}\n`,
+      );
+      const abort = yield* Effect.promise(() => abortWritten.promise).pipe(
+        Effect.timeout("200 millis"),
+      );
+      releaseSetModel.resolve();
+      yield* Effect.promise(() => modelWritten.promise);
+      yield* Effect.promise(() => promptWritten.promise);
+      input.end();
+      const exitCode = yield* Fiber.join(head);
+      return { abort, exitCode };
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          releaseSetModel.resolve();
+          input.end();
+        }),
+      ),
+      Effect.provide(rpcDriverLayer),
+    ),
+  );
+
+  expect(result.exitCode).toBe(0);
+  expect(result.abort).toMatchObject({
+    id: "abort-before-prompt",
+    result: { _tag: "abortTurnNotAborted", aborted: false, reason: "none" },
+  });
+});
+
+test("rpc applies set-model before a same-session prompt under adversarial scheduling", async () => {
+  const input = new PassThrough();
+  const setModelStarted = Promise.withResolvers<void>();
+  const releaseSetModel = Promise.withResolvers<void>();
+  const providerStarted = Promise.withResolvers<void>();
+  const bothResponsesWritten = Promise.withResolvers<void>();
+  const responseOrder: Array<string> = [];
+  let observedModel: string | undefined;
+  let providerStartCount = 0;
+  const observingProvider: ProviderService = {
+    streamAssistant: (_context, options) =>
+      Stream.fromEffect(
+        Effect.sync(() => {
+          providerStartCount += 1;
+          observedModel = options.model;
+          providerStarted.resolve();
+        }).pipe(Effect.as({ _tag: "done" as const, stopReason: "done" as const })),
+      ),
+  };
+  const observingLayer = Layer.merge(
+    FirstPartyDriverDefault().pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          JournalMemory(createMemoryJournalBacking()),
+          Layer.succeed(Provider, observingProvider),
+          ToolRegistryLive([]),
+        ),
+      ),
+    ),
+    RpcInteractionsLive,
+  );
+  const writer: HeadWriter = {
+    write: (text) =>
+      Effect.sync(() => {
+        const frame = JSON.parse(text) as Record<string, unknown>;
+        if (frame.id === "model-before-prompt" || frame.id === "prompt-after-model") {
+          responseOrder.push(frame.id);
+          if (responseOrder.length === 2) {
+            bothResponsesWritten.resolve();
+          }
+        }
+      }),
+  };
+
+  const exitCode = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const session = yield* driver.createSession();
+      const blockedDriver = {
+        ...driver,
+        setModel: (...args: Parameters<typeof driver.setModel>) =>
+          Effect.sync(() => setModelStarted.resolve()).pipe(
+            Effect.zipRight(Effect.promise(() => releaseSetModel.promise)),
+            Effect.zipRight(driver.setModel(...args)),
+          ),
+      } satisfies typeof driver;
+      const head = yield* runRpcHead({ input, writer }).pipe(
+        Effect.provide(Layer.merge(Layer.succeed(Driver, blockedDriver), RpcInteractionsLive)),
+        Effect.fork,
+      );
+      input.write(
+        `${JSON.stringify({
+          _tag: "set-model",
+          id: "model-before-prompt",
+          model: "provider/in-order",
+          sessionId: session.id,
+        })}\n`,
+      );
+      input.write(
+        `${JSON.stringify({
+          _tag: "prompt",
+          content: "Use the model selected by the preceding frame.",
+          id: "prompt-after-model",
+          sessionId: session.id,
+        })}\n`,
+      );
+      yield* Effect.promise(() => setModelStarted.promise);
+      yield* Effect.yieldNow();
+      yield* Effect.yieldNow();
+      expect(providerStartCount).toBe(0);
+      releaseSetModel.resolve();
+      yield* Effect.promise(() => providerStarted.promise).pipe(Effect.timeout("200 millis"));
+      yield* Effect.promise(() => bothResponsesWritten.promise).pipe(Effect.timeout("200 millis"));
+      input.end();
+      return yield* Fiber.join(head);
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          releaseSetModel.resolve();
+          input.end();
+        }),
+      ),
+      Effect.provide(observingLayer),
+    ),
+  );
+
+  expect(exitCode).toBe(0);
+  expect(observedModel).toBe("provider/in-order");
+  expect(responseOrder).toEqual(["model-before-prompt", "prompt-after-model"]);
+});
+
+test("rpc runs distinct sessions concurrently while each provider stream is stalled", async () => {
+  const input = new PassThrough();
+  const bothProvidersStarted = Promise.withResolvers<void>();
+  const releaseProviders = Promise.withResolvers<void>();
+  const promptAWritten = Promise.withResolvers<void>();
+  const promptBWritten = Promise.withResolvers<void>();
+  let providerStarts = 0;
+  const stalledProvider: ProviderService = {
+    streamAssistant: () =>
+      Stream.fromEffect(
+        Effect.sync(() => {
+          providerStarts += 1;
+          if (providerStarts === 2) {
+            bothProvidersStarted.resolve();
+          }
+        }).pipe(
+          Effect.zipRight(Effect.promise(() => releaseProviders.promise)),
+          Effect.as({ _tag: "done" as const, stopReason: "done" as const }),
+        ),
+      ),
+  };
+  const stalledLayer = Layer.merge(
+    FirstPartyDriverDefault().pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          JournalMemory(createMemoryJournalBacking()),
+          Layer.succeed(Provider, stalledProvider),
+          ToolRegistryLive([]),
+        ),
+      ),
+    ),
+    RpcInteractionsLive,
+  );
+  const writer: HeadWriter = {
+    write: (text) =>
+      Effect.sync(() => {
+        const frame = JSON.parse(text) as Record<string, unknown>;
+        if (frame.id === "prompt-concurrent-a") {
+          promptAWritten.resolve();
+        }
+        if (frame.id === "prompt-concurrent-b") {
+          promptBWritten.resolve();
+        }
+      }),
+  };
+
+  const exitCode = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const sessionA = yield* driver.createSession();
+      const sessionB = yield* driver.createSession();
+      const head = yield* runRpcHead({ input, writer }).pipe(Effect.fork);
+      input.write(
+        `${JSON.stringify({
+          _tag: "prompt",
+          content: "Stall session A.",
+          id: "prompt-concurrent-a",
+          sessionId: sessionA.id,
+        })}\n`,
+      );
+      input.write(
+        `${JSON.stringify({
+          _tag: "prompt",
+          content: "Stall session B.",
+          id: "prompt-concurrent-b",
+          sessionId: sessionB.id,
+        })}\n`,
+      );
+      yield* Effect.promise(() => bothProvidersStarted.promise).pipe(Effect.timeout("200 millis"));
+      releaseProviders.resolve();
+      yield* Effect.promise(() => promptAWritten.promise);
+      yield* Effect.promise(() => promptBWritten.promise);
+      input.end();
+      return yield* Fiber.join(head);
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          releaseProviders.resolve();
+          input.end();
+        }),
+      ),
+      Effect.provide(stalledLayer),
+    ),
+  );
+
+  expect(providerStarts).toBe(2);
+  expect(exitCode).toBe(0);
+});
+
+test("rpc soaks interleaved Session queues, slow Progress, and an oversized final frame", async () => {
+  const input = new PassThrough();
+  const providerStreamsStarted = Promise.withResolvers<void>();
+  const releaseProviders = Promise.withResolvers<void>();
+  const releaseSlowProgressWrite = Promise.withResolvers<void>();
+  const initialProgressWritten = Promise.withResolvers<void>();
+  const promptsCompleted = Promise.withResolvers<void>();
+  const slowProgressWriteStarted = Promise.withResolvers<void>();
+  const subscribeResponseWritten = Promise.withResolvers<void>();
+  const allResponsesWritten = Promise.withResolvers<void>();
+  const outputChunks: Array<string> = [];
+  const expectedResponseIds = new Set([
+    "model-soak-a",
+    "model-soak-b",
+    "model-soak-c",
+    "prompt-soak-a",
+    "prompt-soak-b",
+    "prompt-soak-c",
+    "snapshot-soak-a",
+    "snapshot-soak-b",
+    "snapshot-soak-c",
+    "subscribe-soak",
+  ]);
+  const writtenResponseIds = new Set<string>();
+  let promptCompleteCount = 0;
+  let providerStartCount = 0;
+  let slowProgressSessionId = "";
+  let slowWriteUsed = false;
+  const waitForSignal = (label: string, signal: Promise<void>) =>
+    Effect.promise(() => signal).pipe(
+      Effect.timeoutFail({
+        duration: "2 seconds",
+        onTimeout: () =>
+          new Error(`Timed out waiting for ${label}. Provider starts: ${providerStartCount}.`),
+      }),
+    );
+  const stalledProvider: ProviderService = {
+    streamAssistant: () =>
+      Stream.fromEffect(
+        Effect.sync(() => {
+          providerStartCount += 1;
+          if (providerStartCount === 3) {
+            providerStreamsStarted.resolve();
+          }
+        }).pipe(Effect.as({ _tag: "textDelta" as const, text: "soak-delta-0\n" })),
+      ).pipe(
+        Stream.concat(
+          Stream.fromIterable(
+            Array.from({ length: 95 }, (_, index) => ({
+              _tag: "textDelta" as const,
+              text: `soak-delta-${index + 1}\n`,
+            })),
+          ),
+        ),
+        Stream.concat(
+          Stream.fromEffect(
+            Effect.promise(() => releaseProviders.promise).pipe(
+              Effect.as({ _tag: "done" as const, stopReason: "done" as const }),
+            ),
+          ),
+        ),
+      ),
+  };
+  const stalledLayer = Layer.merge(
+    FirstPartyDriverDefault().pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          JournalMemory(createMemoryJournalBacking()),
+          Layer.succeed(Provider, stalledProvider),
+          ToolRegistryLive([]),
+        ),
+      ),
+    ),
+    RpcInteractionsLive,
+  );
+  const writer: HeadWriter = {
+    write: (text) =>
+      Effect.promise(async () => {
+        const frame = JSON.parse(text) as Record<string, unknown>;
+        if (
+          !slowWriteUsed &&
+          frame._tag === "assistantText" &&
+          frame.sessionId === slowProgressSessionId
+        ) {
+          slowWriteUsed = true;
+          slowProgressWriteStarted.resolve();
+          await releaseSlowProgressWrite.promise;
+        }
+        outputChunks.push(text);
+        if (frame._tag === "phaseChanged" && frame.sessionId === slowProgressSessionId) {
+          initialProgressWritten.resolve();
+        }
+        if (typeof frame.id === "string" && expectedResponseIds.has(frame.id)) {
+          writtenResponseIds.add(frame.id);
+          if (frame.id === "subscribe-soak") {
+            subscribeResponseWritten.resolve();
+          }
+          if (writtenResponseIds.size === expectedResponseIds.size) {
+            allResponsesWritten.resolve();
+          }
+        }
+      }),
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const sessionA = yield* driver.createSession();
+      const sessionB = yield* driver.createSession();
+      const sessionC = yield* driver.createSession();
+      slowProgressSessionId = sessionA.id;
+      const observedDriver = {
+        ...driver,
+        prompt: (...args: Parameters<typeof driver.prompt>) =>
+          driver.prompt(...args).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                promptCompleteCount += 1;
+                if (promptCompleteCount === 3) {
+                  promptsCompleted.resolve();
+                }
+              }),
+            ),
+          ),
+      } satisfies typeof driver;
+      const head = yield* runRpcHead({ input, writer }).pipe(
+        Effect.provide(Layer.succeed(Driver, observedDriver)),
+        Effect.fork,
+      );
+      const send = (frame: Record<string, unknown>): void => {
+        input.write(`${JSON.stringify(frame)}\n`);
+      };
+
+      send({ _tag: "subscribe-progress", id: "subscribe-soak", sessionId: sessionA.id });
+      yield* waitForSignal("the subscribe response", subscribeResponseWritten.promise);
+      yield* waitForSignal("initial Progress", initialProgressWritten.promise);
+
+      send({
+        _tag: "prompt",
+        content: "Stall Session A.",
+        id: "prompt-soak-a",
+        sessionId: sessionA.id,
+      });
+      send({
+        _tag: "prompt",
+        content: "Stall Session B.",
+        id: "prompt-soak-b",
+        sessionId: sessionB.id,
+      });
+      send({
+        _tag: "set-model",
+        id: "model-soak-a",
+        model: "provider/soak-a",
+        sessionId: sessionA.id,
+      });
+      send({
+        _tag: "prompt",
+        content: "Stall Session C.",
+        id: "prompt-soak-c",
+        sessionId: sessionC.id,
+      });
+      send({ _tag: "get-snapshot", id: "snapshot-soak-b", sessionId: sessionB.id });
+      send({
+        _tag: "set-model",
+        id: "model-soak-c",
+        model: "provider/soak-c",
+        sessionId: sessionC.id,
+      });
+      send({ _tag: "get-snapshot", id: "snapshot-soak-a", sessionId: sessionA.id });
+      send({
+        _tag: "set-model",
+        id: "model-soak-b",
+        model: "provider/soak-b",
+        sessionId: sessionB.id,
+      });
+      send({ _tag: "get-snapshot", id: "snapshot-soak-c", sessionId: sessionC.id });
+
+      yield* waitForSignal("3 Provider streams", providerStreamsStarted.promise);
+      releaseProviders.resolve();
+      yield* waitForSignal("the slow Progress write", slowProgressWriteStarted.promise);
+      yield* waitForSignal("3 completed prompts", promptsCompleted.promise);
+      releaseSlowProgressWrite.resolve();
+      yield* waitForSignal("all correlated responses", allResponsesWritten.promise);
+
+      send({
+        _tag: "prompt",
+        content: "x".repeat(MAX_RPC_FRAME_BYTES + 1),
+        id: "oversized-soak",
+        sessionId: sessionA.id,
+      });
+      const exitCode = yield* Fiber.join(head).pipe(Effect.timeout("2 seconds"));
+      return { exitCode, sessionA, sessionB, sessionC };
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          releaseProviders.resolve();
+          releaseSlowProgressWrite.resolve();
+          input.end();
+        }),
+      ),
+      Effect.provide(stalledLayer),
+    ),
+  );
+
+  const stdout = outputChunks.join("");
+  const stdoutLines = stdout.trimEnd().split("\n");
+  const frames = stdoutLines.map((line) => JSON.parse(line) as Record<string, unknown>);
+  const correlatedIds = frames.flatMap((frame) =>
+    typeof frame.id === "string" && expectedResponseIds.has(frame.id) ? [frame.id] : [],
+  );
+  const responseOrderFor = (sessionId: string): ReadonlyArray<string> =>
+    frames.flatMap((frame) => {
+      const resultFrame =
+        typeof frame.result === "object" && frame.result !== null
+          ? (frame.result as Record<string, unknown>)
+          : undefined;
+      return resultFrame?.sessionId === sessionId && typeof frame.id === "string" ? [frame.id] : [];
+    });
+
+  expect(result.exitCode).toBe(0);
+  expect(providerStartCount).toBe(3);
+  expect(slowWriteUsed).toBe(true);
+  expect(correlatedIds.sort()).toEqual([...expectedResponseIds].sort());
+  expect(responseOrderFor(result.sessionA.id)).toEqual([
+    "subscribe-soak",
+    "prompt-soak-a",
+    "model-soak-a",
+    "snapshot-soak-a",
+  ]);
+  expect(responseOrderFor(result.sessionB.id)).toEqual([
+    "prompt-soak-b",
+    "snapshot-soak-b",
+    "model-soak-b",
+  ]);
+  expect(responseOrderFor(result.sessionC.id)).toEqual([
+    "prompt-soak-c",
+    "model-soak-c",
+    "snapshot-soak-c",
+  ]);
+  expect(frames).toContainEqual(
+    expect.objectContaining({
+      _tag: "progressDropped",
+      count: expect.any(Number),
+      sessionId: result.sessionA.id,
+    }),
+  );
+  expect(frames).toContainEqual(
+    expect.objectContaining({
+      error: expect.objectContaining({
+        code: "protocol_error",
+        details: expect.objectContaining({ reason: "malformed_frame" }),
+      }),
+    }),
+  );
+  expect(outputChunks.every((chunk) => chunk.endsWith("\n"))).toBe(true);
+  expect(frames).toHaveLength(stdoutLines.length);
+}, 10_000);
+
+test("rpc EOF interrupts a waiting prompt handler without cancelling accepted kernel work", async () => {
+  const input = new PassThrough();
+  const providerEntered = Promise.withResolvers<void>();
+  const releaseProvider = Promise.withResolvers<void>();
+  const output: Array<Record<string, unknown>> = [];
+  const stalledProvider: ProviderService = {
+    streamAssistant: () =>
+      Stream.fromEffect(
+        Effect.sync(() => providerEntered.resolve()).pipe(
+          Effect.as({ _tag: "textDelta" as const, text: "Accepted before EOF." }),
+        ),
+      ).pipe(
+        Stream.concat(
+          Stream.fromEffect(
+            Effect.promise(() => releaseProvider.promise).pipe(
+              Effect.as({ _tag: "done" as const, stopReason: "done" as const }),
+            ),
+          ),
+        ),
+      ),
+  };
+  const stalledLayer = Layer.merge(
+    FirstPartyDriverDefault().pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          JournalMemory(createMemoryJournalBacking()),
+          Layer.succeed(Provider, stalledProvider),
+          ToolRegistryLive([]),
+        ),
+      ),
+    ),
+    RpcInteractionsLive,
+  );
+  const writer: HeadWriter = {
+    write: (text) =>
+      Effect.sync(() => {
+        output.push(JSON.parse(text) as Record<string, unknown>);
+      }),
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const session = yield* driver.createSession();
+      const head = yield* runRpcHead({ input, writer }).pipe(Effect.fork);
+      input.write(
+        `${JSON.stringify({
+          _tag: "prompt",
+          content: "Keep working after the connection closes.",
+          id: "prompt-before-eof",
+          sessionId: session.id,
+        })}\n`,
+      );
+      yield* Effect.promise(() => providerEntered.promise);
+      input.end();
+      const earlyExit = yield* Effect.raceFirst(
+        Fiber.join(head).pipe(Effect.map((exitCode) => exitCode as number | undefined)),
+        Effect.sleep("200 millis").pipe(Effect.as(undefined)),
+      );
+      releaseProvider.resolve();
+      const exitCode = earlyExit ?? (yield* Fiber.join(head));
+      const settledSnapshot = yield* driver.getSnapshot(session.id);
+      return { earlyExit, exitCode, settledSnapshot };
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          releaseProvider.resolve();
+          input.end();
+        }),
+      ),
+      Effect.provide(stalledLayer),
+    ),
+  );
+
+  expect(result.earlyExit).toBe(0);
+  expect(result.exitCode).toBe(0);
+  expect(result.settledSnapshot.entries).toContainEqual(
+    expect.objectContaining({
+      kind: "message",
+      payload: expect.objectContaining({ role: "assistant", stopReason: "done" }),
+    }),
+  );
+  expect(output).toEqual([]);
+});
+
+test("rpc.frame spans describe session, queue depth, and control bypass", async () => {
+  const spans: Array<{ readonly attributes: Map<string, unknown>; readonly name: string }> = [];
+  const tracer = Tracer.make({
+    context: (evaluate) => evaluate(),
+    span: (name, parent, context, links, startTime, kind, options) => {
+      const captured = {
+        attributes: new Map(Object.entries(options?.attributes ?? {})),
+        name,
+      };
+      spans.push(captured);
+      return {
+        _tag: "Span",
+        addLinks: () => undefined,
+        attribute: (key, value) => captured.attributes.set(key, value),
+        attributes: captured.attributes,
+        context,
+        end: () => undefined,
+        event: () => undefined,
+        kind,
+        links,
+        name,
+        parent,
+        sampled: true,
+        spanId: `${spans.length}`,
+        status: { _tag: "Started", startTime },
+        traceId: "rpc-captured",
+      } satisfies Tracer.Span;
+    },
+  });
+  const traceLayer = Layer.merge(Layer.setTracer(tracer), Layer.setTracerEnabled(true));
+  const capture = captureWriter();
+
+  const sessionId = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const session = yield* driver.createSession();
+      const input = Readable.from(
+        `${[
+          { _tag: "list", id: "trace-list" },
+          { _tag: "get-snapshot", id: "trace-session", sessionId: session.id },
+          { _tag: "abort", id: "trace-control", sessionId: session.id },
+        ]
+          .map((frame) => JSON.stringify(frame))
+          .join("\n")}\n`,
+      );
+      yield* runRpcHead({ input, writer: capture.writer });
+      return session.id;
+    }).pipe(Effect.provide(Layer.merge(rpcDriverLayer, traceLayer))),
+  );
+
+  const frameSpans = spans.filter((span) => span.name === "rpc.frame");
+  const listSpan = frameSpans.find((span) => span.attributes.get("command") === "list");
+  const sessionSpan = frameSpans.find((span) => span.attributes.get("command") === "get-snapshot");
+  const controlSpan = frameSpans.find((span) => span.attributes.get("command") === "abort");
+  expect(listSpan?.attributes.get("bypass")).toBe(false);
+  expect(listSpan?.attributes.get("queueDepth")).toBe(0);
+  expect(listSpan?.attributes.get("session")).toBe("sessionless");
+  expect(sessionSpan?.attributes.get("bypass")).toBe(false);
+  expect(sessionSpan?.attributes.get("queueDepth")).toBe(0);
+  expect(sessionSpan?.attributes.get("session")).toBe(sessionId);
+  expect(controlSpan?.attributes.get("bypass")).toBe(true);
+  expect(controlSpan?.attributes.get("queueDepth")).toBe(0);
+  expect(controlSpan?.attributes.get("session")).toBe("control");
+});
+
 test("rpc attach and detach normalize Snapshot attached state per connection", async () => {
   const capture = captureWriter();
 
@@ -110,6 +907,94 @@ test("rpc attach and detach normalize Snapshot attached state per connection", a
     { id: "detach-1", result: { _tag: "snapshot", attached: false } },
     { id: "snapshot-2", result: { _tag: "snapshot", attached: false } },
   ]);
+});
+
+test("rpc attach installs its interactive head before writing the response", async () => {
+  const input = new PassThrough();
+  const attachResponseReached = Promise.withResolvers<void>();
+  const releaseAttachResponse = Promise.withResolvers<void>();
+  const interactionRequestWritten = Promise.withResolvers<void>();
+  const writer: HeadWriter = {
+    write: (text) => {
+      const frame = JSON.parse(text) as Record<string, unknown>;
+      if (frame.id === "attach-before-response") {
+        return Effect.sync(() => attachResponseReached.resolve()).pipe(
+          Effect.zipRight(Effect.promise(() => releaseAttachResponse.promise)),
+        );
+      }
+      if (frame._tag === "interaction-request") {
+        interactionRequestWritten.resolve();
+      }
+      return Effect.void;
+    },
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const interactions = yield* RpcInteractions;
+      const session = yield* driver.createSession();
+      const head = yield* runRpcHead({ input, writer }).pipe(Effect.fork);
+      input.write(
+        `${JSON.stringify({
+          _tag: "attach",
+          id: "attach-before-response",
+          interactive: true,
+          sessionId: session.id,
+        })}\n`,
+      );
+      yield* Effect.promise(() => attachResponseReached.promise);
+      const pending = yield* interactions
+        .request(session.id, {
+          _tag: "interaction-request",
+          fallback: { kind: "confirm", value: false },
+          id: "interaction-after-attach-response",
+          kind: "confirm",
+          prompt: "Was the interactive head installed?",
+          timeoutMs: 20,
+        })
+        .pipe(Effect.fork);
+      const earlyResolution = yield* Effect.raceFirst(
+        Fiber.join(pending).pipe(
+          Effect.map((resolution) => resolution as typeof resolution | undefined),
+        ),
+        Effect.sleep("40 millis").pipe(Effect.as(undefined)),
+      );
+      releaseAttachResponse.resolve();
+      if (earlyResolution !== undefined) {
+        input.end();
+        yield* Fiber.join(head);
+        return { earlyResolution, resolution: earlyResolution };
+      }
+      yield* Effect.promise(() => interactionRequestWritten.promise).pipe(
+        Effect.timeout("200 millis"),
+      );
+      yield* interactions.respond({
+        _tag: "interaction-response",
+        id: "interaction-after-attach-response",
+        kind: "confirm",
+        value: true,
+      });
+      const resolution = yield* Fiber.join(pending);
+      input.end();
+      yield* Fiber.join(head);
+      return { earlyResolution, resolution };
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          releaseAttachResponse.resolve();
+          input.end();
+        }),
+      ),
+      Effect.provide(rpcDriverLayer),
+    ),
+  );
+
+  expect(result.earlyResolution).toBeUndefined();
+  expect(result.resolution).toMatchObject({
+    response: { id: "interaction-after-attach-response", value: true },
+    source: "head",
+  });
 });
 
 test("rpc invoke-command routes a Plugin Command end to end", async () => {
@@ -238,6 +1123,128 @@ test("rpc interaction request round-trips through an attached interactive Head",
   });
 });
 
+test("rpc interaction response resolves while the session turn is still running", async () => {
+  const input = new PassThrough();
+  const attached = Promise.withResolvers<void>();
+  const providerEntered = Promise.withResolvers<void>();
+  const releaseProvider = Promise.withResolvers<void>();
+  const requestWritten = Promise.withResolvers<void>();
+  const promptWritten = Promise.withResolvers<void>();
+  const stalledProvider: ProviderService = {
+    streamAssistant: () =>
+      Stream.fromEffect(
+        Effect.sync(() => providerEntered.resolve()).pipe(
+          Effect.as({ _tag: "textDelta" as const, text: "Waiting for interaction." }),
+        ),
+      ).pipe(
+        Stream.concat(
+          Stream.fromEffect(
+            Effect.promise(() => releaseProvider.promise).pipe(
+              Effect.as({ _tag: "done" as const, stopReason: "done" as const }),
+            ),
+          ),
+        ),
+      ),
+  };
+  const stalledLayer = Layer.merge(
+    FirstPartyDriverDefault().pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          JournalMemory(createMemoryJournalBacking()),
+          Layer.succeed(Provider, stalledProvider),
+          ToolRegistryLive([]),
+        ),
+      ),
+    ),
+    RpcInteractionsLive,
+  );
+  const writer: HeadWriter = {
+    write: (text) =>
+      Effect.sync(() => {
+        const frame = JSON.parse(text) as Record<string, unknown>;
+        if (frame.id === "attach-running-interaction") {
+          attached.resolve();
+        }
+        if (frame._tag === "interaction-request") {
+          requestWritten.resolve();
+        }
+        if (frame.id === "prompt-running-interaction") {
+          promptWritten.resolve();
+        }
+      }),
+  };
+
+  const resolution = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const interactions = yield* RpcInteractions;
+      const session = yield* driver.createSession();
+      const head = yield* runRpcHead({ input, writer }).pipe(Effect.fork);
+      input.write(
+        `${JSON.stringify({
+          _tag: "attach",
+          id: "attach-running-interaction",
+          interactive: true,
+          sessionId: session.id,
+        })}\n`,
+      );
+      yield* Effect.promise(() => attached.promise);
+      input.write(
+        `${JSON.stringify({
+          _tag: "prompt",
+          content: "Keep this turn active.",
+          id: "prompt-running-interaction",
+          sessionId: session.id,
+        })}\n`,
+      );
+      yield* Effect.promise(() => providerEntered.promise);
+      const pending = yield* interactions
+        .request(session.id, {
+          _tag: "interaction-request",
+          fallback: { kind: "confirm", value: false },
+          id: "interaction-during-turn",
+          kind: "confirm",
+          prompt: "Continue the active turn?",
+          timeoutMs: 5_000,
+        })
+        .pipe(Effect.fork);
+      yield* Effect.promise(() => requestWritten.promise);
+      input.write(
+        `${JSON.stringify({
+          _tag: "interaction-response",
+          id: "interaction-during-turn",
+          kind: "confirm",
+          value: true,
+        })}\n`,
+      );
+      const result = yield* Fiber.join(pending).pipe(Effect.timeout("200 millis"));
+      releaseProvider.resolve();
+      yield* Effect.promise(() => promptWritten.promise);
+      input.end();
+      yield* Fiber.join(head);
+      return result;
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          releaseProvider.resolve();
+          input.end();
+        }),
+      ),
+      Effect.provide(stalledLayer),
+    ),
+  );
+
+  expect(resolution).toEqual({
+    response: {
+      _tag: "interaction-response",
+      id: "interaction-during-turn",
+      kind: "confirm",
+      value: true,
+    },
+    source: "head",
+  });
+});
+
 test("rpc interaction timeout resolves the declared fallback and reports InteractionTimeout", async () => {
   const resolution = await Effect.runPromise(
     Effect.gen(function* () {
@@ -268,6 +1275,57 @@ test("rpc interaction timeout resolves the declared fallback and reports Interac
     source: "fallback",
   });
   expect(resolution.error).toBeInstanceOf(InteractionTimeout);
+});
+
+test("concurrent interaction responses atomically claim one pending request", async () => {
+  const outcomes = await Effect.runPromise(
+    Effect.gen(function* () {
+      const interactions = yield* RpcInteractions;
+      const requestSent = yield* Deferred.make<void>();
+      yield* interactions.attach("session-atomic-response", {
+        send: () => Deferred.succeed(requestSent, undefined).pipe(Effect.asVoid),
+      });
+      const pending = yield* interactions
+        .request("session-atomic-response", {
+          _tag: "interaction-request",
+          fallback: { kind: "confirm", value: false },
+          id: "interaction-atomic-response",
+          kind: "confirm",
+          prompt: "Choose exactly one response.",
+          timeoutMs: 5_000,
+        })
+        .pipe(Effect.forkDaemon);
+      yield* Deferred.await(requestSent);
+
+      const responses = yield* Effect.forEach(
+        [true, false],
+        (value) =>
+          Effect.yieldNow().pipe(
+            Effect.zipRight(
+              Effect.either(
+                interactions.respond({
+                  _tag: "interaction-response",
+                  id: "interaction-atomic-response",
+                  kind: "confirm",
+                  value,
+                }),
+              ),
+            ),
+            Effect.withMaxOpsBeforeYield(16),
+          ),
+        { concurrency: "unbounded" },
+      );
+      yield* Fiber.join(pending).pipe(Effect.timeout("200 millis"));
+      return responses;
+    }).pipe(Effect.provide(RpcInteractionsLive)),
+  );
+
+  const winners = outcomes.filter(Either.isRight);
+  const losers = outcomes.filter(Either.isLeft);
+  expect(winners).toHaveLength(1);
+  expect(losers).toHaveLength(1);
+  expect(losers[0]?.left).toBeInstanceOf(ProtocolError);
+  expect(losers[0]?.left.message).toContain("has no pending request");
 });
 
 test("rpc Head detach mid-interaction resolves the declared fallback", async () => {
@@ -644,6 +1702,110 @@ test("rpc operational failures are correlated per frame and isolated between Ses
   ]);
 });
 
+test("rpc queue overflow emits a bounded wire error and keeps accepted work and the connection alive", async () => {
+  const input = new PassThrough();
+  const setModelStarted = Promise.withResolvers<void>();
+  const releaseSetModel = Promise.withResolvers<void>();
+  const overflowWritten = Promise.withResolvers<void>();
+  const listWritten = Promise.withResolvers<void>();
+  const lastAcceptedWritten = Promise.withResolvers<void>();
+  const output: Array<Record<string, unknown>> = [];
+  const writer: HeadWriter = {
+    write: (text) =>
+      Effect.sync(() => {
+        const frame = JSON.parse(text) as Record<string, unknown>;
+        output.push(frame);
+        if (frame.id === "queue-overflow") {
+          overflowWritten.resolve();
+        }
+        if (frame.id === "list-after-overflow") {
+          listWritten.resolve();
+        }
+        if (frame.id === `queue-accepted-${RPC_SESSION_QUEUE_CAPACITY - 1}`) {
+          lastAcceptedWritten.resolve();
+        }
+      }),
+  };
+
+  const exitCode = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const session = yield* driver.createSession();
+      const blockedDriver = {
+        ...driver,
+        setModel: (...args: Parameters<typeof driver.setModel>) =>
+          Effect.sync(() => setModelStarted.resolve()).pipe(
+            Effect.zipRight(Effect.promise(() => releaseSetModel.promise)),
+            Effect.zipRight(driver.setModel(...args)),
+          ),
+      } satisfies typeof driver;
+      const head = yield* runRpcHead({ input, writer }).pipe(
+        Effect.provide(Layer.merge(Layer.succeed(Driver, blockedDriver), RpcInteractionsLive)),
+        Effect.fork,
+      );
+      input.write(
+        `${JSON.stringify({
+          _tag: "set-model",
+          id: "queue-blocker",
+          model: "provider/queue-blocker",
+          sessionId: session.id,
+        })}\n`,
+      );
+      yield* Effect.promise(() => setModelStarted.promise);
+      for (let index = 0; index < RPC_SESSION_QUEUE_CAPACITY; index += 1) {
+        input.write(
+          `${JSON.stringify({
+            _tag: "get-snapshot",
+            id: `queue-accepted-${index}`,
+            sessionId: session.id,
+          })}\n`,
+        );
+      }
+      input.write(
+        `${JSON.stringify({
+          _tag: "get-snapshot",
+          id: "queue-overflow",
+          sessionId: session.id,
+        })}\n`,
+      );
+      yield* Effect.promise(() => overflowWritten.promise).pipe(Effect.timeout("200 millis"));
+      input.write(`${JSON.stringify({ _tag: "list", id: "list-after-overflow" })}\n`);
+      yield* Effect.promise(() => listWritten.promise).pipe(Effect.timeout("200 millis"));
+      releaseSetModel.resolve();
+      yield* Effect.promise(() => lastAcceptedWritten.promise);
+      input.end();
+      return yield* Fiber.join(head);
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          releaseSetModel.resolve();
+          input.end();
+        }),
+      ),
+      Effect.provide(rpcDriverLayer),
+    ),
+  );
+
+  const overflow = output.find((frame) => frame.id === "queue-overflow");
+  expect(overflow).toMatchObject({
+    error: {
+      code: "protocol_error",
+      message: expect.stringContaining("session_queue"),
+    },
+    id: "queue-overflow",
+  });
+  expect((overflow?.error as { readonly message?: unknown } | undefined)?.message).toContain("64");
+  expect(output.find((frame) => frame.id === "list-after-overflow")).toMatchObject({
+    result: { _tag: "sessionList" },
+  });
+  expect(
+    output.filter((frame) =>
+      typeof frame.id === "string" ? frame.id.startsWith("queue-accepted-") : false,
+    ),
+  ).toHaveLength(RPC_SESSION_QUEUE_CAPACITY);
+  expect(exitCode).toBe(0);
+});
+
 test("rpc converts a driver defect into a correlated error and continues", async () => {
   const capture = captureWriter();
 
@@ -689,6 +1851,123 @@ test("rpc converts a driver defect into a correlated error and continues", async
       id: "after-defect",
       result: { _tag: "sessionList", sessions: expect.any(Array) },
     },
+  ]);
+});
+
+test("rpc writer failure terminates the head before another frame is read", async () => {
+  const failure = new HeadWriteError({
+    cause: new Error("rpc sink closed"),
+    message: "Head output failed: rpc sink closed",
+  });
+  const firstWriteStarted = Promise.withResolvers<void>();
+  const promptHandlerInterrupted = Promise.withResolvers<void>();
+  const promptHandlerSettled = Promise.withResolvers<void>();
+  const providerEntered = Promise.withResolvers<void>();
+  const releaseProvider = Promise.withResolvers<void>();
+  const terminalErrors: Array<Record<string, unknown>> = [];
+  const input = new PassThrough();
+  const stalledProvider: ProviderService = {
+    streamAssistant: () =>
+      Stream.fromEffect(
+        Effect.sync(() => providerEntered.resolve()).pipe(
+          Effect.zipRight(Effect.promise(() => releaseProvider.promise)),
+          Effect.as({ _tag: "done" as const, stopReason: "done" as const }),
+        ),
+      ),
+  };
+  const stalledLayer = Layer.merge(
+    FirstPartyDriverDefault().pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          JournalMemory(createMemoryJournalBacking()),
+          Layer.succeed(Provider, stalledProvider),
+          ToolRegistryLive([]),
+        ),
+      ),
+    ),
+    RpcInteractionsLive,
+  );
+  const writer: HeadWriter = {
+    write: () =>
+      Effect.sync(() => firstWriteStarted.resolve()).pipe(Effect.zipRight(Effect.fail(failure))),
+  };
+  const errorWriter: HeadWriter = {
+    write: (text) =>
+      Effect.sync(() => {
+        terminalErrors.push(JSON.parse(text) as Record<string, unknown>);
+      }),
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const session = yield* driver.createSession();
+      let listCalls = 0;
+      const countedDriver = {
+        ...driver,
+        listSessions: () => {
+          listCalls += 1;
+          return driver.listSessions();
+        },
+        prompt: (...args: Parameters<typeof driver.prompt>) =>
+          driver.prompt(...args).pipe(
+            Effect.onInterrupt(() => Effect.sync(() => promptHandlerInterrupted.resolve())),
+            Effect.ensuring(Effect.sync(() => promptHandlerSettled.resolve())),
+          ),
+      } satisfies typeof driver;
+      const head = yield* runRpcHead({ errorWriter, input, writer }).pipe(
+        Effect.provide(Layer.merge(Layer.succeed(Driver, countedDriver), RpcInteractionsLive)),
+        Effect.fork,
+      );
+      input.write(
+        `${JSON.stringify({
+          _tag: "prompt",
+          content: "Remain in flight when another handler loses its writer.",
+          id: "writer-failure-stalled-prompt",
+          sessionId: session.id,
+        })}\n`,
+      );
+      yield* Effect.promise(() => providerEntered.promise);
+      input.write(`${JSON.stringify({ _tag: "list", id: "writer-failure-first" })}\n`);
+      yield* Effect.promise(() => firstWriteStarted.promise);
+      const exitCode = yield* Effect.raceFirst(
+        Fiber.join(head).pipe(Effect.map((code) => code as number | undefined)),
+        Effect.sleep("200 millis").pipe(Effect.as(undefined)),
+      );
+      const handlerInterrupted = yield* Effect.raceFirst(
+        Effect.promise(() => promptHandlerInterrupted.promise).pipe(Effect.as(true)),
+        Effect.sleep("200 millis").pipe(Effect.as(false)),
+      );
+      const handlerSettled = yield* Effect.raceFirst(
+        Effect.promise(() => promptHandlerSettled.promise).pipe(Effect.as(true)),
+        Effect.sleep("200 millis").pipe(Effect.as(false)),
+      );
+      input.write(`${JSON.stringify({ _tag: "list", id: "writer-failure-unread" })}\n`);
+      yield* Effect.yieldNow();
+      yield* Effect.yieldNow();
+      if (exitCode === undefined) {
+        input.destroy();
+        yield* Fiber.interruptFork(head);
+      }
+      releaseProvider.resolve();
+      return { exitCode, handlerInterrupted, handlerSettled, listCalls };
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          releaseProvider.resolve();
+          input.destroy();
+        }),
+      ),
+      Effect.provide(stalledLayer),
+    ),
+  );
+
+  expect(result.exitCode).toBe(4);
+  expect(result.handlerSettled).toBe(true);
+  expect(result.handlerInterrupted).toBe(true);
+  expect(result.listCalls).toBe(1);
+  expect(terminalErrors).toMatchObject([
+    { _tag: "headError", error: { kind: "failure", tag: "HeadWriteError" } },
   ]);
 });
 
