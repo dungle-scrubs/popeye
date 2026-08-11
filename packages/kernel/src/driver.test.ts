@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { JournalError } from "@peye/journal";
@@ -725,12 +725,13 @@ test("scripted session is captured as the canonical recorded-journal fixture", a
   try {
     const result = await runCanonicalScript(JournalJsonl(directory));
     const recorded = await readFile(join(directory, `${result.sessionId}.jsonl`), "utf8");
-    const golden = await readFile(
-      new URL("../test-fixtures/canonical-driver-session.jsonl", import.meta.url),
-      "utf8",
-    );
-
     const normalized = normalizeJournalText(recorded);
+    const fixtureUrl = new URL("../test-fixtures/canonical-driver-session.jsonl", import.meta.url);
+    if (process.env.PEYE_UPDATE_RECORDED_FIXTURES === "1") {
+      await writeFile(fixtureUrl, normalized);
+    }
+    const golden = await readFile(fixtureUrl, "utf8");
+
     expect(normalized).toBe(golden);
     expect(normalizeJournalText(normalized)).toBe(normalized);
   } finally {

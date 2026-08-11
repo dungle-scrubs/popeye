@@ -284,21 +284,21 @@ Source: `implementation.md` (M23); D-017
 ### M24: Crash-simulation suite
 Source: `implementation.md` (M24); D-022
 
-- [ ] Kill-at-boundary matrix covers append ack, record write, tool start, tool end, generation swap
-- [ ] Every cell recovers to a well-formed journal
-- [ ] `replay: never` cells synthesize interrupted results; `replay: safe` cells re-execute
-- [ ] Recovery reports match expected outcomes per cell
-- [ ] Suite runs in CI from a clean checkout
+- [x] Kill-at-boundary matrix covers append ack, record write, tool start, tool end, generation swap
+- [x] Every cell recovers to a well-formed journal
+- [x] `replay: never` cells synthesize interrupted results; `replay: safe` cells re-execute
+- [x] Recovery reports match expected outcomes per cell
+- [x] Suite runs in CI from a clean checkout
 
 ### M25: Conformance publication and docs
 Source: `implementation.md` (M25)
 
-- [ ] Journal conformance suite published as a package export
-- [ ] ai-seam contract suite published as a package export
-- [ ] Recorded-journal fixture harness documented
-- [ ] Plugin-author guide covers manifest, contributions, hooks, capabilities, prohibited syntax, reload semantics
-- [ ] README opens with the problem peye solves
-- [ ] Clean-room `pnpm add` consumer runs both published suites green
+- [x] Journal conformance suite published as a package export
+- [x] ai-seam contract suite published as a package export
+- [x] Recorded-journal fixture harness documented
+- [x] Plugin-author guide covers manifest, contributions, hooks, capabilities, prohibited syntax, reload semantics
+- [x] README opens with the problem peye solves
+- [x] Clean-room `pnpm add` consumer runs both published suites green
 
 ## Deferred follow-up
 
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 166
-- Remaining: 11
-- Current cutoff blockers: 11
+- Completed: 177
+- Remaining: 0
+- Current cutoff blockers: 0
 - Accepted/deferred follow-up: 5
 - Superseded/obsolete checklist debt: 0
