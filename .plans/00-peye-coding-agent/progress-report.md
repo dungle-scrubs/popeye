@@ -217,16 +217,16 @@ Source: `implementation.md` (M17); D-015
 ### M18: Plugin loading and hot reload
 Source: `implementation.md` (M18); D-027; spikes A-002/A-003
 
-- [ ] Plugin `.ts` files load via native `import()` of absolute `file:` URLs (no loader dependency)
-- [ ] Annotations, `import type`, generics, host-package imports, and relative sibling imports all load
-- [ ] `enum`/`namespace` in a plugin fails load with a clear diagnostic naming the file and construct
-- [ ] Reload re-imports via query-string cache busting with fresh module state
-- [ ] Reload swaps the generation Ref; work started after the swap uses the new generation only
-- [ ] In-flight turns finish on the old generation (drain barrier)
-- [ ] Old generation Scope closes exactly once, after the last in-flight turn settles
-- [ ] Reload is a mailbox command (cannot interleave mid-gate)
-- [ ] Generation-swap diagnostics report old/new ids, drain duration, closed resources
-- [ ] Race stress (100+ iterations) passes in CI
+- [x] Plugin `.ts` files load via native `import()` of absolute `file:` URLs (no loader dependency)
+- [x] Annotations, `import type`, generics, host-package imports, and relative sibling imports all load
+- [x] `enum`/`namespace` in a plugin fails load with a clear diagnostic naming the file and construct
+- [x] Reload re-imports via query-string cache busting with fresh module state
+- [x] Reload swaps the generation Ref; work started after the swap uses the new generation only
+- [x] In-flight turns finish on the old generation (drain barrier)
+- [x] Old generation Scope closes exactly once, after the last in-flight turn settles
+- [x] Reload is a mailbox command (cannot interleave mid-gate)
+- [x] Generation-swap diagnostics report old/new ids, drain duration, closed resources
+- [x] Race stress (100+ iterations) passes in CI
 
 ### M19: First-party plugins (dogfood proof)
 Source: `implementation.md` (M19); D-005, D-021
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 127
-- Remaining: 50
-- Current cutoff blockers: 50
+- Completed: 137
+- Remaining: 40
+- Current cutoff blockers: 40
 - Accepted/deferred follow-up: 5
 - Superseded/obsolete checklist debt: 0
