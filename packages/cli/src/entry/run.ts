@@ -7,16 +7,9 @@
 import { readFile } from "node:fs/promises";
 
 import { JournalJsonl, SessionIdSchema } from "@pop-eye/journal";
-import { createCapabilityGrants } from "@pop-eye/plugins";
 import { Data, Effect, Layer, Logger, Schema, Stream } from "effect";
 
-import type {
-  AssistantItem,
-  Driver,
-  ProviderService,
-  RegisteredTool,
-  SessionToolView,
-} from "../compose.js";
+import type { AssistantItem, Driver, ProviderService } from "../compose.js";
 import {
   AssistantStopReasonSchema,
   GenerationDriverDefault,
@@ -29,15 +22,9 @@ import { runJsonHead } from "../heads/json.js";
 import { runPrintHead } from "../heads/print.js";
 import type { RpcInteractions } from "../heads/rpc.js";
 import { RpcInteractionsLive, runRpcHead } from "../heads/rpc.js";
-import type {
-  HeadExitCode,
-  HeadWriteError,
-  HeadWriter,
-  SnapshotAuditFields,
-} from "../heads/shared.js";
+import type { HeadExitCode, HeadWriteError, HeadWriter } from "../heads/shared.js";
 import { errorMessage, makeWritableHeadWriter, makeWritableLogfmtLogger } from "../heads/shared.js";
-import { composePluginRuntime } from "../plugins/pipeline.js";
-import { adaptTools, generationCapabilityUnion } from "../tools/adapter.js";
+import { makeCliRuntime } from "../plugins/runtime.js";
 import type { CliRunConfig } from "./config.js";
 import type { CliIo } from "./execute.js";
 
@@ -168,7 +155,7 @@ const dispatch = (
       config.fakeProviderScript === undefined
         ? undefined
         : yield* loadFakeProvider(config.fakeProviderScript);
-    const pluginGeneration = yield* composePluginRuntime({
+    const cliRuntime = yield* makeCliRuntime({
       noProjectPlugins: config.noProjectPlugins,
       pluginPaths: config.pluginPaths,
       projectPath: process.cwd(),
@@ -183,46 +170,21 @@ const dispatch = (
       ),
     );
     return yield* Effect.gen(function* () {
-      // Grants are per-process (D-006); the sentinel id keeps any future debug dump unambiguous.
-      const grantSessionId = SessionIdSchema.make("capability-grants");
-      const grants = createCapabilityGrants(
-        grantSessionId,
-        generationCapabilityUnion(pluginGeneration),
-      );
-      const snapshotAudit = {
-        capabilityGrants: grants.capabilities,
-        loadedGeneration: {
-          id: pluginGeneration.id,
-          plugins: pluginGeneration.plugins.map((plugin) => plugin.name),
-        },
-      } satisfies SnapshotAuditFields;
-      // M3: CLI provides view(sessionId) resolving against current generation at call time.
-      // Startup still has one generation; view is session-keyed but grants are still the per-process union.
-      // No static tool array remains; startup toolCount reads the startup view.
-      const adaptedToolsForView = yield* adaptTools(pluginGeneration, grants).pipe(
+      const snapshotAudit = yield* cliRuntime.snapshotAudit.pipe(
         Effect.mapError((cause) =>
           runError(
             "composition_failed",
-            `Could not adapt Plugin Tools (composition_failed): ${errorMessage(cause)}`,
+            `Could not compose snapshot audit (composition_failed): ${errorMessage(cause)}`,
             cause,
           ),
         ),
       );
-      const toolMap = new Map(
-        adaptedToolsForView.map((tool) => [tool.name, tool as unknown as RegisteredTool]),
-      );
-      const startupView: SessionToolView = {
-        get: (name: string) => toolMap.get(name),
-        list: () => adaptedToolsForView as unknown as ReadonlyArray<RegisteredTool>,
-      };
-      const toolRegistryService = {
-        view: () => Effect.succeed(startupView),
-        get: startupView.get,
-        list: startupView.list,
-      } satisfies import("../compose.js").ToolRegistryService;
-      const tools = Layer.succeed(ToolRegistry, toolRegistryService);
+      const tools = Layer.succeed(ToolRegistry, cliRuntime.toolRegistry);
+      const startupToolCount = yield* cliRuntime.toolRegistry
+        .view(SessionIdSchema.make("startup-toolcount"))
+        .pipe(Effect.map((view) => view.list().length));
       yield* errorWriter
-        .write(startupLine(config, startupView.list().length))
+        .write(startupLine(config, startupToolCount))
         .pipe(
           Effect.mapError((cause) =>
             runError("composition_failed", `Could not write CLI stderr: ${cause.message}`, cause),
@@ -238,7 +200,8 @@ const dispatch = (
             }).pipe(Layer.provide(tools))
           : Layer.succeed(Provider, provider);
       const dependencies = Layer.mergeAll(JournalJsonl(config.sessionDir), providerLayer, tools);
-      const driver = GenerationDriverDefault(pluginGeneration).pipe(Layer.provide(dependencies));
+      const currentGen = yield* cliRuntime.currentGeneration;
+      const driver = GenerationDriverDefault(currentGen).pipe(Layer.provide(dependencies));
       const runtime = Layer.merge(driver, RpcInteractionsLive);
       let head: Effect.Effect<HeadExitCode, CliRunError | HeadWriteError, Driver | RpcInteractions>;
       if (config.mode === "rpc") {
@@ -282,7 +245,7 @@ const dispatch = (
               ),
         ),
       );
-    }).pipe(Effect.ensuring(pluginGeneration.close));
+    }).pipe(Effect.ensuring(cliRuntime.close));
   });
 
 export const run = (config: CliRunConfig, io: CliIo): Effect.Effect<HeadExitCode, CliRunError> => {

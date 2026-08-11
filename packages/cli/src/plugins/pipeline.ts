@@ -1,8 +1,8 @@
 /**
- * Owns CLI Plugin discovery-config construction and loadGeneration composition, including the
- * Trust constant, memory store, diagnostic sinks, displacement guard, and fail-closed mapping.
- * It exists so run.ts stays an I/O boundary and the pipeline remains testable without a process.
- * Tool adaptation remains a separate module so discovery and kernel naming policy do not mix.
+ * Owns CLI Plugin discovery-config construction and loadGeneration helpers (discovery, guard).
+ * It exists so the runtime's ONE recomposition function can be tested without a process and so run.ts stays an I/O boundary.
+ * The composition root is runtime.ts over makePluginRuntime; this module is its discovery/guard helper, not the runtime.
+ * Not responsible for Tool adaptation (adapter owns that) or generation lifetime (runtime owns that).
  */
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

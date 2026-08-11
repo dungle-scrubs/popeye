@@ -55,15 +55,17 @@ export type {
 export {
   AssistantStopReasonSchema,
   Driver,
+  InvokeCommandError,
+  PluginHost,
   defineTool,
   PiAiProviderLive,
-  PluginHost,
   Provider,
   ProviderError,
   ToolError,
   ToolRegistry,
   ToolRegistryLive,
 };
+export type { PluginHostService, PluginCommandContext, PluginCompactionGateRequest, PluginCompactionGateResult };
 
 export const inProcessKernelPackage = kernelPackage;
 
