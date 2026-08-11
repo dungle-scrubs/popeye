@@ -5,8 +5,71 @@
 export const protocolPackage = "@peye/protocol";
 
 export {
+  COMMAND_TAGS,
+  type Command,
+  CommandSchema,
+  ThinkingLevelSchema,
+} from "./commands.js";
+export {
+  decodeCommand,
+  decodeInteractionRequest,
+  decodeInteractionResponse,
+  decodeProgress,
+  decodeResponse,
+  decodeSnapshot,
+} from "./decoding.js";
+export {
   InteractionTimeout,
   ProtocolError,
   type ProtocolErrorReason,
   StaleRevision,
 } from "./errors.js";
+export {
+  ConfirmFallbackSchema,
+  InputFallbackSchema,
+  InteractionFallbackSchema,
+  type InteractionRequest,
+  InteractionRequestSchema,
+  type InteractionResponse,
+  InteractionResponseSchema,
+  SelectFallbackSchema,
+  SelectOptionSchema,
+} from "./interactions.js";
+export {
+  type Progress,
+  ProgressSchema,
+  StopReasonSchema,
+} from "./progress.js";
+export {
+  type AbortTurnResult,
+  AbortTurnResultSchema,
+  type CompactionResult,
+  CompactionResultSchema,
+  type InvokeCommandResult,
+  InvokeCommandResultSchema,
+  ProgressSubscriptionResultSchema,
+  type RecoveryReport,
+  RecoveryReportSchema,
+  type Response,
+  ResponseResultSchema,
+  ResponseSchema,
+  type ResumedSessionInfo,
+  ResumedSessionInfoSchema,
+  type SessionInfo,
+  SessionInfoSchema,
+  type SessionSummary,
+  SessionSummarySchema,
+  type TurnResult,
+  TurnResultSchema,
+  type WireError,
+  WireErrorCodeSchema,
+  WireErrorSchema,
+} from "./results.js";
+export {
+  CapabilityNameSchema,
+  EntryRangeSchema,
+  LoadedGenerationSchema,
+  type Snapshot,
+  SnapshotSchema,
+  TurnPhaseSchema,
+} from "./snapshot.js";

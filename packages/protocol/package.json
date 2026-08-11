@@ -12,6 +12,12 @@
       "default": "./dist/index.js"
     }
   },
+  "imports": {
+    "#journal": "@peye/journal"
+  },
+  "dependencies": {
+    "@peye/journal": "workspace:*"
+  },
   "peerDependencies": {
     "effect": "^3.22.1"
   },
