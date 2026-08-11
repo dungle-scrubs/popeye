@@ -12,12 +12,12 @@
 ### M1: Flag and config surface
 Source: `implementation.md` (M1); D-013, D-014
 
-- [ ] `--plugin <path>` repeatable flag parses into an ordered list; absent means empty
-- [ ] A `--plugin` path resolving inside the project tree is classified project-local
-- [ ] `--no-project-plugins` flag parses
-- [ ] `--help` documents both new flags
-- [ ] User-global plugin directory resolves to `~/.peye/plugins` (test override via `PEYE_USER_PLUGIN_DIR`, undocumented surface)
-- [ ] No trust-related flag exists; an attempted `--trust` is rejected as unknown
+- [x] `--plugin <path>` repeatable flag parses into an ordered list; absent means empty
+- [x] A `--plugin` path resolving inside the project tree is classified project-local
+- [x] `--no-project-plugins` flag parses
+- [x] `--help` documents both new flags
+- [x] User-global plugin directory resolves to `~/.peye/plugins` (test override via `PEYE_USER_PLUGIN_DIR`, undocumented surface)
+- [x] No trust-related flag exists; an attempted `--trust` is rejected as unknown
 
 ### M2: Generation composition
 Source: `implementation.md` (M2); D-002, D-008, D-010, D-011, D-014
@@ -110,8 +110,8 @@ Source: `implementation.md` (Deferred follow-up); D-006, D-010
 
 ## Summary
 - Total features: 50
-- Completed: 0
-- Remaining: 50
-- Current cutoff blockers: 50
+- Completed: 6
+- Remaining: 44
+- Current cutoff blockers: 44
 - Accepted/deferred follow-up: 4
 - Superseded/obsolete checklist debt: 0
