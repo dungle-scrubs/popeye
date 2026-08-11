@@ -32,6 +32,7 @@ import type {
   HookPointTypeMap,
 } from "./hook-points.js";
 import { ContributionRegistry, HookContributionKind } from "./registry.js";
+import type { PluginSourceScope } from "./sources.js";
 
 type RegisteredHook = RegisteredContribution<
   "hook",
@@ -641,6 +642,7 @@ export interface HookEmitterService {
     point: TPoint,
     input: HookPointInput<TPoint>,
     grants: CapabilityGrants,
+    options?: { readonly pluginScope?: PluginSourceScope },
   ) => Effect.Effect<HookPointResult<TPoint>, HookEmitError<TPoint>>;
   readonly registerHookPoint: (
     definition: HookPointDefinition,
@@ -710,6 +712,7 @@ const makeHookEmitter = (options: HookEmitterOptions) =>
       point: TPoint,
       input: HookPointInput<TPoint>,
       grants: CapabilityGrants,
+      emitOptions?: { readonly pluginScope?: PluginSourceScope },
     ) => {
       const traceState = makeHookTraceState();
       return traceHook(
@@ -718,7 +721,7 @@ const makeHookEmitter = (options: HookEmitterOptions) =>
           const allContributions = yield* registry.listAll(HookContributionKind);
           yield* sweepTapWorkers(allContributions);
           const contributions = hooksAtPoint(
-            yield* registry.list(HookContributionKind, grants),
+            yield* registry.list(HookContributionKind, grants, emitOptions),
             definition,
           );
           traceState.contributionCount = contributions.length;

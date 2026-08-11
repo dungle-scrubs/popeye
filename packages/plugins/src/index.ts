@@ -42,12 +42,14 @@ export {
 } from "./contribution.js";
 export {
   classifyResolvedPluginSource,
+  type PluginDigestLimits,
   type PluginDiscoveryConfig,
   PluginDiscoveryError,
   type PluginSource,
   type PluginSourceOrigin,
   type PluginSourceScope,
   phase1Sources,
+  phase2ExecutionSources,
   phase2Sources,
   type TrustDecisionForDiscovery,
 } from "./discovery.js";
@@ -177,10 +179,12 @@ export {
   checkTrust,
   type PluginFileDigest,
   recordDecision,
+  revokeTrust,
   type TrustChangeSummary,
   type TrustCheckOptions,
   type TrustCheckResult,
   type TrustDecision,
+  type TrustDecisionProvenance,
   type TrustDiagnostic,
   type TrustRecord,
   TrustStore,
@@ -191,3 +195,11 @@ export {
   TrustStoreMemory,
   type TrustStoreService,
 } from "./trust.js";
+export {
+  DEFAULT_PLUGIN_DIGEST_MAX_FILE_COUNT,
+  DEFAULT_PLUGIN_DIGEST_MAX_TOTAL_BYTES,
+  type PluginDigestDiagnostic,
+  PluginDigestError,
+  type PluginDigestViolation,
+  type ProjectPluginDigest,
+} from "./trust-digest.js";

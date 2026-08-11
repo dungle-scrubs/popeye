@@ -19,6 +19,7 @@ import { contributionKey } from "./contribution.js";
 import { ContributionRegistryError, type PluginLoadError } from "./errors.js";
 import { HOOK_POINTS, type HookPointDefinition } from "./hook-points.js";
 import { ContributionNameSchema, decodePluginManifest, type PluginManifest } from "./manifest.js";
+import type { PluginSourceScope } from "./sources.js";
 
 export interface ContributionConflictDiagnostic {
   readonly existingPlugin: string;
@@ -150,6 +151,7 @@ interface StoredEntry {
   readonly name: string;
   readonly payload: unknown;
   readonly pluginName: string;
+  readonly pluginScope: PluginSourceScope;
   readonly priority: number;
   readonly registrationRevision: number;
   readonly requiredCapabilities: ReadonlyArray<string>;
@@ -176,6 +178,7 @@ export interface ContributionRegistryService {
   readonly list: <TKind extends string, TPayload, TEncoded>(
     kind: ContributionKind<TKind, TPayload, TEncoded>,
     grants: CapabilityGrants,
+    options?: { readonly pluginScope?: PluginSourceScope },
   ) => Effect.Effect<
     ReadonlyArray<RegisteredContribution<TKind, TPayload>>,
     ContributionRegistryError
@@ -203,6 +206,7 @@ export interface ContributionRegistryService {
   readonly registerPlugin: (
     manifest: PluginManifest,
     contributions: ReadonlyArray<Contribution>,
+    pluginScope?: PluginSourceScope,
   ) => Effect.Effect<void, ContributionRegistryError | PluginLoadError>;
   readonly removePlugin: (name: string) => Effect.Effect<boolean, ContributionRegistryError>;
   readonly revision: Effect.Effect<number>;
@@ -300,6 +304,7 @@ const stagePlugin = (
   state: RegistryState,
   manifestInput: PluginManifest,
   contributions: ReadonlyArray<Contribution>,
+  pluginScope: PluginSourceScope,
   diagnosticSink: (diagnostic: RegistryDiagnostic) => Effect.Effect<void>,
 ): Effect.Effect<StagedPlugin, ContributionRegistryError | PluginLoadError> =>
   Effect.gen(function* () {
@@ -387,6 +392,7 @@ const stagePlugin = (
         name,
         payload: decoded.value,
         pluginName: manifest.name,
+        pluginScope,
         priority: contribution.priority ?? 0,
         registrationRevision,
         requiredCapabilities: [
@@ -539,12 +545,15 @@ const makeContributionRegistry = (
         ),
       );
 
-    const list: ContributionRegistryService["list"] = (definition, grants) =>
+    const list: ContributionRegistryService["list"] = (definition, grants, options) =>
       Effect.gen(function* () {
         const state = yield* Ref.get(stateRef);
         yield* checkedKind(definition, state);
         const available = yield* Effect.forEach(
-          state.entries.get(definition.kind)?.values() ?? [],
+          [...(state.entries.get(definition.kind)?.values() ?? [])].filter(
+            (entry) =>
+              options?.pluginScope === undefined || entry.pluginScope === options.pluginScope,
+          ),
           (entry) => availableEntry(entry, grants),
         );
         return yield* Effect.forEach(
@@ -638,6 +647,7 @@ const makeContributionRegistry = (
     const registerPlugin: ContributionRegistryService["registerPlugin"] = (
       manifest,
       contributions,
+      pluginScope = "project-local",
     ) =>
       mutationMutex.withPermits(1)(
         Effect.gen(function* () {
@@ -645,6 +655,7 @@ const makeContributionRegistry = (
             yield* Ref.get(stateRef),
             manifest,
             contributions,
+            pluginScope,
             diagnosticSink,
           );
           yield* Effect.forEach(staged.diagnostics, diagnosticSink, { discard: true });

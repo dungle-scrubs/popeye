@@ -61,6 +61,7 @@ test("exports the M17 Trust and discovery interfaces from the public Plugin seam
       "phase1Sources",
       "phase2Sources",
       "recordDecision",
+      "revokeTrust",
     ]),
   );
 });

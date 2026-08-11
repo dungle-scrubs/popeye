@@ -7,26 +7,31 @@
  * it does not import or execute those bytes. Prompt presentation belongs to a Head. This module
  * returns structured prompt results instead.
  */
-import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
-import { dirname, join, posix } from "node:path";
+import { randomUUID } from "node:crypto";
+import { chmod, mkdir, open, readFile, realpath, rename, unlink } from "node:fs/promises";
+import { dirname } from "node:path";
 
 import { Clock, Context, Data, Effect, Layer, Option, Ref, Schema } from "effect";
 
 import type { CapabilityGrants } from "./capability.js";
-import { classifyResolvedPluginSource } from "./discovery.js";
+import type { PluginDiscoveryConfig } from "./discovery.js";
 import type { HookEmitError, HookEmitterService } from "./emitter.js";
 import type { TrustHookInput } from "./hook-points.js";
+import {
+  computeProjectPluginDigest,
+  type PluginDigestDiagnostic,
+  type PluginDigestError,
+  type PluginFileDigest,
+} from "./trust-digest.js";
+
+export type { PluginFileDigest } from "./trust-digest.js";
 
 export type TrustDecision = "trusted" | "untrusted";
-
-export interface PluginFileDigest {
-  readonly digest: string;
-  readonly path: string;
-}
+export type TrustDecisionProvenance = "hook" | "revoked" | "user";
 
 export interface TrustRecord {
   readonly decidedAt: string;
+  readonly decidedBy: TrustDecisionProvenance;
   readonly decision: TrustDecision;
   readonly digest: string;
   readonly files: ReadonlyArray<PluginFileDigest>;
@@ -44,10 +49,15 @@ export type TrustCheckResult =
   | {
       readonly changeSummary: TrustChangeSummary;
       readonly currentDigest: string;
+      readonly decidedBy: TrustDecisionProvenance;
       readonly kind: "reprompt_required";
     }
-  | { readonly kind: "trusted" }
-  | { readonly kind: "untrusted" };
+  | {
+      readonly decidedBy: TrustDecisionProvenance;
+      readonly kind: "trusted";
+      readonly trustedDigest: string;
+    }
+  | { readonly decidedBy: TrustDecisionProvenance; readonly kind: "untrusted" };
 
 export type TrustStoreErrorReason =
   | "digest_mismatch"
@@ -76,14 +86,17 @@ export interface TrustStoreLiveOptions {
   readonly path: string;
 }
 
-export interface TrustDiagnostic {
+export interface TrustDecisionDiagnostic {
   readonly changeSummary?: TrustChangeSummary;
+  readonly decidedBy?: TrustDecisionProvenance;
   readonly decision: TrustCheckResult["kind"];
   readonly digest: string;
   readonly projectPath: string;
   readonly scope: "project-local";
   readonly type: "trust_decision";
 }
+
+export type TrustDiagnostic = PluginDigestDiagnostic | TrustDecisionDiagnostic;
 
 export interface TrustCheckOptions {
   readonly diagnosticSink?: (diagnostic: TrustDiagnostic) => Effect.Effect<void>;
@@ -98,6 +111,9 @@ const PluginFileDigestSchema = Schema.Struct({
 });
 const TrustRecordSchema = Schema.Struct({
   decidedAt: Schema.String,
+  decidedBy: Schema.optionalWith(Schema.Literal("hook", "revoked", "user"), {
+    default: () => "user" as const,
+  }),
   decision: Schema.Literal("trusted", "untrusted"),
   digest: DigestSchema,
   files: Schema.Array(PluginFileDigestSchema),
@@ -115,11 +131,6 @@ const TrustStoreFileSchema = Schema.Struct({
 });
 
 type TrustStoreFile = Schema.Schema.Type<typeof TrustStoreFileSchema>;
-
-interface ProjectDigest {
-  readonly digest: string;
-  readonly files: ReadonlyArray<PluginFileDigest>;
-}
 
 const filesystemFailure = (path: string, cause: unknown): TrustStoreError =>
   new TrustStoreError({
@@ -140,76 +151,6 @@ const isMissingPath = (cause: unknown): boolean =>
 
 const compareText = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;
-
-const collectPluginFiles = (
-  ancestorDirectories: ReadonlySet<string>,
-  directory: string,
-  logicalDirectory: string,
-  projectPath: string,
-): Effect.Effect<ReadonlyArray<PluginFileDigest>, TrustStoreError> =>
-  fileEffect(directory, () => readdir(directory, { withFileTypes: true })).pipe(
-    Effect.flatMap((entries) =>
-      Effect.forEach(
-        [...entries].sort((left, right) => compareText(left.name, right.name)),
-        (entry) =>
-          Effect.gen(function* () {
-            const sourcePath = join(directory, entry.name);
-            const resolvedPath = yield* fileEffect(sourcePath, () => realpath(sourcePath));
-            if (classifyResolvedPluginSource(projectPath, resolvedPath) === "external") {
-              return [];
-            }
-            const information = yield* fileEffect(resolvedPath, () => stat(resolvedPath));
-            const logicalPath =
-              logicalDirectory === "" ? entry.name : posix.join(logicalDirectory, entry.name);
-            if (information.isFile()) {
-              const content = yield* fileEffect(resolvedPath, () => readFile(resolvedPath));
-              return [
-                {
-                  digest: createHash("sha256").update(content).digest("hex"),
-                  path: logicalPath,
-                },
-              ];
-            }
-            if (!information.isDirectory() || ancestorDirectories.has(resolvedPath)) {
-              return [];
-            }
-            return yield* collectPluginFiles(
-              new Set([...ancestorDirectories, resolvedPath]),
-              resolvedPath,
-              logicalPath,
-              projectPath,
-            );
-          }),
-      ),
-    ),
-    Effect.map((groups) => groups.flat().sort((left, right) => compareText(left.path, right.path))),
-  );
-
-const computeProjectDigest = (projectPath: string): Effect.Effect<ProjectDigest, TrustStoreError> =>
-  Effect.gen(function* () {
-    const pluginRoot = join(projectPath, ".peye", "plugins");
-    const resolvedPluginRoot = yield* fileEffect(pluginRoot, () => realpath(pluginRoot)).pipe(
-      Effect.catchIf(
-        (error) => isMissingPath(error.cause),
-        () => Effect.succeed(null),
-      ),
-    );
-    const files =
-      resolvedPluginRoot === null ||
-      classifyResolvedPluginSource(projectPath, resolvedPluginRoot) === "external"
-        ? []
-        : yield* collectPluginFiles(
-            new Set([resolvedPluginRoot]),
-            resolvedPluginRoot,
-            "",
-            projectPath,
-          );
-    const digest = createHash("sha256")
-      .update("peye-project-plugin-digest-v1\0")
-      .update(JSON.stringify(files))
-      .digest("hex");
-    return { digest, files };
-  });
 
 const summarizeChanges = (
   previousFiles: ReadonlyArray<PluginFileDigest>,
@@ -239,8 +180,9 @@ const observeTrust = (
   projectPath: string,
   result: TrustCheckResult,
 ): Effect.Effect<void> => {
-  const diagnostic: TrustDiagnostic = {
+  const diagnostic: TrustDecisionDiagnostic = {
     ...(result.kind === "reprompt_required" ? { changeSummary: result.changeSummary } : {}),
+    ...("decidedBy" in result ? { decidedBy: result.decidedBy } : {}),
     decision: result.kind,
     digest,
     projectPath,
@@ -253,6 +195,7 @@ const observeTrust = (
         ...(diagnostic.changeSummary === undefined
           ? {}
           : { changeSummary: JSON.stringify(diagnostic.changeSummary) }),
+        ...(diagnostic.decidedBy === undefined ? {} : { decidedBy: diagnostic.decidedBy }),
         decision: diagnostic.decision,
         digest: diagnostic.digest,
         projectPath: diagnostic.projectPath,
@@ -317,25 +260,98 @@ const readTrustStoreFile = (path: string): Effect.Effect<TrustStoreFile, TrustSt
     ),
   );
 
+const emptyTrustStoreFile = (): TrustStoreFile => ({
+  format: "peye_trust",
+  records: [],
+  version: 1,
+});
+
+const readRecoverableTrustStoreFile = (
+  path: string,
+): Effect.Effect<TrustStoreFile, Exclude<TrustStoreError, { readonly reason: "store_corrupt" }>> =>
+  readTrustStoreFile(path).pipe(
+    Effect.catchIf(
+      (error) => error.reason === "store_corrupt",
+      (error) => Effect.logWarning(error.message).pipe(Effect.as(emptyTrustStoreFile())),
+    ),
+  );
+
 const writeTrustStoreFile = (
   path: string,
   records: ReadonlyArray<TrustRecord>,
 ): Effect.Effect<void, TrustStoreError> => {
-  const temporaryPath = `${path}.tmp`;
+  const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
   const content = `${JSON.stringify({ format: "peye_trust", records, version: 1 })}\n`;
+  return Effect.tryPromise({
+    catch: (cause) => storeFailure(path, "store_io_failure", cause),
+    try: async () => {
+      await mkdir(dirname(path), { mode: 0o700, recursive: true });
+      await chmod(dirname(path), 0o700);
+      const handle = await open(temporaryPath, "wx", 0o600);
+      try {
+        await handle.writeFile(content);
+        await handle.sync();
+        await handle.close();
+        await rename(temporaryPath, path);
+        const directoryHandle = await open(dirname(path), "r");
+        try {
+          await directoryHandle.sync();
+        } finally {
+          await directoryHandle.close();
+        }
+      } catch (cause) {
+        await handle.close().catch(() => undefined);
+        await unlink(temporaryPath).catch(() => undefined);
+        throw cause;
+      }
+    },
+  });
+};
+
+const isLockBusy = (error: TrustStoreError): boolean =>
+  typeof error.cause === "object" &&
+  error.cause !== null &&
+  "code" in error.cause &&
+  error.cause.code === "EEXIST";
+
+const withStoreLock = <TOutput>(
+  path: string,
+  effect: Effect.Effect<TOutput, TrustStoreError>,
+): Effect.Effect<TOutput, TrustStoreError> => {
+  const lockPath = `${path}.lock`;
+  const acquire = (
+    remainingAttempts: number,
+  ): Effect.Effect<Awaited<ReturnType<typeof open>>, TrustStoreError> =>
+    Effect.tryPromise({
+      catch: (cause) => storeFailure(lockPath, "store_io_failure", cause),
+      try: () => open(lockPath, "wx", 0o600),
+    }).pipe(
+      Effect.catchIf(isLockBusy, (error) =>
+        remainingAttempts > 0
+          ? Effect.sleep("10 millis").pipe(Effect.zipRight(acquire(remainingAttempts - 1)))
+          : Effect.fail(error),
+      ),
+    );
   return Effect.gen(function* () {
     yield* Effect.tryPromise({
       catch: (cause) => storeFailure(path, "store_io_failure", cause),
-      try: () => mkdir(dirname(path), { recursive: true }),
+      try: async () => {
+        await mkdir(dirname(path), { mode: 0o700, recursive: true });
+        await chmod(dirname(path), 0o700);
+      },
     });
-    yield* Effect.tryPromise({
-      catch: (cause) => storeFailure(path, "store_io_failure", cause),
-      try: () => writeFile(temporaryPath, content, { mode: 0o600 }),
-    });
-    yield* Effect.tryPromise({
-      catch: (cause) => storeFailure(path, "store_io_failure", cause),
-      try: () => rename(temporaryPath, path),
-    });
+    return yield* Effect.acquireUseRelease(
+      acquire(500),
+      () => effect,
+      (handle) =>
+        Effect.tryPromise({
+          catch: (cause) => storeFailure(lockPath, "store_io_failure", cause),
+          try: async () => {
+            await handle.close();
+            await unlink(lockPath);
+          },
+        }).pipe(Effect.orDie),
+    );
   });
 };
 
@@ -345,7 +361,7 @@ export const TrustStoreLive = (
   Layer.effect(
     TrustStore,
     Effect.gen(function* () {
-      const loaded = yield* readTrustStoreFile(options.path);
+      const loaded = yield* readRecoverableTrustStoreFile(options.path);
       const records = yield* Ref.make(
         new Map(loaded.records.map((record) => [record.projectPath, record])),
       );
@@ -356,14 +372,21 @@ export const TrustStoreLive = (
         put: (record) =>
           writeMutex.withPermits(1)(
             Effect.gen(function* () {
-              const state = yield* Ref.get(records);
-              const next = new Map(state);
-              next.set(record.projectPath, record);
-              const sorted = [...next.values()].sort((left, right) =>
-                compareText(left.projectPath, right.projectPath),
+              yield* withStoreLock(
+                options.path,
+                Effect.gen(function* () {
+                  const latest = yield* readRecoverableTrustStoreFile(options.path);
+                  const next = new Map(
+                    latest.records.map((storedRecord) => [storedRecord.projectPath, storedRecord]),
+                  );
+                  next.set(record.projectPath, record);
+                  const sorted = [...next.values()].sort((left, right) =>
+                    compareText(left.projectPath, right.projectPath),
+                  );
+                  yield* writeTrustStoreFile(options.path, sorted);
+                  yield* Ref.set(records, next);
+                }),
               );
-              yield* writeTrustStoreFile(options.path, sorted);
-              yield* Ref.set(records, next);
             }),
           ),
       } satisfies TrustStoreService;
@@ -371,12 +394,18 @@ export const TrustStoreLive = (
   );
 
 export const checkTrust = (
-  projectPath: string,
+  config: PluginDiscoveryConfig,
   options: TrustCheckOptions = {},
-): Effect.Effect<TrustCheckResult, HookEmitError<"trust"> | TrustStoreError, TrustStore> =>
+): Effect.Effect<
+  TrustCheckResult,
+  HookEmitError<"trust"> | PluginDigestError | TrustStoreError,
+  TrustStore
+> =>
   Effect.gen(function* () {
-    const canonicalProjectPath = yield* resolvedProjectPath(projectPath);
-    const current = yield* computeProjectDigest(canonicalProjectPath);
+    const canonicalProjectPath = yield* resolvedProjectPath(config.projectPath);
+    const canonicalConfig = { ...config, projectPath: canonicalProjectPath };
+    const diagnosticSink = options.diagnosticSink ?? defaultDiagnosticSink;
+    const current = yield* computeProjectPluginDigest(canonicalConfig, diagnosticSink);
     const store = yield* TrustStore;
     const recorded = yield* store.get(canonicalProjectPath);
     let result: TrustCheckResult;
@@ -386,13 +415,18 @@ export const checkTrust = (
       result = {
         changeSummary: summarizeChanges(recorded.value.files, current.files),
         currentDigest: current.digest,
+        decidedBy: recorded.value.decidedBy,
         kind: "reprompt_required",
       };
     } else {
       result =
         recorded.value.decision === "trusted"
-          ? ({ kind: "trusted" } as const)
-          : ({ kind: "untrusted" } as const);
+          ? ({
+              decidedBy: recorded.value.decidedBy,
+              kind: "trusted",
+              trustedDigest: current.digest,
+            } as const)
+          : ({ decidedBy: recorded.value.decidedBy, kind: "untrusted" } as const);
     }
     if (
       (result.kind === "prompt_required" || result.kind === "reprompt_required") &&
@@ -405,38 +439,59 @@ export const checkTrust = (
         kind: result.kind,
         projectPath: canonicalProjectPath,
       };
-      const hookOutcome = yield* options.hookEmitter.emit("trust", hookInput, options.grants).pipe(
-        Effect.map((decision) => ({ decision, kind: "completed" as const })),
-        Effect.catchTag("GateRejected", () => Effect.succeed({ kind: "blocked" as const })),
-      );
-      if (hookOutcome.kind === "blocked") {
-        result = { kind: "untrusted" };
-      } else if (hookOutcome.decision !== undefined) {
-        yield* recordDecision(
-          canonicalProjectPath,
-          hookOutcome.decision.decision,
-          result.currentDigest,
+      const hookOutcome = yield* options.hookEmitter
+        .emit("trust", hookInput, options.grants, { pluginScope: "external" })
+        .pipe(
+          Effect.map((decision) => ({ decision, kind: "completed" as const })),
+          Effect.catchTag("GateRejected", () => Effect.succeed({ kind: "blocked" as const })),
         );
-        result = { kind: hookOutcome.decision.decision };
+      if (hookOutcome.kind === "blocked") {
+        result = { decidedBy: "hook", kind: "untrusted" };
+      } else if (hookOutcome.decision !== undefined) {
+        const decisionDigest = result.currentDigest;
+        yield* recordDecision(
+          canonicalConfig,
+          hookOutcome.decision.decision,
+          decisionDigest,
+          "hook",
+        ).pipe(
+          Effect.catchIf(
+            (error) => error.reason === "digest_mismatch",
+            (error) =>
+              Effect.gen(function* () {
+                const changed = yield* computeProjectPluginDigest(canonicalConfig, diagnosticSink);
+                yield* observeTrust(diagnosticSink, changed.digest, canonicalProjectPath, {
+                  changeSummary: summarizeChanges(current.files, changed.files),
+                  currentDigest: changed.digest,
+                  decidedBy: "hook",
+                  kind: "reprompt_required",
+                });
+                return yield* error;
+              }),
+          ),
+        );
+        result =
+          hookOutcome.decision.decision === "trusted"
+            ? { decidedBy: "hook", kind: "trusted", trustedDigest: decisionDigest }
+            : { decidedBy: "hook", kind: "untrusted" };
       }
     }
-    yield* observeTrust(
-      options.diagnosticSink ?? defaultDiagnosticSink,
-      current.digest,
-      canonicalProjectPath,
-      result,
-    );
+    yield* observeTrust(diagnosticSink, current.digest, canonicalProjectPath, result);
     return result;
-  }).pipe(Effect.withSpan("plugins.trust", { attributes: { projectPath } }));
+  }).pipe(Effect.withSpan("plugins.trust", { attributes: { projectPath: config.projectPath } }));
 
 export const recordDecision = (
-  projectPath: string,
+  config: PluginDiscoveryConfig,
   decision: TrustDecision,
   digest: string,
-): Effect.Effect<TrustRecord, TrustStoreError, TrustStore> =>
+  decidedBy: Exclude<TrustDecisionProvenance, "revoked">,
+): Effect.Effect<TrustRecord, PluginDigestError | TrustStoreError, TrustStore> =>
   Effect.gen(function* () {
-    const canonicalProjectPath = yield* resolvedProjectPath(projectPath);
-    const current = yield* computeProjectDigest(canonicalProjectPath);
+    const canonicalProjectPath = yield* resolvedProjectPath(config.projectPath);
+    const current = yield* computeProjectPluginDigest({
+      ...config,
+      projectPath: canonicalProjectPath,
+    });
     if (current.digest !== digest) {
       return yield* new TrustStoreError({
         cause: null,
@@ -448,6 +503,7 @@ export const recordDecision = (
     const decidedAt = new Date(yield* Clock.currentTimeMillis).toISOString();
     const record: TrustRecord = {
       decidedAt,
+      decidedBy,
       decision,
       digest,
       files: current.files,
@@ -456,4 +512,23 @@ export const recordDecision = (
     const store = yield* TrustStore;
     yield* store.put(record);
     return record;
+  });
+
+export const revokeTrust = (
+  projectPath: string,
+): Effect.Effect<void, TrustStoreError, TrustStore> =>
+  Effect.gen(function* () {
+    const canonicalProjectPath = yield* resolvedProjectPath(projectPath);
+    const store = yield* TrustStore;
+    const recorded = yield* store.get(canonicalProjectPath);
+    if (Option.isNone(recorded)) {
+      return;
+    }
+    const decidedAt = new Date(yield* Clock.currentTimeMillis).toISOString();
+    yield* store.put({
+      ...recorded.value,
+      decidedAt,
+      decidedBy: "revoked",
+      decision: "untrusted",
+    });
   });
