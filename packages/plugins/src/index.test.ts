@@ -46,3 +46,21 @@ test("exports the M16 Hook emitter and point table from the public Plugin seam",
     ]),
   );
 });
+
+test("exports the M17 Trust and discovery interfaces from the public Plugin seam", () => {
+  expect(Object.keys(plugins)).toEqual(
+    expect.arrayContaining([
+      "PluginDiscoveryError",
+      "TrustChangeSummarySchema",
+      "TrustStore",
+      "TrustStoreError",
+      "TrustStoreLive",
+      "TrustStoreMemory",
+      "checkTrust",
+      "classifyResolvedPluginSource",
+      "phase1Sources",
+      "phase2Sources",
+      "recordDecision",
+    ]),
+  );
+});

@@ -41,6 +41,17 @@ export {
   type ToolReplay,
 } from "./contribution.js";
 export {
+  classifyResolvedPluginSource,
+  type PluginDiscoveryConfig,
+  PluginDiscoveryError,
+  type PluginSource,
+  type PluginSourceOrigin,
+  type PluginSourceScope,
+  phase1Sources,
+  phase2Sources,
+  type TrustDecisionForDiscovery,
+} from "./discovery.js";
+export {
   DEFAULT_GATE_TIMEOUT_MILLIS,
   DEFAULT_HOOK_TIMEOUT_MILLIS,
   DEFAULT_TAP_QUEUE_CAPACITY,
@@ -124,6 +135,7 @@ export {
   ToolResultHookInputSchema,
   type ToolResultHookOutput,
   ToolResultHookOutputSchema,
+  TrustChangeSummarySchema,
   type TrustHookInput,
   TrustHookInputSchema,
   type TrustHookOutput,
@@ -161,3 +173,21 @@ export {
   type RegistryDiagnostic,
   ToolContributionKind,
 } from "./registry.js";
+export {
+  checkTrust,
+  type PluginFileDigest,
+  recordDecision,
+  type TrustChangeSummary,
+  type TrustCheckOptions,
+  type TrustCheckResult,
+  type TrustDecision,
+  type TrustDiagnostic,
+  type TrustRecord,
+  TrustStore,
+  TrustStoreError,
+  type TrustStoreErrorReason,
+  TrustStoreLive,
+  type TrustStoreLiveOptions,
+  TrustStoreMemory,
+  type TrustStoreService,
+} from "./trust.js";

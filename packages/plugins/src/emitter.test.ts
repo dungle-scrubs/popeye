@@ -240,7 +240,11 @@ test("all twelve typed Hook points execute real contributions through one emitte
         transform: yield* emitter.emit("input-transform", { text: "hello" }, grants()),
         trust: yield* emitter.emit(
           "trust",
-          { path: "/tmp/plugin", plugin: "all-points-plugin" },
+          {
+            currentDigest: "digest",
+            kind: "prompt_required",
+            projectPath: "/tmp/project",
+          },
           grants(),
         ),
         provider: yield* emitter.emit(

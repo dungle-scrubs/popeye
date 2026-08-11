@@ -55,13 +55,19 @@ export const CompactionGateHookInputSchema = Schema.Struct({
   tokenCount: Schema.Number,
 });
 
+export const TrustChangeSummarySchema = Schema.Struct({
+  added: Schema.Array(Schema.String),
+  modified: Schema.Array(Schema.String),
+  removed: Schema.Array(Schema.String),
+});
 export const TrustResultSchema = Schema.Struct({
-  decision: Schema.Literal("allow", "deny"),
-  plugin: Schema.String,
+  decision: Schema.Literal("trusted", "untrusted"),
 });
 export const TrustHookInputSchema = Schema.Struct({
-  path: Schema.String,
-  plugin: Schema.String,
+  changeSummary: Schema.optional(TrustChangeSummarySchema),
+  currentDigest: Schema.String,
+  kind: Schema.Literal("prompt_required", "reprompt_required"),
+  projectPath: Schema.String,
 });
 
 const gateDecisionSchema = <TValue, TEncoded>(value: Schema.Schema<TValue, TEncoded>) =>
