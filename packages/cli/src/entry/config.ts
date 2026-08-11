@@ -10,6 +10,7 @@ import type { CliMode, ParsedArgs } from "./args.js";
 
 export type CliConfigErrorReason =
   | "invalid_base_url"
+  | "invalid_model"
   | "missing_api_key"
   | "missing_base_url"
   | "missing_fake_provider_script"
@@ -75,11 +76,23 @@ export const resolveConfig = (
     if (parsed.action !== "run") {
       return parsed;
     }
-    const model = configured(parsed.model) ?? configured(env.PEYE_MODEL);
+    if (parsed.model === "") {
+      return yield* configError(
+        "invalid_model",
+        'Invalid --model value "". Provide a non-empty model.',
+      );
+    }
+    const model = parsed.model ?? configured(env.PEYE_MODEL);
     if (model === undefined) {
       return yield* configError("missing_model", `Missing model. ${MODEL_SETUP}`);
     }
-    const baseUrl = configured(parsed.baseUrl) ?? configured(env.PEYE_BASE_URL);
+    if (parsed.baseUrl === "") {
+      return yield* configError(
+        "invalid_base_url",
+        'Invalid --base-url value "". Provide a non-empty URL.',
+      );
+    }
+    const baseUrl = parsed.baseUrl ?? configured(env.PEYE_BASE_URL);
     if (baseUrl === undefined) {
       return yield* configError("missing_base_url", `Missing endpoint. ${BASE_URL_SETUP}`);
     }

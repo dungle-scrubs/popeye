@@ -50,7 +50,18 @@ test("piped stdin supplies the prompt when -p has no positional prompt", async (
   const parsed = await parseRunArgs(["-p"]);
   const withPrompt = await Effect.runPromise(withStdinPrompt(parsed, "Prompt from stdin.\n"));
 
-  expect(withPrompt.prompt).toBe("Prompt from stdin.\n");
+  expect(withPrompt.prompt).toBe("Prompt from stdin.");
+});
+
+test("empty piped stdin is a typed no-prompt error", async () => {
+  const parsed = await parseRunArgs(["-p"]);
+  const error = await Effect.runPromise(Effect.flip(withStdinPrompt(parsed, " \n\t")));
+
+  expect(error).toMatchObject({
+    _tag: "CliArgsError",
+    message: expect.stringContaining("Use peye -p"),
+    reason: "invalid_arguments",
+  });
 });
 
 test("provider and Session flags are parsed", async () => {

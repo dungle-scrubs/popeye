@@ -41,6 +41,15 @@ Options:
   --help                 Print this usage text.
 
 API keys are read only from PEYE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.
+
+Exit status:
+  0  Turn completed or truncated.
+  1  Provider-settled error.
+  2  Invalid arguments, missing configuration, or an aborted turn.
+  3  Unresolved tool calls.
+  4  Turn failure or Head boundary failure.
+
+Read stderr to distinguish exit 2 causes.
 `;
 
 interface CliInput extends Readable {

@@ -88,6 +88,32 @@ test("missing model and endpoint failures name the exact flag and environment va
   });
 });
 
+test("explicit empty provider flags do not fall through to environment values", async () => {
+  const emptyModel = await Effect.runPromise(
+    parseArgs(["-p", "--model", "", "--base-url", "http://127.0.0.1:1234/v1", "Explain."]),
+  );
+  const emptyBaseUrl = await Effect.runPromise(
+    parseArgs(["-p", "--model", "flag-model", "--base-url", "", "Explain."]),
+  );
+  const env = {
+    PEYE_BASE_URL: "https://env.example/v1",
+    PEYE_MODEL: "env-model",
+  };
+  const modelError = await Effect.runPromise(Effect.flip(resolveConfig(emptyModel, env)));
+  const baseUrlError = await Effect.runPromise(Effect.flip(resolveConfig(emptyBaseUrl, env)));
+
+  expect(modelError).toMatchObject({
+    _tag: "CliConfigError",
+    message: expect.stringContaining("--model"),
+    reason: "invalid_model",
+  });
+  expect(baseUrlError).toMatchObject({
+    _tag: "CliConfigError",
+    message: expect.stringContaining("--base-url"),
+    reason: "invalid_base_url",
+  });
+});
+
 test("loopback endpoints need no key while hosted endpoints name every key environment variable", async () => {
   const parsed = await Effect.runPromise(parseArgs(["-p", "Explain."]));
   const local = await Effect.runPromise(

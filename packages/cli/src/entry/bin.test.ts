@@ -43,6 +43,8 @@ test("the built bin reports the package version and help without Provider config
   expect(help.status).toBe(0);
   expect(help.stdout).toContain('peye -p --mode json "<prompt>"');
   expect(help.stdout).toContain("peye -p --mode rpc");
+  expect(help.stdout).toContain("2  Invalid arguments, missing configuration, or an aborted turn.");
+  expect(help.stdout).toContain("Read stderr to distinguish exit 2 causes.");
   expect(help.stderr).toBe("");
 });
 
@@ -55,7 +57,7 @@ test("the built print Head accepts positional and piped prompts with pure stdout
   );
   const piped = runBuiltBin(["-p", "--session-dir", sessionDirectory()], {
     env: fakeProviderEnvironment(),
-    input: FAKE_PROVIDER_PROMPT,
+    input: `${FAKE_PROVIDER_PROMPT}\n`,
   });
 
   for (const result of [positional, piped]) {
@@ -138,4 +140,29 @@ test("the built bin reports bad arguments and missing config on stderr", () => {
   expect(missingConfig.status).toBe(2);
   expect(missingConfig.stdout).toBe("");
   expect(missingConfig.stderr).toContain("--model <model> or PEYE_MODEL");
+});
+
+test("the built bin rejects empty stdin and explicit empty provider flags", () => {
+  const whitespacePrompt = runBuiltBin(["-p", "--session-dir", sessionDirectory()], {
+    env: fakeProviderEnvironment(),
+    input: " \n\t",
+  });
+  const emptyModel = runBuiltBin(
+    ["-p", "--model", "", "--session-dir", sessionDirectory(), FAKE_PROVIDER_PROMPT],
+    { env: fakeProviderEnvironment() },
+  );
+  const emptyBaseUrl = runBuiltBin(
+    ["-p", "--base-url", "", "--session-dir", sessionDirectory(), FAKE_PROVIDER_PROMPT],
+    { env: fakeProviderEnvironment() },
+  );
+
+  for (const [result, flag] of [
+    [whitespacePrompt, "Use peye -p"],
+    [emptyModel, "--model"],
+    [emptyBaseUrl, "--base-url"],
+  ] as const) {
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(flag);
+  }
 });

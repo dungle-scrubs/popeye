@@ -10,7 +10,9 @@ import type { DriverSnapshot, TurnResult } from "../compose.js";
 
 /**
  * 0: done or truncated; 1: provider-settled error; 2: aborted; 3: unresolved tool calls;
- * 4: a typed turn failure, defect, interruption, or other Head boundary failure.
+ * 4: a typed turn failure, defect, interruption, or other Head boundary failure. CLI entry also
+ * uses 2 for invalid arguments and missing configuration. Scripts must read stderr to distinguish
+ * those CLI failures from an aborted turn.
  */
 export const HEAD_EXIT_CODES = {
   aborted: 2,

@@ -1,0 +1,6 @@
+{"payload":{"format":"peye_journal","sessionId":"ND8kztm0QjCnnTen","type":"journal_header","version":1},"v":1}
+{"payload":{"item":{"id":"MptjXWHixkCvAwbA","kind":"session_root","parentId":null,"payload":{}},"sessionId":"ND8kztm0QjCnnTen","type":"entry"},"v":1}
+{"payload":{"item":{"id":"qXkWAXIeo48xcHDl","kind":"message","parentId":"MptjXWHixkCvAwbA","payload":{"content":"Capture the CLI JSON stream.","role":"user"}},"sessionId":"ND8kztm0QjCnnTen","type":"entry"},"v":1}
+{"payload":{"item":{"id":"couBwI-Q37_-uIZY","kind":"operation_started","payload":{"intent":"turn","operationId":"c2478932-d9c0-4062-9525-80af62831b52","promptEntryId":"qXkWAXIeo48xcHDl","turnOrdinal":1}},"sessionId":"ND8kztm0QjCnnTen","type":"record"},"v":1}
+{"payload":{"item":{"id":"Jac3iiIg-HoXqElN","kind":"message","parentId":"qXkWAXIeo48xcHDl","payload":{"content":"Fake provider answer.","role":"assistant","stopReason":"done"}},"sessionId":"ND8kztm0QjCnnTen","type":"entry"},"v":1}
+{"payload":{"item":{"id":"p_zZEhlO5AJ5QMEr","kind":"operation_finished","payload":{"operationId":"c2478932-d9c0-4062-9525-80af62831b52","outcome":"done"}},"sessionId":"ND8kztm0QjCnnTen","type":"record"},"v":1}

@@ -126,3 +126,11 @@ durable behavior through Entries and Records. Add product behavior through Contr
 ## License
 
 This repository does not contain a license file. No license grant is provided.
+
+## Exit codes
+
+- 0 - the turn completed (done or truncated)
+- 1 - the provider settled the turn as an error
+- 2 - aborted turn, OR bad arguments / missing config (read stderr to distinguish)
+- 3 - unresolved tool calls
+- 4 - a turn failure or defect

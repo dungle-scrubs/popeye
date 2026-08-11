@@ -122,8 +122,9 @@ export const withStdinPrompt = (
   if (parsed.prompt !== undefined || parsed.mode === "rpc") {
     return Effect.succeed(parsed);
   }
-  if (stdin.length === 0) {
+  const prompt = stdin.trimEnd();
+  if (prompt.length === 0) {
     return Effect.fail(promptRequired());
   }
-  return Effect.succeed({ ...parsed, prompt: stdin });
+  return Effect.succeed({ ...parsed, prompt });
 };
