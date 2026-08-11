@@ -2,7 +2,7 @@
  * Owns CLI Plugin discovery-config construction and loadGeneration composition, including the
  * Trust constant, memory store, diagnostic sinks, displacement guard, and fail-closed mapping.
  * It exists so run.ts stays an I/O boundary and the pipeline remains testable without a process.
- * Tool adaptation is not owned here; a later milestone adapts Plugin tools into the kernel.
+ * Tool adaptation remains a separate module so discovery and kernel naming policy do not mix.
  */
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -64,7 +64,9 @@ const firstPartyGenerationPlugins = (
   plugins: ReadonlyArray<FirstPartyPlugin>,
 ): ReadonlyArray<GenerationPlugin> =>
   plugins.map((plugin) => ({
+    manifest: plugin.manifest,
     name: plugin.manifest.name,
+    origin: "first-party" as const,
     path: firstPartyPath(plugin),
     scope: "external" as const,
     version: plugin.manifest.version,

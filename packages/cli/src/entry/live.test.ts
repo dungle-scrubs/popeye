@@ -79,9 +79,9 @@ const hostedConfig =
 // command dispatch supports an in-flight abort.
 const RPC_MID_STREAM_ABORT_UNAVAILABLE = true;
 
-// The executable composes ToolRegistryLive([]) and static first-party command Plugins. It does not
-// discover, trust, load, or adapt project Plugin Tool Contributions into the model Tool registry.
-const CLI_PROJECT_TOOL_LOADING_UNAVAILABLE = true;
+// The executable now adapts project Plugin Tools. This opt-in live case still needs a deterministic
+// live-Provider fixture that reliably requests the contributed Tool.
+const CLI_PROJECT_TOOL_LIVE_FIXTURE_UNAVAILABLE = true;
 
 interface ProcessExit {
   readonly code: number | null;
@@ -563,11 +563,11 @@ test.skipIf(liveConfig === undefined || RPC_MID_STREAM_ABORT_UNAVAILABLE)(
   LIVE_TEST_TIMEOUT_MS,
 );
 
-test.skipIf(liveConfig === undefined || CLI_PROJECT_TOOL_LOADING_UNAVAILABLE)(
-  "live CLI: project Plugin Tool calling records toolCalls, toolResult, and the final answer [blocked: CLI does not load project Plugin Tools]",
+test.skipIf(liveConfig === undefined || CLI_PROJECT_TOOL_LIVE_FIXTURE_UNAVAILABLE)(
+  "live CLI: project Plugin Tool calling records toolCalls, toolResult, and the final answer [pending deterministic live fixture]",
   () => {
     throw new Error(
-      "CLI project Plugin discovery, Trust, loading, and model Tool registration are not composed.",
+      "The live Provider fixture does not yet deterministically request the project Plugin Tool.",
     );
   },
   LIVE_TEST_TIMEOUT_MS,

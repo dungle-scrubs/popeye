@@ -2,9 +2,11 @@
  * Owns executable I/O, Provider selection, Driver composition, and Head dispatch.
  * It exists so the bin has one Effect boundary and stdout remains owned by the selected Head.
  */
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import { JournalJsonl, SessionIdSchema } from "@pop-eye/journal";
+import { createCapabilityGrants } from "@pop-eye/plugins";
 import { Data, Effect, Layer, Logger, Schema, Stream } from "effect";
 
 import type { AssistantItem, Driver, ProviderService } from "../compose.js";
@@ -23,6 +25,7 @@ import { RpcInteractionsLive, runRpcHead } from "../heads/rpc.js";
 import type { HeadExitCode, HeadWriteError, HeadWriter } from "../heads/shared.js";
 import { errorMessage, makeWritableHeadWriter, makeWritableLogfmtLogger } from "../heads/shared.js";
 import { composePluginRuntime } from "../plugins/pipeline.js";
+import { adaptTools, generationCapabilityUnion } from "../tools/adapter.js";
 import type { CliRunConfig } from "./config.js";
 import type { CliIo } from "./execute.js";
 
@@ -126,7 +129,7 @@ const loadFakeProvider = (file: string): Effect.Effect<ProviderService, CliRunEr
     } satisfies ProviderService;
   });
 
-const startupLine = (config: CliRunConfig): string =>
+const startupLine = (config: CliRunConfig, toolCount: number): string =>
   `STARTUP ${JSON.stringify({
     baseUrlHost: config.baseUrlHost,
     mode: config.mode,
@@ -137,6 +140,7 @@ const startupLine = (config: CliRunConfig): string =>
           ? "rpc-managed"
           : "create"
         : `resume:${config.resume}`,
+    toolCount,
   })}\n`;
 
 const dispatch = (
@@ -166,72 +170,96 @@ const dispatch = (
         ),
       ),
     );
-    const tools = ToolRegistryLive([]);
-    const providerLayer =
-      provider === undefined
-        ? PiAiProviderLive({
-            ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
-            baseUrl: config.baseUrl,
-            modelId: config.model,
-            provider: "openai",
-          }).pipe(Layer.provide(tools))
-        : Layer.succeed(Provider, provider);
-    const dependencies = Layer.mergeAll(JournalJsonl(config.sessionDir), providerLayer, tools);
-    const driver = GenerationDriverDefault(pluginGeneration).pipe(Layer.provide(dependencies));
-    const runtime = Layer.merge(driver, RpcInteractionsLive);
-    let head: Effect.Effect<HeadExitCode, CliRunError | HeadWriteError, Driver | RpcInteractions>;
-    if (config.mode === "rpc") {
-      head = runRpcHead({
-        errorWriter,
-        input: io.input,
-        loggerOutput: io.stderr,
-        ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
-        writer,
-      });
-    } else if (config.prompt === undefined) {
-      head = Effect.fail(
-        runError("missing_prompt", "A prompt argument or piped stdin is required."),
+    return yield* Effect.gen(function* () {
+      const grantSessionId = SessionIdSchema.make(randomUUID());
+      const grants = createCapabilityGrants(
+        grantSessionId,
+        generationCapabilityUnion(pluginGeneration),
       );
-    } else if (config.mode === "json") {
-      head = runJsonHead({
-        prompts: [config.prompt],
-        ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
-        writer,
-      });
-    } else {
-      head = runPrintHead({
-        errorWriter,
-        prompts: [config.prompt],
-        ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
-        writer,
-      });
-    }
+      const adaptedTools = yield* adaptTools(pluginGeneration, grants).pipe(
+        Effect.mapError((cause) =>
+          runError(
+            "composition_failed",
+            `Could not adapt Plugin Tools (composition_failed): ${errorMessage(cause)}`,
+            cause,
+          ),
+        ),
+      );
+      const tools = ToolRegistryLive(adaptedTools).pipe(
+        Layer.mapError((cause) =>
+          runError(
+            "composition_failed",
+            `Could not compose Tool registry (composition_failed): ${errorMessage(cause)}`,
+            cause,
+          ),
+        ),
+      );
+      yield* errorWriter
+        .write(startupLine(config, adaptedTools.length))
+        .pipe(
+          Effect.mapError((cause) =>
+            runError("composition_failed", `Could not write CLI stderr: ${cause.message}`, cause),
+          ),
+        );
+      const providerLayer =
+        provider === undefined
+          ? PiAiProviderLive({
+              ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
+              baseUrl: config.baseUrl,
+              modelId: config.model,
+              provider: "openai",
+            }).pipe(Layer.provide(tools))
+          : Layer.succeed(Provider, provider);
+      const dependencies = Layer.mergeAll(JournalJsonl(config.sessionDir), providerLayer, tools);
+      const driver = GenerationDriverDefault(pluginGeneration).pipe(Layer.provide(dependencies));
+      const runtime = Layer.merge(driver, RpcInteractionsLive);
+      let head: Effect.Effect<HeadExitCode, CliRunError | HeadWriteError, Driver | RpcInteractions>;
+      if (config.mode === "rpc") {
+        head = runRpcHead({
+          errorWriter,
+          input: io.input,
+          loggerOutput: io.stderr,
+          ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
+          writer,
+        });
+      } else if (config.prompt === undefined) {
+        head = Effect.fail(
+          runError("missing_prompt", "A prompt argument or piped stdin is required."),
+        );
+      } else if (config.mode === "json") {
+        head = runJsonHead({
+          prompts: [config.prompt],
+          ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
+          writer,
+        });
+      } else {
+        head = runPrintHead({
+          errorWriter,
+          prompts: [config.prompt],
+          ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
+          writer,
+        });
+      }
 
-    return yield* head.pipe(
-      Effect.provide(runtime),
-      Effect.ensuring(pluginGeneration.close),
-      Effect.mapError((cause) =>
-        cause instanceof CliRunError
-          ? cause
-          : runError(
-              "composition_failed",
-              `Could not run the ${config.mode} Head: ${errorMessage(cause)}`,
-              cause,
-            ),
-      ),
-    );
+      return yield* head.pipe(
+        Effect.provide(runtime),
+        Effect.mapError((cause) =>
+          cause instanceof CliRunError
+            ? cause
+            : runError(
+                "composition_failed",
+                `Could not run the ${config.mode} Head: ${errorMessage(cause)}`,
+                cause,
+              ),
+        ),
+      );
+    }).pipe(Effect.ensuring(pluginGeneration.close));
   });
 
 export const run = (config: CliRunConfig, io: CliIo): Effect.Effect<HeadExitCode, CliRunError> => {
   const writer = makeWritableHeadWriter(io.stdout);
   const errorWriter = makeWritableHeadWriter(io.stderr);
-  return errorWriter.write(startupLine(config)).pipe(
-    Effect.zipRight(dispatch(config, io, errorWriter, writer)),
+  return dispatch(config, io, errorWriter, writer).pipe(
     Effect.provide(Logger.replace(Logger.defaultLogger, makeWritableLogfmtLogger(io.stderr))),
-    Effect.mapError((cause) =>
-      cause instanceof CliRunError
-        ? cause
-        : runError("composition_failed", `Could not write CLI stderr: ${cause.message}`, cause),
-    ),
   );
 };

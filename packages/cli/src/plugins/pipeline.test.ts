@@ -70,6 +70,36 @@ const commandPluginSource = (name: string, result: string): string =>
     "",
   ].join("\n");
 
+test("first-party Plugin generation entries expose the same manifest accessor", async () => {
+  const projectPath = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-manifest-"));
+  const userPluginDir = join(projectPath, "user-plugins");
+
+  try {
+    await mkdir(userPluginDir, { recursive: true });
+    const generation = await Effect.runPromise(
+      composePluginRuntime({
+        noProjectPlugins: false,
+        pluginPaths: [],
+        projectPath,
+        userPluginDir,
+      }),
+    );
+
+    expect(
+      generation.plugins.map((plugin) => ({
+        manifestName: plugin.manifest.name,
+        name: plugin.name,
+      })),
+    ).toEqual([
+      { manifestName: "compact", name: "compact" },
+      { manifestName: "session-name", name: "session-name" },
+    ]);
+    await Effect.runPromise(generation.close);
+  } finally {
+    await rm(projectPath, { force: true, recursive: true });
+  }
+});
+
 test("an empty project exposes only the invokable first-party commands", async () => {
   const projectPath = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-empty-"));
   const userPluginDir = join(projectPath, "user-plugins");
@@ -216,6 +246,11 @@ test("a user-global Plugin loads in phase 1", async () => {
     expect(result).toEqual({
       output: "user-result",
       plugin: {
+        manifest: {
+          capabilities: [],
+          name: "user-command",
+          version: "1.0.0",
+        },
         name: "user-command",
         path: await realpath(pluginPath),
         scope: "external",

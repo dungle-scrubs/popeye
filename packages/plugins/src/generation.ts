@@ -15,6 +15,7 @@ import { HookEmitter, HookEmitterLive } from "./emitter.js";
 import type { ContributionRegistryError, PluginLoadError } from "./errors.js";
 import { TrustResolverTimeoutError } from "./errors.js";
 import { loadPluginModule } from "./loader.js";
+import type { PluginManifest } from "./manifest.js";
 import type { ContributionRegistryService, RegistryDiagnostic } from "./registry.js";
 import { ContributionRegistry, ContributionRegistryLive } from "./registry.js";
 import type { PluginDiscoveryError, PluginSource, PluginSourceScope } from "./sources.js";
@@ -40,6 +41,7 @@ export type GenerationLoadError =
 export const DEFAULT_TRUST_RESOLVER_TIMEOUT_MILLIS = 300_000;
 
 export interface GenerationPlugin {
+  readonly manifest: PluginManifest;
   readonly name: string;
   readonly path: string;
   readonly scope: PluginSourceScope;
@@ -169,6 +171,7 @@ const registerSources = (
         registry.registerPlugin(plugin.manifest, plugin.contributions, source.scope),
       ),
       Effect.map((plugin) => ({
+        manifest: plugin.manifest,
         name: plugin.manifest.name,
         path: source.path,
         scope: source.scope,

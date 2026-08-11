@@ -22,6 +22,7 @@ import {
   ProviderError,
   type ProviderService,
   type Tool,
+  ToolError,
   ToolRegistryLive,
   type TurnResult,
 } from "@pop-eye/kernel";
@@ -46,6 +47,7 @@ export {
   PluginHost,
   Provider,
   ProviderError,
+  ToolError,
   ToolRegistryLive,
 };
 
