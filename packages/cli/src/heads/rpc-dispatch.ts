@@ -28,7 +28,9 @@ export const serializedWriter = (writer: HeadWriter): Effect.Effect<SerializedHe
             }
             return yield* writer
               .write(text)
-              .pipe(Effect.tapError((error) => Ref.set(poison, error)));
+              .pipe(
+                Effect.tapError((error) => Ref.set(poison, error).pipe(Effect.uninterruptible)),
+              );
           }),
         ),
     };
