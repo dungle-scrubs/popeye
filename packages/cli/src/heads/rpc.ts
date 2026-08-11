@@ -1,8 +1,9 @@
 /**
- * Owns the long-lived stdio RPC Head that trusts Snapshots and streams Progress.
- * It exists so external processes can drive multiple Sessions over one connection. RPC framing
- * splits on LF only. Do not use Node readline: literal U+2028 and U+2029 are JSON content. See
- * pi's framing lesson: https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/rpc.md
+ * Owns RPC framing, decoding, command routing, and protocol effects for one long-lived stdio Head.
+ * Dispatch workers run handlers outside the read loop: FIFO per Session, FIFO for sessionless
+ * commands, concurrent across Sessions, and immediate for control frames. Framing splits on LF
+ * only. Do not use Node readline: literal U+2028 and U+2029 are JSON content. See pi's framing
+ * lesson: https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/rpc.md
  */
 
 import type { Readable, Writable } from "node:stream";
@@ -36,6 +37,12 @@ import {
 } from "effect";
 
 import { Driver, type DriverSnapshot } from "../compose.js";
+import {
+  makeRpcDispatcher,
+  type RpcDispatchBoundExceeded,
+  type RpcDispatchRoute,
+  serializedWriter,
+} from "./rpc-dispatch.js";
 import {
   HEAD_EXIT_CODES,
   type HeadExitCode,
@@ -106,6 +113,11 @@ interface RpcInteractionState {
 type InteractionAdmission =
   | { readonly _tag: "accepted"; readonly head: RpcInteractiveHead | undefined }
   | { readonly _tag: "duplicate" };
+
+type InteractionClaim =
+  | { readonly _tag: "claimed"; readonly pending: PendingInteraction }
+  | { readonly _tag: "kind-mismatch" }
+  | { readonly _tag: "missing" };
 
 export interface RpcInteractionsService {
   readonly attach: (
@@ -277,25 +289,32 @@ export const RpcInteractionsLive: Layer.Layer<RpcInteractions> = Layer.effect(
 
     const respond: RpcInteractionsService["respond"] = (response) =>
       Effect.gen(function* () {
-        const pending = yield* Ref.get(state).pipe(
-          Effect.map((current) => current.pending.get(response.id)),
-        );
-        if (pending === undefined) {
+        const claim = yield* Ref.modify<RpcInteractionState, InteractionClaim>(state, (current) => {
+          const pending = current.pending.get(response.id);
+          if (pending === undefined) {
+            return [{ _tag: "missing" }, current];
+          }
+          if (pending.request.kind !== response.kind) {
+            return [{ _tag: "kind-mismatch" }, current];
+          }
+          const next = new Map(current.pending);
+          next.delete(response.id);
+          return [
+            { _tag: "claimed", pending },
+            { ...current, pending: next },
+          ];
+        });
+        if (claim._tag === "missing") {
           return yield* interactionProtocolError(
             `Interaction response ${response.id} has no pending request.`,
           );
         }
-        if (pending.request.kind !== response.kind) {
+        if (claim._tag === "kind-mismatch") {
           return yield* interactionProtocolError(
             `Interaction response ${response.id} kind does not match its request.`,
           );
         }
-        yield* Ref.update(state, (current) => {
-          const next = new Map(current.pending);
-          next.delete(response.id);
-          return { ...current, pending: next };
-        });
-        yield* Deferred.succeed(pending.deferred, { response, source: "head" });
+        yield* Deferred.succeed(claim.pending.deferred, { response, source: "head" });
       });
 
     return { attach, detach, request, respond } satisfies RpcInteractionsService;
@@ -599,6 +618,16 @@ const wireErrorFromFailure = (
         details: { reason: stringField(record, "reason"), tag },
         message,
       };
+    case "RpcDispatchBoundExceeded":
+      return {
+        code: "protocol_error",
+        details: {
+          bound: stringField(record, "bound"),
+          limit: numberField(record, "limit"),
+          tag,
+        },
+        message,
+      };
     case "ProviderError":
       return {
         code: "provider_error",
@@ -708,6 +737,17 @@ const handleFrameCause = <TFailure>(
   );
 };
 
+const handleDispatchBoundExceeded = (
+  writer: HeadWriter,
+  id: string | undefined,
+  error: RpcDispatchBoundExceeded,
+): Effect.Effect<void, HeadWriteError> => {
+  const wireError = wireErrorFromFailure(error);
+  return Effect.annotateCurrentSpan({ outcome: wireError.code }).pipe(
+    Effect.zipRight(writeWireError(writer, id, wireError)),
+  );
+};
+
 const writeProgress = (
   writer: HeadWriter,
   sessionId: string,
@@ -744,270 +784,353 @@ const abortResult = (result: {
   };
 };
 
+const dispatchRoute = (command: RpcInboundCommand): RpcDispatchRoute => {
+  if (command._tag === "abort" || command._tag === "interaction-response") {
+    return { _tag: "control" };
+  }
+  if (command._tag === "create" || command._tag === "list") {
+    return { _tag: "sessionless" };
+  }
+  return { _tag: "session", sessionId: command.sessionId };
+};
+
 export const runRpcHead = (options: RpcHeadOptions) => {
-  const writer = options.writer ?? stdoutHeadWriter;
-  const writeSnapshot = (
-    id: string | undefined,
-    snapshot: DriverSnapshot,
-    attached: boolean,
-  ): Effect.Effect<void, HeadWriteError> =>
-    writeSnapshotResponse(writer, id, snapshot, attached, options.snapshotAudit);
+  const outputWriter = options.writer ?? stdoutHeadWriter;
   return runHeadBoundary(
-    Effect.gen(function* () {
-      const attached = new Set<string>();
-      const driver = yield* Driver;
-      const interactions = yield* RpcInteractions;
-      const interactiveHeads = new Map<string, RpcInteractiveHead>();
-      const progressSubscriptions = new Map<string, Fiber.RuntimeFiber<void, HeadWriteError>>();
+    Effect.scoped(
+      Effect.gen(function* () {
+        const writer = yield* serializedWriter(outputWriter);
+        const dispatcher = yield* makeRpcDispatcher();
+        const writeSnapshot = (
+          id: string | undefined,
+          snapshot: DriverSnapshot,
+          attached: boolean,
+        ): Effect.Effect<void, HeadWriteError> =>
+          writeSnapshotResponse(writer, id, snapshot, attached, options.snapshotAudit);
+        const attached = new Set<string>();
+        const driver = yield* Driver;
+        const interactions = yield* RpcInteractions;
+        const interactiveHeads = new Map<string, RpcInteractiveHead>();
+        const progressSubscriptions = new Map<string, Fiber.RuntimeFiber<void, HeadWriteError>>();
 
-      if (options.resumeSessionId !== undefined) {
-        yield* driver.resumeSession(options.resumeSessionId);
-      }
+        if (options.resumeSessionId !== undefined) {
+          yield* driver.resumeSession(options.resumeSessionId);
+        }
 
-      const run = strictLfFrames(options.input).pipe(
-        Stream.runForEach((frame) => {
-          const commandName = frameStringField(frame, "_tag") ?? "malformed";
-          let correlationId = frameStringField(frame, "id");
-          return decodeRpcInboundCommand(frame).pipe(
-            Effect.tap((command) =>
-              Effect.sync(() => {
-                correlationId = command.id;
-              }),
-            ),
-            Effect.flatMap((command): Effect.Effect<void, unknown> => {
-              if (command._tag === "attach") {
-                return driver.getSnapshot(command.sessionId).pipe(
-                  Effect.tap(() => Effect.sync(() => attached.add(command.sessionId))),
-                  Effect.flatMap((snapshot) => writeSnapshot(command.id, snapshot, true)),
-                  Effect.flatMap(() => {
-                    if (command.interactive === false) {
-                      return Effect.void;
-                    }
-                    const head: RpcInteractiveHead = {
-                      send: (request) => writer.write(`${JSON.stringify(request)}\n`),
-                    };
-                    interactiveHeads.set(command.sessionId, head);
-                    return interactions
-                      .attach(command.sessionId, head)
-                      .pipe(
-                        Effect.flatMap((pending) =>
-                          Effect.forEach(pending, head.send, { discard: true }),
-                        ),
-                      );
-                  }),
-                );
-              }
-              if (command._tag === "detach") {
-                return driver.getSnapshot(command.sessionId).pipe(
-                  Effect.tap(() => Effect.sync(() => attached.delete(command.sessionId))),
-                  Effect.flatMap((snapshot) => writeSnapshot(command.id, snapshot, false)),
-                  Effect.flatMap(() => {
-                    const subscription = progressSubscriptions.get(command.sessionId);
-                    if (subscription !== undefined) {
-                      progressSubscriptions.delete(command.sessionId);
-                    }
-                    const head = interactiveHeads.get(command.sessionId);
-                    return Effect.all(
-                      [
-                        ...(subscription === undefined ? [] : [Fiber.interrupt(subscription)]),
-                        ...(head === undefined
-                          ? []
-                          : [
-                              Effect.sync(() => interactiveHeads.delete(command.sessionId)).pipe(
-                                Effect.zipRight(interactions.detach(command.sessionId, head)),
-                              ),
-                            ]),
-                      ],
-                      { discard: true },
-                    );
-                  }),
-                );
-              }
-              if (command._tag === "interaction-response") {
-                return interactions.respond(command);
-              }
-              if (command._tag === "abort") {
-                return driver
-                  .abortTurn(command.sessionId)
-                  .pipe(
-                    Effect.flatMap((result) =>
-                      writeResponse(writer, command.id, abortResult(result)),
-                    ),
-                  );
-              }
-              if (command._tag === "branch") {
-                return driver
-                  .branch(command.sessionId, command.toEntryId, command.expectedRevision)
-                  .pipe(
-                    Effect.flatMap((snapshot) =>
-                      writeSnapshot(command.id, snapshot, attached.has(command.sessionId)),
-                    ),
-                  );
-              }
-              if (command._tag === "create") {
-                return driver.createSession().pipe(
-                  Effect.flatMap((session) => driver.getSnapshot(session.id)),
-                  Effect.flatMap((snapshot) => writeSnapshot(command.id, snapshot, false)),
-                );
-              }
-              if (command._tag === "fork") {
-                return driver
-                  .fork(command.sessionId, command.fromEntryId, command.expectedRevision)
-                  .pipe(Effect.flatMap((snapshot) => writeSnapshot(command.id, snapshot, false)));
-              }
-              if (command._tag === "get-snapshot") {
-                return driver
-                  .getSnapshot(command.sessionId)
-                  .pipe(
-                    Effect.flatMap((snapshot) =>
-                      writeSnapshot(command.id, snapshot, attached.has(command.sessionId)),
-                    ),
-                  );
-              }
-              if (command._tag === "invoke-command") {
-                return driver
-                  .invokeCommand(
-                    command.sessionId,
-                    command.name,
-                    command.args,
-                    command.expectedRevision,
-                  )
-                  .pipe(
-                    Effect.flatMap((value) =>
-                      writeResponse(writer, command.id, {
-                        _tag: "commandInvoked",
-                        commandName: command.name,
-                        value: value ?? null,
+        const run = strictLfFrames(options.input).pipe(
+          Stream.runForEach((frame) => {
+            const commandName = frameStringField(frame, "_tag") ?? "malformed";
+            let correlationId = frameStringField(frame, "id");
+            return decodeRpcInboundCommand(frame).pipe(
+              Effect.tap((command) =>
+                Effect.sync(() => {
+                  correlationId = command.id;
+                }),
+              ),
+              Effect.flatMap((command) =>
+                dispatcher.dispatch({
+                  eofBehavior: command._tag === "prompt" ? "interrupt" : "drain",
+                  onBoundExceeded: (error, dispatchContext) =>
+                    handleDispatchBoundExceeded(writer, correlationId, error).pipe(
+                      Effect.withSpan("rpc.frame", {
+                        attributes: {
+                          bypass: dispatchContext.bypass,
+                          command: commandName,
+                          queueDepth: dispatchContext.queueDepth,
+                          session: dispatchContext.session,
+                        },
                       }),
                     ),
-                  );
-              }
-              if (command._tag === "list") {
-                return driver
-                  .listSessions()
-                  .pipe(
-                    Effect.flatMap((sessions) =>
-                      writeResponse(writer, command.id, { _tag: "sessionList", sessions }),
-                    ),
-                  );
-              }
-              if (command._tag === "prompt") {
-                return driver
-                  .prompt(command.sessionId, command.content, {
-                    ...(command.deliveryMode === undefined
-                      ? {}
-                      : { deliveryMode: command.deliveryMode }),
-                    ...(command.expectedRevision === undefined
-                      ? {}
-                      : { expectedRevision: command.expectedRevision }),
-                  })
-                  .pipe(
-                    Effect.zipRight(driver.getSnapshot(command.sessionId)),
-                    Effect.flatMap((snapshot) =>
-                      writeSnapshot(command.id, snapshot, attached.has(command.sessionId)),
-                    ),
-                  );
-              }
-              if (command._tag === "resume") {
-                return driver.resumeSession(command.sessionId).pipe(
-                  Effect.zipRight(driver.getSnapshot(command.sessionId)),
-                  Effect.flatMap((snapshot) =>
-                    writeSnapshot(command.id, snapshot, attached.has(command.sessionId)),
-                  ),
-                );
-              }
-              if (command._tag === "set-model") {
-                return driver
-                  .setModel(command.sessionId, command.model, command.expectedRevision)
-                  .pipe(
-                    Effect.zipRight(driver.getSnapshot(command.sessionId)),
-                    Effect.flatMap((snapshot) =>
-                      writeSnapshot(command.id, snapshot, attached.has(command.sessionId)),
-                    ),
-                  );
-              }
-              if (command._tag === "set-thinking") {
-                return driver
-                  .setThinkingLevel(
-                    command.sessionId,
-                    command.thinkingLevel,
-                    command.expectedRevision,
-                  )
-                  .pipe(
-                    Effect.zipRight(driver.getSnapshot(command.sessionId)),
-                    Effect.flatMap((snapshot) =>
-                      writeSnapshot(command.id, snapshot, attached.has(command.sessionId)),
-                    ),
-                  );
-              }
-              if (command._tag === "steer") {
-                return driver
-                  .steer(command.sessionId, command.content)
-                  .pipe(Effect.zipRight(writeResponse(writer, command.id, { _tag: "ack" })));
-              }
-              if (command._tag === "subscribe-progress") {
-                return writeResponse(writer, command.id, {
-                  _tag: "progressSubscribed",
-                  sessionId: command.sessionId,
-                  subscribed: true,
-                }).pipe(
-                  Effect.zipRight(
-                    Effect.gen(function* () {
-                      const existing = progressSubscriptions.get(command.sessionId);
-                      if (existing !== undefined) {
-                        yield* Fiber.interrupt(existing);
+                  route: dispatchRoute(command),
+                  run: (dispatchContext) =>
+                    Effect.suspend((): Effect.Effect<void, unknown> => {
+                      if (command._tag === "attach") {
+                        return driver.getSnapshot(command.sessionId).pipe(
+                          Effect.tap(() => Effect.sync(() => attached.add(command.sessionId))),
+                          Effect.flatMap((snapshot) => {
+                            if (command.interactive === false) {
+                              return writeSnapshot(command.id, snapshot, true);
+                            }
+                            const head: RpcInteractiveHead = {
+                              send: (request) => writer.write(`${JSON.stringify(request)}\n`),
+                            };
+                            return Effect.sync(() =>
+                              interactiveHeads.set(command.sessionId, head),
+                            ).pipe(
+                              Effect.zipRight(interactions.attach(command.sessionId, head)),
+                              Effect.flatMap((pending) =>
+                                writeSnapshot(command.id, snapshot, true).pipe(
+                                  Effect.zipRight(
+                                    Effect.forEach(pending, head.send, { discard: true }),
+                                  ),
+                                ),
+                              ),
+                            );
+                          }),
+                        );
                       }
-                      const subscription = yield* driver.subscribeProgress(command.sessionId).pipe(
-                        Stream.runForEach((progress) =>
-                          writeProgress(writer, command.sessionId, progress),
-                        ),
-                        Effect.fork,
-                      );
-                      progressSubscriptions.set(command.sessionId, subscription);
-                    }),
-                  ),
-                );
-              }
-              return Effect.die("RPC command routing is incomplete.");
-            }),
-            Effect.tap(() => Effect.annotateCurrentSpan({ outcome: "ok" })),
-            Effect.catchAllCause((cause) =>
-              handleFrameCause(writer, correlationId, commandName, cause),
-            ),
-            Effect.withSpan("rpc.frame", { attributes: { command: commandName } }),
-          );
-        }),
-      );
-
-      yield* run.pipe(
-        Effect.catchIf(
-          (error): error is ProtocolError => error instanceof ProtocolError,
-          (error) =>
-            Effect.logWarning("RPC input closed after an oversized frame.").pipe(
-              Effect.annotateLogs({
-                diagnostic: "protocol_error",
-                reason: error.reason,
-              }),
-              Effect.zipRight(writeProtocolError(writer, undefined, error)),
-            ),
-        ),
-        Effect.ensuring(
-          Effect.all(
-            [
-              Effect.forEach(
-                interactiveHeads,
-                ([sessionId, head]) => interactions.detach(sessionId, head),
-                { discard: true },
+                      if (command._tag === "detach") {
+                        return driver.getSnapshot(command.sessionId).pipe(
+                          Effect.tap(() => Effect.sync(() => attached.delete(command.sessionId))),
+                          Effect.flatMap((snapshot) => {
+                            const subscription = progressSubscriptions.get(command.sessionId);
+                            if (subscription !== undefined) {
+                              progressSubscriptions.delete(command.sessionId);
+                            }
+                            const head = interactiveHeads.get(command.sessionId);
+                            if (head !== undefined) {
+                              interactiveHeads.delete(command.sessionId);
+                            }
+                            return Effect.all(
+                              [
+                                ...(subscription === undefined
+                                  ? []
+                                  : [Fiber.interrupt(subscription)]),
+                                ...(head === undefined
+                                  ? []
+                                  : [interactions.detach(command.sessionId, head)]),
+                              ],
+                              { discard: true },
+                            ).pipe(Effect.zipRight(writeSnapshot(command.id, snapshot, false)));
+                          }),
+                        );
+                      }
+                      if (command._tag === "interaction-response") {
+                        return interactions.respond(command);
+                      }
+                      if (command._tag === "abort") {
+                        return driver
+                          .abortTurn(command.sessionId)
+                          .pipe(
+                            Effect.flatMap((result) =>
+                              writeResponse(writer, command.id, abortResult(result)),
+                            ),
+                          );
+                      }
+                      if (command._tag === "branch") {
+                        return driver
+                          .branch(command.sessionId, command.toEntryId, command.expectedRevision)
+                          .pipe(
+                            Effect.flatMap((snapshot) =>
+                              writeSnapshot(command.id, snapshot, attached.has(command.sessionId)),
+                            ),
+                          );
+                      }
+                      if (command._tag === "create") {
+                        return driver.createSession().pipe(
+                          Effect.flatMap((session) => driver.getSnapshot(session.id)),
+                          Effect.flatMap((snapshot) => writeSnapshot(command.id, snapshot, false)),
+                        );
+                      }
+                      if (command._tag === "fork") {
+                        return driver
+                          .fork(command.sessionId, command.fromEntryId, command.expectedRevision)
+                          .pipe(
+                            Effect.flatMap((snapshot) =>
+                              writeSnapshot(command.id, snapshot, false),
+                            ),
+                          );
+                      }
+                      if (command._tag === "get-snapshot") {
+                        return driver
+                          .getSnapshot(command.sessionId)
+                          .pipe(
+                            Effect.flatMap((snapshot) =>
+                              writeSnapshot(command.id, snapshot, attached.has(command.sessionId)),
+                            ),
+                          );
+                      }
+                      if (command._tag === "invoke-command") {
+                        return driver
+                          .invokeCommand(
+                            command.sessionId,
+                            command.name,
+                            command.args,
+                            command.expectedRevision,
+                          )
+                          .pipe(
+                            Effect.flatMap((value) =>
+                              writeResponse(writer, command.id, {
+                                _tag: "commandInvoked",
+                                commandName: command.name,
+                                value: value ?? null,
+                              }),
+                            ),
+                          );
+                      }
+                      if (command._tag === "list") {
+                        return driver
+                          .listSessions()
+                          .pipe(
+                            Effect.flatMap((sessions) =>
+                              writeResponse(writer, command.id, { _tag: "sessionList", sessions }),
+                            ),
+                          );
+                      }
+                      if (command._tag === "prompt") {
+                        return driver
+                          .prompt(command.sessionId, command.content, {
+                            ...(command.deliveryMode === undefined
+                              ? {}
+                              : { deliveryMode: command.deliveryMode }),
+                            ...(command.expectedRevision === undefined
+                              ? {}
+                              : { expectedRevision: command.expectedRevision }),
+                          })
+                          .pipe(
+                            Effect.zipRight(driver.getSnapshot(command.sessionId)),
+                            Effect.flatMap((snapshot) =>
+                              writeSnapshot(command.id, snapshot, attached.has(command.sessionId)),
+                            ),
+                          );
+                      }
+                      if (command._tag === "resume") {
+                        return driver.resumeSession(command.sessionId).pipe(
+                          Effect.zipRight(driver.getSnapshot(command.sessionId)),
+                          Effect.flatMap((snapshot) =>
+                            writeSnapshot(command.id, snapshot, attached.has(command.sessionId)),
+                          ),
+                        );
+                      }
+                      if (command._tag === "set-model") {
+                        return driver
+                          .setModel(command.sessionId, command.model, command.expectedRevision)
+                          .pipe(
+                            Effect.zipRight(driver.getSnapshot(command.sessionId)),
+                            Effect.flatMap((snapshot) =>
+                              writeSnapshot(command.id, snapshot, attached.has(command.sessionId)),
+                            ),
+                          );
+                      }
+                      if (command._tag === "set-thinking") {
+                        return driver
+                          .setThinkingLevel(
+                            command.sessionId,
+                            command.thinkingLevel,
+                            command.expectedRevision,
+                          )
+                          .pipe(
+                            Effect.zipRight(driver.getSnapshot(command.sessionId)),
+                            Effect.flatMap((snapshot) =>
+                              writeSnapshot(command.id, snapshot, attached.has(command.sessionId)),
+                            ),
+                          );
+                      }
+                      if (command._tag === "steer") {
+                        return driver
+                          .steer(command.sessionId, command.content)
+                          .pipe(
+                            Effect.zipRight(writeResponse(writer, command.id, { _tag: "ack" })),
+                          );
+                      }
+                      if (command._tag === "subscribe-progress") {
+                        return Effect.gen(function* () {
+                          const existing = progressSubscriptions.get(command.sessionId);
+                          if (existing !== undefined) {
+                            yield* Fiber.interrupt(existing);
+                          }
+                          const subscription = yield* driver
+                            .subscribeProgress(command.sessionId)
+                            .pipe(
+                              Stream.runForEach((progress) =>
+                                writeProgress(writer, command.sessionId, progress),
+                              ),
+                              Effect.fork,
+                            );
+                          progressSubscriptions.set(command.sessionId, subscription);
+                          yield* writeResponse(writer, command.id, {
+                            _tag: "progressSubscribed",
+                            sessionId: command.sessionId,
+                            subscribed: true,
+                          });
+                        });
+                      }
+                      return Effect.die("RPC command routing is incomplete.");
+                    }).pipe(
+                      Effect.tap(() => Effect.annotateCurrentSpan({ outcome: "ok" })),
+                      Effect.catchAllCause((cause) =>
+                        handleFrameCause(writer, correlationId, commandName, cause),
+                      ),
+                      Effect.withSpan("rpc.frame", {
+                        attributes: {
+                          bypass: dispatchContext.bypass,
+                          command: commandName,
+                          queueDepth: dispatchContext.queueDepth,
+                          session: dispatchContext.session,
+                        },
+                      }),
+                    ),
+                }),
               ),
-              Effect.forEach(progressSubscriptions.values(), Fiber.interrupt, { discard: true }),
-            ],
-            { discard: true },
-          ),
-        ),
-      );
+              Effect.catchAllCause((cause) =>
+                dispatcher.dispatch({
+                  eofBehavior: "drain",
+                  onBoundExceeded: (error, dispatchContext) =>
+                    handleDispatchBoundExceeded(writer, correlationId, error).pipe(
+                      Effect.withSpan("rpc.frame", {
+                        attributes: {
+                          bypass: dispatchContext.bypass,
+                          command: commandName,
+                          queueDepth: dispatchContext.queueDepth,
+                          session: dispatchContext.session,
+                        },
+                      }),
+                    ),
+                  route: { _tag: "sessionless" },
+                  run: (dispatchContext) =>
+                    handleFrameCause(writer, correlationId, commandName, cause).pipe(
+                      Effect.withSpan("rpc.frame", {
+                        attributes: {
+                          bypass: dispatchContext.bypass,
+                          command: commandName,
+                          queueDepth: dispatchContext.queueDepth,
+                          session: dispatchContext.session,
+                        },
+                      }),
+                    ),
+                }),
+              ),
+            );
+          }),
+        );
 
-      return HEAD_EXIT_CODES.done satisfies HeadExitCode;
-    }),
+        const connection = run.pipe(
+          Effect.catchIf(
+            (error): error is ProtocolError => error instanceof ProtocolError,
+            (error) =>
+              Effect.logWarning("RPC input closed after an oversized frame.").pipe(
+                Effect.annotateLogs({
+                  diagnostic: "protocol_error",
+                  reason: error.reason,
+                }),
+                Effect.zipRight(writeProtocolError(writer, undefined, error)),
+              ),
+          ),
+          Effect.zipRight(dispatcher.finish),
+        );
+        const writerFailure = writer.failure.pipe(
+          Effect.tapError(() => Effect.sync(() => options.input.destroy())),
+        );
+
+        yield* Effect.raceFirst(connection, writerFailure).pipe(
+          Effect.ensuring(
+            Effect.all(
+              [
+                Effect.forEach(
+                  interactiveHeads,
+                  ([sessionId, head]) => interactions.detach(sessionId, head),
+                  { discard: true },
+                ),
+                Effect.forEach(progressSubscriptions.values(), Fiber.interrupt, { discard: true }),
+              ],
+              { discard: true },
+            ),
+          ),
+        );
+
+        return HEAD_EXIT_CODES.done satisfies HeadExitCode;
+      }),
+    ),
     options.errorWriter ?? stderrHeadWriter,
   ).pipe(
     Effect.provide(
