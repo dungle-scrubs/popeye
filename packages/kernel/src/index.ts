@@ -135,6 +135,7 @@ export {
 export {
   defineTool,
   type RegisteredTool,
+  type SessionToolView,
   type Tool,
   type ToolExecutionContext,
   type ToolExecutionMode,

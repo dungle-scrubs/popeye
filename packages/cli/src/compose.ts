@@ -21,9 +21,13 @@ import {
   Provider,
   ProviderError,
   type ProviderService,
+  type RegisteredTool,
+  type SessionToolView,
   type Tool,
   ToolError,
+  ToolRegistry,
   ToolRegistryLive,
+  type ToolRegistryService,
   type TurnResult,
 } from "@pop-eye/kernel";
 import {
@@ -38,7 +42,16 @@ import { Effect, Layer, Logger, Schema } from "effect";
 
 import { composePluginRuntime, type FirstPartyPlugin } from "./plugins/pipeline.js";
 
-export type { AssistantItem, DriverSnapshot, ProviderService, Tool, TurnResult };
+export type {
+  AssistantItem,
+  DriverSnapshot,
+  ProviderService,
+  RegisteredTool,
+  SessionToolView,
+  Tool,
+  ToolRegistryService,
+  TurnResult,
+};
 export {
   AssistantStopReasonSchema,
   Driver,
@@ -48,6 +61,7 @@ export {
   Provider,
   ProviderError,
   ToolError,
+  ToolRegistry,
   ToolRegistryLive,
 };
 

@@ -10,14 +10,20 @@ import { JournalJsonl, SessionIdSchema } from "@pop-eye/journal";
 import { createCapabilityGrants } from "@pop-eye/plugins";
 import { Data, Effect, Layer, Logger, Schema, Stream } from "effect";
 
-import type { AssistantItem, Driver, ProviderService } from "../compose.js";
+import type {
+  AssistantItem,
+  Driver,
+  ProviderService,
+  RegisteredTool,
+  SessionToolView,
+} from "../compose.js";
 import {
   AssistantStopReasonSchema,
   GenerationDriverDefault,
   PiAiProviderLive,
   Provider,
   ProviderError,
-  ToolRegistryLive,
+  ToolRegistry,
 } from "../compose.js";
 import { runJsonHead } from "../heads/json.js";
 import { runPrintHead } from "../heads/print.js";
@@ -190,7 +196,10 @@ const dispatch = (
           plugins: pluginGeneration.plugins.map((plugin) => plugin.name),
         },
       } satisfies SnapshotAuditFields;
-      const adaptedTools = yield* adaptTools(pluginGeneration, grants).pipe(
+      // M3: CLI provides view(sessionId) resolving against current generation at call time.
+      // Startup still has one generation; view is session-keyed but grants are still the per-process union.
+      // No static tool array remains; startup toolCount reads the startup view.
+      const adaptedToolsForView = yield* adaptTools(pluginGeneration, grants).pipe(
         Effect.mapError((cause) =>
           runError(
             "composition_failed",
@@ -199,17 +208,21 @@ const dispatch = (
           ),
         ),
       );
-      const tools = ToolRegistryLive(adaptedTools).pipe(
-        Layer.mapError((cause) =>
-          runError(
-            "composition_failed",
-            `Could not compose Tool registry (composition_failed): ${errorMessage(cause)}`,
-            cause,
-          ),
-        ),
+      const toolMap = new Map(
+        adaptedToolsForView.map((tool) => [tool.name, tool as unknown as RegisteredTool]),
       );
+      const startupView: SessionToolView = {
+        get: (name: string) => toolMap.get(name),
+        list: () => adaptedToolsForView as unknown as ReadonlyArray<RegisteredTool>,
+      };
+      const toolRegistryService = {
+        view: () => Effect.succeed(startupView),
+        get: startupView.get,
+        list: startupView.list,
+      } satisfies import("../compose.js").ToolRegistryService;
+      const tools = Layer.succeed(ToolRegistry, toolRegistryService);
       yield* errorWriter
-        .write(startupLine(config, adaptedTools.length))
+        .write(startupLine(config, startupView.list().length))
         .pipe(
           Effect.mapError((cause) =>
             runError("composition_failed", `Could not write CLI stderr: ${cause.message}`, cause),
