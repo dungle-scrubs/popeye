@@ -17,6 +17,8 @@ export interface ParsedRunArgs {
   readonly baseUrl: string | undefined;
   readonly mode: CliMode;
   readonly model: string | undefined;
+  readonly noProjectPlugins: boolean;
+  readonly pluginPaths: ReadonlyArray<string>;
   readonly prompt: string | undefined;
   readonly resume: string | undefined;
   readonly sessionDir: string | undefined;
@@ -70,6 +72,8 @@ export const parseArgs = (argv: ReadonlyArray<string>): Effect.Effect<ParsedArgs
           headless: { short: "p", type: "boolean" },
           mode: { type: "string" },
           model: { type: "string" },
+          "no-project-plugins": { type: "boolean" },
+          plugin: { multiple: true, type: "string" },
           resume: { type: "string" },
           "session-dir": { type: "string" },
           version: { type: "boolean" },
@@ -90,6 +94,9 @@ export const parseArgs = (argv: ReadonlyArray<string>): Effect.Effect<ParsedArgs
           ),
         );
       }
+      if (values.plugin?.some((path) => path.trim() === "")) {
+        return Effect.fail(invalidArguments("--plugin requires a non-empty path."));
+      }
       if (positionals.length > 1) {
         return Effect.fail(promptRequired());
       }
@@ -107,6 +114,8 @@ export const parseArgs = (argv: ReadonlyArray<string>): Effect.Effect<ParsedArgs
         baseUrl: values["base-url"],
         mode,
         model: values.model,
+        noProjectPlugins: values["no-project-plugins"] ?? false,
+        pluginPaths: values.plugin ?? [],
         prompt,
         resume: values.resume,
         sessionDir: values["session-dir"],

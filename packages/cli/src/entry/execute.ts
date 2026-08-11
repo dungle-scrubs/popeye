@@ -31,14 +31,16 @@ const CLI_USAGE = `Usage:
   echo "<prompt>" | peye -p
 
 Options:
-  -p                     Run headless.
-  --mode <print|json|rpc> Select the Head. Default: print.
-  --model <model>        Select the Provider model. Env: PEYE_MODEL.
-  --base-url <url>       Set the OpenAI-compatible endpoint. Env: PEYE_BASE_URL.
-  --resume <sessionId>   Resume a Session.
-  --session-dir <dir>    Set the Journal directory. Default: .peye/sessions.
-  --version              Print the @pop-eye/cli version.
-  --help                 Print this usage text.
+  --base-url <url>         Set the OpenAI-compatible endpoint. Env: PEYE_BASE_URL.
+  -p, --headless           Run headless.
+  --help                   Print this usage text.
+  --mode <print|json|rpc>  Select the Head. Default: print.
+  --model <model>          Select the Provider model. Env: PEYE_MODEL.
+  --no-project-plugins     Do not load project-local Plugins.
+  --plugin <path>          Add a Plugin path. Repeatable.
+  --resume <sessionId>     Resume a Session.
+  --session-dir <dir>      Set the Journal directory. Default: .peye/sessions.
+  --version                Print the @pop-eye/cli version.
 
 Loopback endpoints need no API key; the CLI supplies its local placeholder automatically.
 Hosted endpoints require PEYE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.
@@ -166,8 +168,11 @@ const dispatch = (
   return runConfigured(config, io);
 };
 
+const isCliRunError = (error: unknown): boolean =>
+  typeof error === "object" && error !== null && "_tag" in error && error._tag === "CliRunError";
+
 const cliFailureExitCode = (error: unknown): number =>
-  error instanceof CliArgsError || error instanceof CliConfigError ? 2 : 4;
+  error instanceof CliArgsError || error instanceof CliConfigError || isCliRunError(error) ? 2 : 4;
 
 const reportCliFailure = (
   error: unknown,

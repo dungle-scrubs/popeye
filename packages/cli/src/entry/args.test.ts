@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 import { expect, test } from "vitest";
 
 import type { ParsedRunArgs } from "./args.js";
@@ -86,6 +86,41 @@ test("provider and Session flags are parsed", async () => {
   });
 });
 
+test("--plugin is repeatable in both invocation shapes and defaults to an empty list", async () => {
+  const headless = await parseRunArgs([
+    "-p",
+    "--plugin",
+    "./plugins/first",
+    "--plugin",
+    "../shared/second",
+    "Explain.",
+  ]);
+  const nonHeadless = await parseRunArgs(["--plugin", "./plugins/only", "Explain."]);
+  const absent = await parseRunArgs(["Explain."]);
+
+  expect(headless.pluginPaths).toEqual(["./plugins/first", "../shared/second"]);
+  expect(nonHeadless.pluginPaths).toEqual(["./plugins/only"]);
+  expect(absent.pluginPaths).toEqual([]);
+});
+
+test("a blank --plugin value is rejected as invalid arguments", async () => {
+  const error = await Effect.runPromise(Effect.flip(parseArgs(["-p", "--plugin", "", "Explain."])));
+
+  expect(error).toMatchObject({
+    _tag: "CliArgsError",
+    message: "--plugin requires a non-empty path.",
+    reason: "invalid_arguments",
+  });
+});
+
+test("--no-project-plugins defaults to false and becomes true when present", async () => {
+  const enabled = await parseRunArgs(["--no-project-plugins", "Explain."]);
+  const absent = await parseRunArgs(["Explain."]);
+
+  expect(enabled.noProjectPlugins).toBe(true);
+  expect(absent.noProjectPlugins).toBe(false);
+});
+
 test("--version selects the version action without provider configuration", async () => {
   const parsed = await Effect.runPromise(parseArgs(["--version"]));
 
@@ -109,6 +144,19 @@ test("--api-key is rejected without copying its value into the typed error", asy
     reason: "secret_flag",
   });
   expect(error.message).not.toContain("secret-value");
+});
+
+test("--trust is rejected as an unknown flag with a failing args exit", async () => {
+  const parsed = parseArgs(["--trust", "-p", "Explain."]);
+  const exit = await Effect.runPromiseExit(parsed);
+  const error = await Effect.runPromise(Effect.flip(parsed));
+
+  expect(Exit.isFailure(exit)).toBe(true);
+  expect(error).toMatchObject({
+    _tag: "CliArgsError",
+    message: expect.stringContaining("Unknown option '--trust'"),
+    reason: "invalid_arguments",
+  });
 });
 
 test("rpc mode rejects a positional prompt with a clear typed error", async () => {

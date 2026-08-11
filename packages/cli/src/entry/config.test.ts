@@ -1,3 +1,7 @@
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+
+import { classifyResolvedPluginSource } from "@pop-eye/plugins";
 import { Effect } from "effect";
 import { expect, test } from "vitest";
 
@@ -33,6 +37,97 @@ test("flags override PEYE provider environment values", async () => {
     model: "flag-model",
     sessionDir: "/tmp/flag-sessions",
   });
+});
+
+test("Plugin arguments are exposed through resolved run configuration", async () => {
+  const parsed = await Effect.runPromise(
+    parseArgs([
+      "-p",
+      "--no-project-plugins",
+      "--plugin",
+      "./plugins/first",
+      "--plugin",
+      "../shared/second",
+      "Explain.",
+    ]),
+  );
+  const config = await Effect.runPromise(
+    resolveConfig(parsed, {
+      PEYE_BASE_URL: "http://127.0.0.1:1234/v1",
+      PEYE_MODEL: "local-model",
+    }),
+  );
+
+  expect(config).toMatchObject({
+    action: "run",
+    noProjectPlugins: true,
+    pluginPaths: ["./plugins/first", "../shared/second"],
+  });
+});
+
+test("the user Plugin directory defaults below the operating-system home directory", async () => {
+  const parsed = await Effect.runPromise(parseArgs(["-p", "Explain."]));
+  const config = await Effect.runPromise(
+    resolveConfig(parsed, {
+      PEYE_BASE_URL: "http://127.0.0.1:1234/v1",
+      PEYE_MODEL: "local-model",
+    }),
+  );
+
+  expect(config).toMatchObject({
+    action: "run",
+    userPluginDir: join(homedir(), ".peye", "plugins"),
+  });
+});
+
+test("an empty PEYE_USER_PLUGIN_DIR falls back to the home-directory default", async () => {
+  const parsed = await Effect.runPromise(parseArgs(["-p", "Explain."]));
+  const config = await Effect.runPromise(
+    resolveConfig(parsed, {
+      PEYE_BASE_URL: "http://127.0.0.1:1234/v1",
+      PEYE_MODEL: "local-model",
+      PEYE_USER_PLUGIN_DIR: "",
+    }),
+  );
+
+  expect(config).toMatchObject({
+    action: "run",
+    userPluginDir: join(homedir(), ".peye", "plugins"),
+  });
+});
+
+test("PEYE_USER_PLUGIN_DIR overrides the user Plugin directory for tests", async () => {
+  const parsed = await Effect.runPromise(parseArgs(["-p", "Explain."]));
+  const config = await Effect.runPromise(
+    resolveConfig(parsed, {
+      PEYE_BASE_URL: "http://127.0.0.1:1234/v1",
+      PEYE_MODEL: "local-model",
+      PEYE_USER_PLUGIN_DIR: "/tmp/peye-user-plugins",
+    }),
+  );
+
+  expect(config).toMatchObject({
+    action: "run",
+    userPluginDir: "/tmp/peye-user-plugins",
+  });
+});
+
+test("a CLI Plugin path resolved inside the project tree stays project-local", async () => {
+  const parsed = await Effect.runPromise(
+    parseArgs(["-p", "--plugin", "./plugins/local", "Explain."]),
+  );
+  if (parsed.action !== "run") {
+    throw new Error(`Expected run arguments, received ${parsed.action}.`);
+  }
+  const projectPath = resolve("/tmp/peye-project");
+  const pluginPath = parsed.pluginPaths[0];
+  if (pluginPath === undefined) {
+    throw new Error("Expected one CLI Plugin path.");
+  }
+
+  expect(classifyResolvedPluginSource(projectPath, resolve(projectPath, pluginPath))).toBe(
+    "project-local",
+  );
 });
 
 test("API keys fall back from PEYE to OpenAI and then Anthropic", async () => {

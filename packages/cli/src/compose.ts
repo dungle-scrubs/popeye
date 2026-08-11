@@ -29,19 +29,13 @@ import {
   type CapabilityGrants,
   CommandContributionKind,
   type CommandExecutionContext,
-  type Contribution,
-  ContributionRegistry,
-  ContributionRegistryLive,
   createCapabilityGrants,
-  HookEmitter,
-  HookEmitterLive,
   type HookEmitterService,
-  type PluginManifest,
+  type PluginGeneration,
 } from "@pop-eye/plugins";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Logger, Schema } from "effect";
 
-import { compactPlugin } from "./features/compact.js";
-import { sessionNamePlugin } from "./features/session-name.js";
+import { composePluginRuntime, type FirstPartyPlugin } from "./plugins/pipeline.js";
 
 export type { AssistantItem, DriverSnapshot, ProviderService, Tool, TurnResult };
 export {
@@ -49,6 +43,7 @@ export {
   Driver,
   defineTool,
   PiAiProviderLive,
+  PluginHost,
   Provider,
   ProviderError,
   ToolRegistryLive,
@@ -56,13 +51,8 @@ export {
 
 export const inProcessKernelPackage = kernelPackage;
 
-interface StaticPlugin {
-  readonly contributions: ReadonlyArray<Contribution>;
-  readonly manifest: PluginManifest;
-}
-
 export interface FirstPartyPluginHostOptions {
-  readonly plugins?: ReadonlyArray<StaticPlugin>;
+  readonly plugins?: ReadonlyArray<FirstPartyPlugin>;
 }
 
 const invokeCommandError = (
@@ -116,99 +106,110 @@ const commandExecutionContext = (
   setSessionName: context.setSessionName,
 });
 
+const pluginHostService = (generation: PluginGeneration): PluginHostService => {
+  const { emitter, registry } = generation;
+  const compactionGate: PluginHostService["compactionGate"] = (sessionId, request) => {
+    const grants = createCapabilityGrants(sessionId);
+    return emitCompactionGate(emitter, grants, request).pipe(
+      Effect.catchAll((error) =>
+        Effect.succeed({
+          action: "skip" as const,
+          reason: `Compaction gate failed closed: ${String(error)}`,
+        }),
+      ),
+    );
+  };
+
+  const invokeCommand: PluginHostService["invokeCommand"] = (name, args, context) =>
+    Effect.gen(function* () {
+      const grants = createCapabilityGrants(context.sessionId);
+      const commands = yield* registry
+        .list(CommandContributionKind, grants)
+        .pipe(
+          Effect.mapError((cause) =>
+            invokeCommandError(
+              name,
+              "command_failed",
+              `Command ${name} could not be resolved: ${cause.message}`,
+              cause,
+            ),
+          ),
+        );
+      const matches = commands.filter((command) => command.name === name);
+      if (matches.length === 0) {
+        return yield* invokeCommandError(
+          name,
+          "command_not_found",
+          `Command ${name} was not found.`,
+        );
+      }
+      if (matches.length > 1) {
+        return yield* Effect.fail(
+          invokeCommandError(
+            name,
+            "command_ambiguous",
+            `Command ${name} has multiple Contributions.`,
+          ),
+        );
+      }
+      const command = matches[0];
+      if (command === undefined) {
+        return yield* Effect.die("Command resolution lost its selected Contribution.");
+      }
+      const input = yield* Schema.decodeUnknown(command.payload.arguments, {
+        onExcessProperty: "error",
+      })(args).pipe(
+        Effect.mapError((cause) =>
+          invokeCommandError(
+            name,
+            "arguments_invalid",
+            `Command ${name} arguments are invalid.`,
+            cause,
+          ),
+        ),
+      );
+      const commandContext = commandExecutionContext(name, context, emitter, grants);
+      return yield* command.payload
+        .execute(input, commandContext)
+        .pipe(
+          Effect.mapError((cause) =>
+            cause instanceof InvokeCommandError
+              ? cause
+              : invokeCommandError(name, "command_failed", `Command ${name} failed.`, cause),
+          ),
+        );
+    });
+
+  return { compactionGate, invokeCommand };
+};
+
+export const GenerationPluginHostLive = (generation: PluginGeneration): Layer.Layer<PluginHost> =>
+  Layer.succeed(PluginHost, pluginHostService(generation));
+
+export const GenerationDriverDefault = (
+  generation: PluginGeneration,
+  options: DriverDefaultOptions = {},
+) => DriverDefault(options, GenerationPluginHostLive(generation));
+
 export const FirstPartyPluginHostLive = (
   options: FirstPartyPluginHostOptions = {},
 ): Layer.Layer<PluginHost> =>
   Layer.scoped(
     PluginHost,
-    Effect.gen(function* () {
-      const registryLayer = ContributionRegistryLive();
-      const services = yield* Layer.build(
-        Layer.merge(registryLayer, HookEmitterLive().pipe(Layer.provide(registryLayer))),
-      );
-      const emitter = Context.get(services, HookEmitter);
-      const registry = Context.get(services, ContributionRegistry);
-      const plugins = options.plugins ?? [compactPlugin, sessionNamePlugin];
-      yield* Effect.forEach(
-        plugins,
-        (plugin) => registry.registerPlugin(plugin.manifest, plugin.contributions),
-        { discard: true },
-      ).pipe(Effect.orDie);
-
-      const compactionGate: PluginHostService["compactionGate"] = (sessionId, request) => {
-        const grants = createCapabilityGrants(sessionId);
-        return emitCompactionGate(emitter, grants, request).pipe(
-          Effect.catchAll((error) =>
-            Effect.succeed({
-              action: "skip" as const,
-              reason: `Compaction gate failed closed: ${String(error)}`,
-            }),
-          ),
-        );
-      };
-
-      const invokeCommand: PluginHostService["invokeCommand"] = (name, args, context) =>
-        Effect.gen(function* () {
-          const grants = createCapabilityGrants(context.sessionId);
-          const commands = yield* registry
-            .list(CommandContributionKind, grants)
-            .pipe(
-              Effect.mapError((cause) =>
-                invokeCommandError(
-                  name,
-                  "command_failed",
-                  `Command ${name} could not be resolved: ${cause.message}`,
-                  cause,
-                ),
-              ),
-            );
-          const matches = commands.filter((command) => command.name === name);
-          if (matches.length === 0) {
-            return yield* invokeCommandError(
-              name,
-              "command_not_found",
-              `Command ${name} was not found.`,
-            );
-          }
-          if (matches.length > 1) {
-            return yield* Effect.fail(
-              invokeCommandError(
-                name,
-                "command_ambiguous",
-                `Command ${name} has multiple Contributions.`,
-              ),
-            );
-          }
-          const command = matches[0];
-          if (command === undefined) {
-            return yield* Effect.die("Command resolution lost its selected Contribution.");
-          }
-          const input = yield* Schema.decodeUnknown(command.payload.arguments, {
-            onExcessProperty: "error",
-          })(args).pipe(
-            Effect.mapError((cause) =>
-              invokeCommandError(
-                name,
-                "arguments_invalid",
-                `Command ${name} arguments are invalid.`,
-                cause,
-              ),
-            ),
-          );
-          const commandContext = commandExecutionContext(name, context, emitter, grants);
-          return yield* command.payload
-            .execute(input, commandContext)
-            .pipe(
-              Effect.mapError((cause) =>
-                cause instanceof InvokeCommandError
-                  ? cause
-                  : invokeCommandError(name, "command_failed", `Command ${name} failed.`, cause),
-              ),
-            );
-        });
-
-      return { compactionGate, invokeCommand };
-    }),
+    Effect.acquireRelease(
+      composePluginRuntime({
+        ...(options.plugins === undefined ? {} : { firstPartyPlugins: options.plugins }),
+        noProjectPlugins: true,
+        pluginPaths: [],
+        projectPath: process.cwd(),
+      }).pipe(
+        Effect.provide(
+          Logger.replace(Logger.defaultLogger, Logger.withConsoleError(Logger.logfmtLogger)),
+        ),
+        Effect.orDie,
+      ),
+      (generation) => generation.close,
+    ).pipe(Effect.map(pluginHostService)),
   );
 
 export const FirstPartyDriverDefault = (

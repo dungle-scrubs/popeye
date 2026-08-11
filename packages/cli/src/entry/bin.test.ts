@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -46,6 +46,36 @@ test("the built bin reports the package version and help without Provider config
   expect(help.stdout).toContain("2  Invalid arguments, missing configuration, or an aborted turn.");
   expect(help.stdout).toContain("Read stderr to distinguish exit 2 causes.");
   expect(help.stderr).toBe("");
+});
+
+test("the built help documents plugin flags in alphabetical order", () => {
+  const help = runBuiltBin(["--help"]);
+  const options = help.stdout.slice(
+    help.stdout.indexOf("Options:"),
+    help.stdout.indexOf("\n\nLoopback"),
+  );
+  const orderedFlags = [
+    "--base-url",
+    "--headless",
+    "--help",
+    "--mode",
+    "--model",
+    "--no-project-plugins",
+    "--plugin",
+    "--resume",
+    "--session-dir",
+    "--version",
+  ];
+
+  expect(help.status).toBe(0);
+  expect(options).toContain("--no-project-plugins");
+  expect(options).toContain("--plugin <path>");
+  for (const [index, flag] of orderedFlags.entries()) {
+    const nextFlag = orderedFlags[index + 1];
+    if (nextFlag !== undefined) {
+      expect(options.indexOf(flag)).toBeLessThan(options.indexOf(nextFlag));
+    }
+  }
 });
 
 test("the built print Head accepts positional and piped prompts with pure stdout", () => {
@@ -128,6 +158,84 @@ test("the built RPC Head serves LF-delimited commands until stdin closes", () =>
   ]);
 });
 
+test("the built RPC Head invokes a project Plugin Command", () => {
+  const projectPath = sessionDirectory();
+  const projectPluginDir = join(projectPath, ".peye", "plugins");
+  const sessionDir = join(projectPath, "sessions");
+  const userPluginDir = join(projectPath, "user-plugins");
+  mkdirSync(projectPluginDir, { recursive: true });
+  mkdirSync(userPluginDir, { recursive: true });
+  writeFileSync(
+    join(projectPluginDir, "project-command.ts"),
+    [
+      `import { Effect, Schema } from ${JSON.stringify(new URL("../../node_modules/effect/dist/esm/index.js", import.meta.url).href)};`,
+      "export default () => ({",
+      "  contributions: [{",
+      "    kind: 'command',",
+      "    name: 'project-command',",
+      "    payload: {",
+      "      arguments: Schema.Struct({}),",
+      "      description: 'Run project-command.',",
+      "      execute: () => Effect.succeed('project-result'),",
+      "      name: 'project-command',",
+      "    },",
+      "    priority: 0,",
+      "  }],",
+      "  manifest: { capabilities: [], name: 'project-command', version: '1.0.0' },",
+      "});",
+      "",
+    ].join("\n"),
+  );
+  const env = { ...fakeProviderEnvironment(), PEYE_USER_PLUGIN_DIR: userPluginDir };
+  const create = runBuiltBin(["-p", "--mode", "rpc", "--session-dir", sessionDir], {
+    cwd: projectPath,
+    env,
+    input: `${JSON.stringify({ _tag: "create", id: "create-project-command" })}\n`,
+  });
+
+  expect(create.status).toBe(0);
+  const created = JSON.parse(create.stdout.trimEnd()) as {
+    readonly result?: { readonly sessionId?: unknown };
+  };
+  const sessionId = created.result?.sessionId;
+  expect(sessionId).toBeTypeOf("string");
+  if (typeof sessionId !== "string") {
+    throw new Error("RPC create response did not contain a Session id.");
+  }
+
+  const invoke = runBuiltBin(["-p", "--mode", "rpc", "--session-dir", sessionDir], {
+    cwd: projectPath,
+    env,
+    input: `${[
+      { _tag: "resume", id: "resume-project-command", sessionId },
+      {
+        _tag: "invoke-command",
+        args: {},
+        id: "invoke-project-command",
+        name: "project-command",
+        sessionId,
+      },
+    ]
+      .map((frame) => JSON.stringify(frame))
+      .join("\n")}\n`,
+  });
+
+  expect(invoke.status).toBe(0);
+  expect(
+    invoke.stdout
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line)),
+  ).toContainEqual({
+    id: "invoke-project-command",
+    result: {
+      _tag: "commandInvoked",
+      commandName: "project-command",
+      value: "project-result",
+    },
+  });
+});
+
 test("the built bin reports bad arguments and missing config on stderr", () => {
   const badArguments = runBuiltBin(["--api-key", "secret-value", "-p", FAKE_PROVIDER_PROMPT]);
   const missingConfig = runBuiltBin(["-p", FAKE_PROVIDER_PROMPT]);
@@ -165,4 +273,26 @@ test("the built bin rejects empty stdin and explicit empty provider flags", () =
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain(flag);
   }
+});
+
+test("the built bin exits 2 when a Plugin throws during composition", () => {
+  const root = sessionDirectory();
+  const pluginPath = join(root, "throwing-plugin.ts");
+  const userPluginDir = join(root, "user-plugins");
+  mkdirSync(userPluginDir, { recursive: true });
+  writeFileSync(pluginPath, 'throw new Error("fixture import explosion");\n');
+
+  const result = runBuiltBin(
+    ["-p", "--plugin", pluginPath, "--session-dir", join(root, "sessions"), FAKE_PROVIDER_PROMPT],
+    {
+      env: { ...fakeProviderEnvironment(), PEYE_USER_PLUGIN_DIR: userPluginDir },
+    },
+  );
+
+  expect(result.status).toBe(2);
+  expect(result.stdout).toBe("");
+  expect(result.stderr).toContain("ERROR CliRunError");
+  expect(result.stderr).toContain("composition_failed");
+  expect(result.stderr).toContain(pluginPath);
+  expect(result.stderr).toContain("fixture import explosion");
 });

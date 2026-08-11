@@ -10,7 +10,7 @@ import { Data, Effect, Layer, Logger, Schema, Stream } from "effect";
 import type { AssistantItem, Driver, ProviderService } from "../compose.js";
 import {
   AssistantStopReasonSchema,
-  FirstPartyDriverDefault,
+  GenerationDriverDefault,
   PiAiProviderLive,
   Provider,
   ProviderError,
@@ -22,6 +22,7 @@ import type { RpcInteractions } from "../heads/rpc.js";
 import { RpcInteractionsLive, runRpcHead } from "../heads/rpc.js";
 import type { HeadExitCode, HeadWriteError, HeadWriter } from "../heads/shared.js";
 import { errorMessage, makeWritableHeadWriter, makeWritableLogfmtLogger } from "../heads/shared.js";
+import { composePluginRuntime } from "../plugins/pipeline.js";
 import type { CliRunConfig } from "./config.js";
 import type { CliIo } from "./execute.js";
 
@@ -151,6 +152,20 @@ const dispatch = (
       config.fakeProviderScript === undefined
         ? undefined
         : yield* loadFakeProvider(config.fakeProviderScript);
+    const pluginGeneration = yield* composePluginRuntime({
+      noProjectPlugins: config.noProjectPlugins,
+      pluginPaths: config.pluginPaths,
+      projectPath: process.cwd(),
+      userPluginDir: config.userPluginDir,
+    }).pipe(
+      Effect.mapError((cause) =>
+        runError(
+          "composition_failed",
+          `Could not compose Plugins (composition_failed): ${errorMessage(cause)}`,
+          cause,
+        ),
+      ),
+    );
     const tools = ToolRegistryLive([]);
     const providerLayer =
       provider === undefined
@@ -162,7 +177,7 @@ const dispatch = (
           }).pipe(Layer.provide(tools))
         : Layer.succeed(Provider, provider);
     const dependencies = Layer.mergeAll(JournalJsonl(config.sessionDir), providerLayer, tools);
-    const driver = FirstPartyDriverDefault().pipe(Layer.provide(dependencies));
+    const driver = GenerationDriverDefault(pluginGeneration).pipe(Layer.provide(dependencies));
     const runtime = Layer.merge(driver, RpcInteractionsLive);
     let head: Effect.Effect<HeadExitCode, CliRunError | HeadWriteError, Driver | RpcInteractions>;
     if (config.mode === "rpc") {
@@ -194,6 +209,7 @@ const dispatch = (
 
     return yield* head.pipe(
       Effect.provide(runtime),
+      Effect.ensuring(pluginGeneration.close),
       Effect.mapError((cause) =>
         cause instanceof CliRunError
           ? cause
