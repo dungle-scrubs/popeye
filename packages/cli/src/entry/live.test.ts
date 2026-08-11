@@ -15,7 +15,7 @@
 
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -79,10 +79,6 @@ const hostedConfig =
 // command dispatch supports an in-flight abort.
 const RPC_MID_STREAM_ABORT_UNAVAILABLE = true;
 
-// The executable now adapts project Plugin Tools. This opt-in live case still needs a deterministic
-// live-Provider fixture that reliably requests the contributed Tool.
-const CLI_PROJECT_TOOL_LIVE_FIXTURE_UNAVAILABLE = true;
-
 interface ProcessExit {
   readonly code: number | null;
   readonly signal: NodeJS.Signals | null;
@@ -108,6 +104,11 @@ interface JsonHeadOutput {
   readonly snapshot: Snapshot;
 }
 
+interface LiveProcessOptions {
+  readonly cwd?: string;
+  readonly environment?: NodeJS.ProcessEnv;
+}
+
 const sessionDirectory = (): string => {
   const directory = mkdtempSync(join(tmpdir(), "peye-cli-live-"));
   temporaryDirectories.push(directory);
@@ -131,10 +132,11 @@ const liveEnvironment = (config: LiveProviderConfig): NodeJS.ProcessEnv => ({
 const spawnLiveBin = (
   args: ReadonlyArray<string>,
   config: LiveProviderConfig = requireLiveConfig(),
+  options: LiveProcessOptions = {},
 ): LiveProcess => {
   const child = spawn(process.execPath, [BUILT_BIN_PATH, ...args], {
-    cwd: WORKSPACE_PATH,
-    env: liveEnvironment(config),
+    cwd: options.cwd ?? WORKSPACE_PATH,
+    env: { ...liveEnvironment(config), ...options.environment },
     stdio: ["pipe", "pipe", "pipe"],
   });
   let stderr = "";
@@ -169,8 +171,9 @@ const spawnLiveBin = (
 const runLiveBin = async (
   args: ReadonlyArray<string>,
   config: LiveProviderConfig = requireLiveConfig(),
+  options: LiveProcessOptions = {},
 ): Promise<ProcessExit & { readonly stderr: string; readonly stdout: string }> => {
-  const processRun = spawnLiveBin(args, config);
+  const processRun = spawnLiveBin(args, config, options);
   let stdout = "";
   processRun.child.stdout.setEncoding("utf8");
   processRun.child.stdout.on("data", (chunk: string) => {
@@ -563,12 +566,69 @@ test.skipIf(liveConfig === undefined || RPC_MID_STREAM_ABORT_UNAVAILABLE)(
   LIVE_TEST_TIMEOUT_MS,
 );
 
-test.skipIf(liveConfig === undefined || CLI_PROJECT_TOOL_LIVE_FIXTURE_UNAVAILABLE)(
-  "live CLI: project Plugin Tool calling records toolCalls, toolResult, and the final answer [pending deterministic live fixture]",
-  () => {
-    throw new Error(
-      "The live Provider fixture does not yet deterministically request the project Plugin Tool.",
+test.skipIf(liveConfig === undefined)(
+  "live CLI: project Plugin Tool calling emits Progress and settles the final Snapshot",
+  async () => {
+    const projectPath = sessionDirectory();
+    const projectPluginDir = join(projectPath, ".peye", "plugins");
+    const sessionDir = join(projectPath, "sessions");
+    const userPluginDir = join(projectPath, "user-plugins");
+    const marker = "LIVE-TOOL-MARKER-7C91";
+    const toolName = "echo-with-marker";
+    mkdirSync(projectPluginDir, { recursive: true });
+    mkdirSync(userPluginDir, { recursive: true });
+    writeFileSync(
+      join(projectPluginDir, "echo-with-marker.ts"),
+      [
+        `import { Effect, Schema } from ${JSON.stringify(new URL("../../node_modules/effect/dist/esm/index.js", import.meta.url).href)};`,
+        "export default () => ({",
+        "  contributions: [{",
+        "    kind: 'tool',",
+        `    name: ${JSON.stringify(toolName)},`,
+        "    payload: {",
+        "      description: 'Return the live test marker.',",
+        `      execute: () => Effect.succeed({ content: ${JSON.stringify(marker)} }),`,
+        `      name: ${JSON.stringify(toolName)},`,
+        "      parameters: Schema.Struct({}),",
+        "    },",
+        "    priority: 0,",
+        "  }],",
+        "  manifest: { capabilities: [], name: 'echo-with-marker-plugin', version: '1.0.0' },",
+        "});",
+        "",
+      ].join("\n"),
     );
+    const prompt =
+      "Call the echo-with-marker tool exactly once with {} arguments. Then answer with its result.";
+    const result = await runLiveBin(
+      ["-p", "--mode", "json", "--session-dir", sessionDir, prompt],
+      requireLiveConfig(),
+      {
+        cwd: projectPath,
+        environment: { PEYE_USER_PLUGIN_DIR: userPluginDir },
+      },
+    );
+
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.signal).toBeNull();
+    const output = await parseJsonHeadOutput(result.stdout);
+    const toolStarts = output.progress.filter(
+      (progress) => progress._tag === "toolStarted" && progress.name === toolName,
+    );
+    expect(toolStarts).toHaveLength(1);
+    const toolStarted = toolStarts[0];
+    if (toolStarted === undefined || toolStarted._tag !== "toolStarted") {
+      throw new Error(`Live Provider did not call ${toolName}.`);
+    }
+    expect(output.progress).toContainEqual({
+      _tag: "toolCompleted",
+      isError: false,
+      toolCallId: toolStarted.toolCallId,
+    });
+    expect(output.progress.at(-1)).toMatchObject({ _tag: "turnSettled", stopReason: "done" });
+    expect(output.snapshot.phase).toBe("IDLE");
+    expect(assistantStopReasons(output.snapshot).at(-1)).toBe("done");
+    expect(assistantTexts(output.snapshot).at(-1)).toContain(marker);
   },
   LIVE_TEST_TIMEOUT_MS,
 );

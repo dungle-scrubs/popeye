@@ -784,6 +784,42 @@ test("tool schemas omit $schema and preserve optional unions and descriptions", 
   ]);
 });
 
+test("no-argument tool schemas normalize to an object root providers accept", async () => {
+  const seenTools: Array<Context["tools"]> = [];
+  const noArguments = defineTool({
+    description: "Report status.",
+    execute: () => Effect.succeed({ content: "ok" }),
+    name: "status",
+    parameters: Schema.Struct({}),
+  });
+  const providerLayer = makePiAiProviderLayer(fixtureModel, {
+    classifyError: () => false,
+    streamSimple: (_model, context) => {
+      seenTools.push(context.tools);
+      return interleavedFixture().stream;
+    },
+  });
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const provider = yield* Provider;
+      yield* Stream.runDrain(provider.streamAssistant([], { attempt: 1, turnOrdinal: 1 }));
+    }).pipe(Effect.provide(providerLayer), Effect.provide(ToolRegistryLive([noArguments]))),
+  );
+
+  expect(seenTools[0]).toEqual([
+    {
+      description: "Report status.",
+      name: "status",
+      parameters: {
+        additionalProperties: false,
+        properties: {},
+        type: "object",
+      },
+    },
+  ]);
+});
+
 test("transforming tool schemas with $defs/$ref fail clearly during layer build", async () => {
   const transforming = defineTool({
     description: "Decode a number.",

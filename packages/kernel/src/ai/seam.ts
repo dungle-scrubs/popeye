@@ -126,7 +126,26 @@ const toPiAiTool = (tool: RegisteredTool): PiAiTool => {
       `Tool schema ${tool.name} uses $defs/$ref, which the v1 provider seam does not support.`,
     );
   }
-  const { $schema: _schema, ...parameters } = generated;
+  const { $id: _id, $schema: _schema, ...parameters } = generated;
+  // JSONSchema.make(Schema.Struct({})) emits anyOf[object,array] with no root type, which
+  // OpenAI-compatible endpoints reject: parameters.type must be "object" for every tool.
+  const isEmptyStructArtifact = parameters.type === undefined && Array.isArray(parameters.anyOf);
+  if (isEmptyStructArtifact) {
+    return {
+      description: tool.description,
+      name: tool.name,
+      parameters: {
+        additionalProperties: false,
+        properties: {},
+        type: "object",
+      } as PiAiTool["parameters"],
+    };
+  }
+  if (parameters.type !== "object") {
+    throw new TypeError(
+      `Tool schema ${tool.name} must have an object root; providers reject non-object parameters.`,
+    );
+  }
   return {
     description: tool.description,
     name: tool.name,
