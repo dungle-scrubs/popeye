@@ -75,7 +75,15 @@ Inside this repository, replace `peye` with `pnpm --filter @pop-eye/cli peye` wh
 is not on `PATH`. Use `--resume <sessionId>` to continue a Session. Use `--session-dir <dir>` to
 replace the default `.peye/sessions` Journal directory. Print mode writes settled assistant text.
 JSON mode writes only Progress and Snapshot JSON lines. RPC mode stays open and accepts LF-delimited
-protocol commands on stdin.
+protocol commands on stdin. RPC frames dispatch per Session in arrival order. `abort` and
+`interaction-response` frames bypass the Session queue so they can run during a Turn.
+
+Use `--plugin <path>` to load an additional Plugin. The flag is repeatable. Use
+`--no-project-plugins` to skip project-local Plugins.
+
+The CLI auto-trusts discovered Plugin code. It loads user-global Plugins from `~/.peye/plugins` and
+project Plugins from `.peye/plugins`. Tools contributed by loaded Plugins are available to the
+model.
 
 ## Guides
 

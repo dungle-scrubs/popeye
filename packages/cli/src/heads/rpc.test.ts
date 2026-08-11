@@ -470,6 +470,264 @@ test("rpc runs distinct sessions concurrently while each provider stream is stal
   expect(exitCode).toBe(0);
 });
 
+test("rpc soaks interleaved Session queues, slow Progress, and an oversized final frame", async () => {
+  const input = new PassThrough();
+  const providerStreamsStarted = Promise.withResolvers<void>();
+  const releaseProviders = Promise.withResolvers<void>();
+  const releaseSlowProgressWrite = Promise.withResolvers<void>();
+  const initialProgressWritten = Promise.withResolvers<void>();
+  const promptsCompleted = Promise.withResolvers<void>();
+  const slowProgressWriteStarted = Promise.withResolvers<void>();
+  const subscribeResponseWritten = Promise.withResolvers<void>();
+  const allResponsesWritten = Promise.withResolvers<void>();
+  const outputChunks: Array<string> = [];
+  const expectedResponseIds = new Set([
+    "model-soak-a",
+    "model-soak-b",
+    "model-soak-c",
+    "prompt-soak-a",
+    "prompt-soak-b",
+    "prompt-soak-c",
+    "snapshot-soak-a",
+    "snapshot-soak-b",
+    "snapshot-soak-c",
+    "subscribe-soak",
+  ]);
+  const writtenResponseIds = new Set<string>();
+  let promptCompleteCount = 0;
+  let providerStartCount = 0;
+  let slowProgressSessionId = "";
+  let slowWriteUsed = false;
+  const waitForSignal = (label: string, signal: Promise<void>) =>
+    Effect.promise(() => signal).pipe(
+      Effect.timeoutFail({
+        duration: "2 seconds",
+        onTimeout: () =>
+          new Error(`Timed out waiting for ${label}. Provider starts: ${providerStartCount}.`),
+      }),
+    );
+  const stalledProvider: ProviderService = {
+    streamAssistant: () =>
+      Stream.fromEffect(
+        Effect.sync(() => {
+          providerStartCount += 1;
+          if (providerStartCount === 3) {
+            providerStreamsStarted.resolve();
+          }
+        }).pipe(Effect.as({ _tag: "textDelta" as const, text: "soak-delta-0\n" })),
+      ).pipe(
+        Stream.concat(
+          Stream.fromIterable(
+            Array.from({ length: 95 }, (_, index) => ({
+              _tag: "textDelta" as const,
+              text: `soak-delta-${index + 1}\n`,
+            })),
+          ),
+        ),
+        Stream.concat(
+          Stream.fromEffect(
+            Effect.promise(() => releaseProviders.promise).pipe(
+              Effect.as({ _tag: "done" as const, stopReason: "done" as const }),
+            ),
+          ),
+        ),
+      ),
+  };
+  const stalledLayer = Layer.merge(
+    FirstPartyDriverDefault().pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          JournalMemory(createMemoryJournalBacking()),
+          Layer.succeed(Provider, stalledProvider),
+          ToolRegistryLive([]),
+        ),
+      ),
+    ),
+    RpcInteractionsLive,
+  );
+  const writer: HeadWriter = {
+    write: (text) =>
+      Effect.promise(async () => {
+        const frame = JSON.parse(text) as Record<string, unknown>;
+        if (
+          !slowWriteUsed &&
+          frame._tag === "assistantText" &&
+          frame.sessionId === slowProgressSessionId
+        ) {
+          slowWriteUsed = true;
+          slowProgressWriteStarted.resolve();
+          await releaseSlowProgressWrite.promise;
+        }
+        outputChunks.push(text);
+        if (frame._tag === "phaseChanged" && frame.sessionId === slowProgressSessionId) {
+          initialProgressWritten.resolve();
+        }
+        if (typeof frame.id === "string" && expectedResponseIds.has(frame.id)) {
+          writtenResponseIds.add(frame.id);
+          if (frame.id === "subscribe-soak") {
+            subscribeResponseWritten.resolve();
+          }
+          if (writtenResponseIds.size === expectedResponseIds.size) {
+            allResponsesWritten.resolve();
+          }
+        }
+      }),
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const sessionA = yield* driver.createSession();
+      const sessionB = yield* driver.createSession();
+      const sessionC = yield* driver.createSession();
+      slowProgressSessionId = sessionA.id;
+      const observedDriver = {
+        ...driver,
+        prompt: (...args: Parameters<typeof driver.prompt>) =>
+          driver.prompt(...args).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                promptCompleteCount += 1;
+                if (promptCompleteCount === 3) {
+                  promptsCompleted.resolve();
+                }
+              }),
+            ),
+          ),
+      } satisfies typeof driver;
+      const head = yield* runRpcHead({ input, writer }).pipe(
+        Effect.provide(Layer.succeed(Driver, observedDriver)),
+        Effect.fork,
+      );
+      const send = (frame: Record<string, unknown>): void => {
+        input.write(`${JSON.stringify(frame)}\n`);
+      };
+
+      send({ _tag: "subscribe-progress", id: "subscribe-soak", sessionId: sessionA.id });
+      yield* waitForSignal("the subscribe response", subscribeResponseWritten.promise);
+      yield* waitForSignal("initial Progress", initialProgressWritten.promise);
+
+      send({
+        _tag: "prompt",
+        content: "Stall Session A.",
+        id: "prompt-soak-a",
+        sessionId: sessionA.id,
+      });
+      send({
+        _tag: "prompt",
+        content: "Stall Session B.",
+        id: "prompt-soak-b",
+        sessionId: sessionB.id,
+      });
+      send({
+        _tag: "set-model",
+        id: "model-soak-a",
+        model: "provider/soak-a",
+        sessionId: sessionA.id,
+      });
+      send({
+        _tag: "prompt",
+        content: "Stall Session C.",
+        id: "prompt-soak-c",
+        sessionId: sessionC.id,
+      });
+      send({ _tag: "get-snapshot", id: "snapshot-soak-b", sessionId: sessionB.id });
+      send({
+        _tag: "set-model",
+        id: "model-soak-c",
+        model: "provider/soak-c",
+        sessionId: sessionC.id,
+      });
+      send({ _tag: "get-snapshot", id: "snapshot-soak-a", sessionId: sessionA.id });
+      send({
+        _tag: "set-model",
+        id: "model-soak-b",
+        model: "provider/soak-b",
+        sessionId: sessionB.id,
+      });
+      send({ _tag: "get-snapshot", id: "snapshot-soak-c", sessionId: sessionC.id });
+
+      yield* waitForSignal("3 Provider streams", providerStreamsStarted.promise);
+      releaseProviders.resolve();
+      yield* waitForSignal("the slow Progress write", slowProgressWriteStarted.promise);
+      yield* waitForSignal("3 completed prompts", promptsCompleted.promise);
+      releaseSlowProgressWrite.resolve();
+      yield* waitForSignal("all correlated responses", allResponsesWritten.promise);
+
+      send({
+        _tag: "prompt",
+        content: "x".repeat(MAX_RPC_FRAME_BYTES + 1),
+        id: "oversized-soak",
+        sessionId: sessionA.id,
+      });
+      const exitCode = yield* Fiber.join(head).pipe(Effect.timeout("2 seconds"));
+      return { exitCode, sessionA, sessionB, sessionC };
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          releaseProviders.resolve();
+          releaseSlowProgressWrite.resolve();
+          input.end();
+        }),
+      ),
+      Effect.provide(stalledLayer),
+    ),
+  );
+
+  const stdout = outputChunks.join("");
+  const stdoutLines = stdout.trimEnd().split("\n");
+  const frames = stdoutLines.map((line) => JSON.parse(line) as Record<string, unknown>);
+  const correlatedIds = frames.flatMap((frame) =>
+    typeof frame.id === "string" && expectedResponseIds.has(frame.id) ? [frame.id] : [],
+  );
+  const responseOrderFor = (sessionId: string): ReadonlyArray<string> =>
+    frames.flatMap((frame) => {
+      const resultFrame =
+        typeof frame.result === "object" && frame.result !== null
+          ? (frame.result as Record<string, unknown>)
+          : undefined;
+      return resultFrame?.sessionId === sessionId && typeof frame.id === "string" ? [frame.id] : [];
+    });
+
+  expect(result.exitCode).toBe(0);
+  expect(providerStartCount).toBe(3);
+  expect(slowWriteUsed).toBe(true);
+  expect(correlatedIds.sort()).toEqual([...expectedResponseIds].sort());
+  expect(responseOrderFor(result.sessionA.id)).toEqual([
+    "subscribe-soak",
+    "prompt-soak-a",
+    "model-soak-a",
+    "snapshot-soak-a",
+  ]);
+  expect(responseOrderFor(result.sessionB.id)).toEqual([
+    "prompt-soak-b",
+    "snapshot-soak-b",
+    "model-soak-b",
+  ]);
+  expect(responseOrderFor(result.sessionC.id)).toEqual([
+    "prompt-soak-c",
+    "model-soak-c",
+    "snapshot-soak-c",
+  ]);
+  expect(frames).toContainEqual(
+    expect.objectContaining({
+      _tag: "progressDropped",
+      count: expect.any(Number),
+      sessionId: result.sessionA.id,
+    }),
+  );
+  expect(frames).toContainEqual(
+    expect.objectContaining({
+      error: expect.objectContaining({
+        code: "protocol_error",
+        details: expect.objectContaining({ reason: "malformed_frame" }),
+      }),
+    }),
+  );
+  expect(outputChunks.every((chunk) => chunk.endsWith("\n"))).toBe(true);
+  expect(frames).toHaveLength(stdoutLines.length);
+}, 10_000);
+
 test("rpc EOF interrupts a waiting prompt handler without cancelling accepted kernel work", async () => {
   const input = new PassThrough();
   const providerEntered = Promise.withResolvers<void>();
