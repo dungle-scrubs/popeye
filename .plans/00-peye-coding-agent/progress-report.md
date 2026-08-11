@@ -243,12 +243,12 @@ Source: `implementation.md` (M19); D-005, D-021
 ### M20: Protocol schemas
 Source: `implementation.md` (M20); D-017, D-021
 
-- [ ] Schema frames exist for every kernel primitive and invoke-command
-- [ ] Snapshot schema carries full transcript, phase, revision, model, thinking level, capability grants, loaded generation
-- [ ] Entry-id addressing is present in the schema (pagination reserved)
-- [ ] Interaction request frames carry id, kind (select/confirm/input), timeout, and declared fallback
-- [ ] Malformed frames decode to typed `ProtocolError`
-- [ ] The protocol package has zero kernel imports (package graph verified)
+- [x] Schema frames exist for every kernel primitive and invoke-command
+- [x] Snapshot schema carries full transcript, phase, revision, model, thinking level, capability grants, loaded generation
+- [x] Entry-id addressing is present in the schema (pagination reserved)
+- [x] Interaction request frames carry id, kind (select/confirm/input), timeout, and declared fallback
+- [x] Malformed frames decode to typed `ProtocolError`
+- [x] The protocol package has zero kernel imports (package graph verified)
 
 ### M21: print and json heads
 Source: `implementation.md` (M21)
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 143
-- Remaining: 34
-- Current cutoff blockers: 34
+- Completed: 149
+- Remaining: 28
+- Current cutoff blockers: 28
 - Accepted/deferred follow-up: 5
 - Superseded/obsolete checklist debt: 0
