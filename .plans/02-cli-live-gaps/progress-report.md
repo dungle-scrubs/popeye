@@ -22,16 +22,18 @@ Source: `implementation.md` (M1); D-013, D-014
 ### M2: Generation composition
 Source: `implementation.md` (M2); D-002, D-008, D-010, D-011, D-014
 
-- [ ] Empty project: first-party plugins load through the generation registry; `compact` and `session-name` commands invoke
-- [ ] A fixture project plugin in `.peye/plugins` loads and its command invokes
-- [ ] A user-global fixture plugin loads in phase 1, before any project code
-- [ ] An out-of-tree `--plugin` path loads phase-1; an in-tree `--plugin` path loads phase-2
-- [ ] `--no-project-plugins` skips `.peye/plugins` AND project-local `--plugin` paths; user-global and out-of-tree sources still load
-- [ ] `loadGeneration` composes `trust: "trusted"` over `TrustStoreMemory`; a fresh store re-resolves (nothing durably recorded)
-- [ ] A phase-2 plugin whose manifest name matches a loaded phase-1 plugin fails registration with a diagnostic naming both paths; the run fails closed
-- [ ] A plugin that throws at import fails the run as `CliRunError` `composition_failed` naming file and cause; the bin exits 2
-- [ ] All four diagnostic sinks (trust, registry, hook, generation) are wired to the stderr logfmt logger
-- [ ] The generation-backed `PluginHost` replaces the static registry; `compactionGate` and `invokeCommand` keep existing behavior (existing tests stay green)
+- [x] Empty project: first-party plugins load through the generation registry; `compact` and `session-name` commands invoke
+- [x] A fixture project plugin in `.peye/plugins` loads and its command invokes
+- [x] A user-global fixture plugin loads in phase 1, before any project code
+- [x] An out-of-tree `--plugin` path loads phase-1; an in-tree `--plugin` path loads phase-2
+- [x] `--no-project-plugins` skips `.peye/plugins` AND project-local `--plugin` paths; user-global and out-of-tree sources still load
+- [x] `loadGeneration` composes `trust: "trusted"` over `TrustStoreMemory`; a fresh store re-resolves (nothing durably recorded)
+- [x] A phase-2 plugin whose manifest name matches a loaded phase-1 plugin fails registration with a diagnostic naming both paths; the run fails closed
+- [x] A plugin that throws at import fails the run as `CliRunError` `composition_failed` naming file and cause; the bin exits 2
+- [x] All four diagnostic sinks (trust, registry, hook, generation) are wired to the stderr logfmt logger
+- [x] The generation-backed `PluginHost` replaces the static registry; `compactionGate` and `invokeCommand` keep existing behavior (existing tests stay green)
+- [x] Any two plugin sources sharing a manifest name fail composition closed naming both paths (D-020; includes user-global vs first-party)
+- [x] `--no-project-plugins` decoy project path is a fresh empty temp directory (invariant by construction, not convention)
 
 ## Phase 2: Tool adaptation and audit surface
 
@@ -109,9 +111,9 @@ Source: `implementation.md` (Deferred follow-up); D-006, D-010
 (none)
 
 ## Summary
-- Total features: 50
-- Completed: 6
-- Remaining: 44
-- Current cutoff blockers: 44
+- Total features: 52
+- Completed: 18
+- Remaining: 34
+- Current cutoff blockers: 34
 - Accepted/deferred follow-up: 4
 - Superseded/obsolete checklist debt: 0
