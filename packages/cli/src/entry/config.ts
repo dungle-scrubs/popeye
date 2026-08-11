@@ -40,6 +40,8 @@ export type CliConfig = CliRunConfig | { readonly action: "help" } | { readonly 
 export type CliEnvironment = Readonly<Record<string, string | undefined>>;
 
 const BASE_URL_SETUP = "Set --base-url <url> or PEYE_BASE_URL.";
+// Local OpenAI-compatible servers ignore the key, but pi-ai requires a non-empty value.
+const LOCAL_API_KEY_PLACEHOLDER = "local";
 const MODEL_SETUP = "Set --model <model> or PEYE_MODEL.";
 
 const configured = (value: string | undefined): string | undefined =>
@@ -105,7 +107,9 @@ export const resolveConfig = (
         ),
       try: () => new URL(baseUrl),
     });
-    const apiKey = resolveApiKey(env);
+    const apiKey =
+      resolveApiKey(env) ??
+      (isLoopbackHost(endpoint.hostname) ? LOCAL_API_KEY_PLACEHOLDER : undefined);
     if (!isLoopbackHost(endpoint.hostname) && apiKey === undefined) {
       return yield* configError(
         "missing_api_key",

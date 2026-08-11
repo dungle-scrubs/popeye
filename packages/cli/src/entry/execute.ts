@@ -40,7 +40,8 @@ Options:
   --version              Print the @peye/cli version.
   --help                 Print this usage text.
 
-API keys are read only from PEYE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.
+Loopback endpoints need no API key; the CLI supplies its local placeholder automatically.
+Hosted endpoints require PEYE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.
 
 Exit status:
   0  Turn completed or truncated.

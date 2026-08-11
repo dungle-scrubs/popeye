@@ -1,0 +1,6 @@
+{"payload":{"format":"peye_journal","sessionId":"dvo3r0BFp-Mb2tXg","type":"journal_header","version":1},"v":1}
+{"payload":{"item":{"id":"lu2nLnWETfp0Tii_","kind":"session_root","parentId":null,"payload":{}},"sessionId":"dvo3r0BFp-Mb2tXg","type":"entry"},"v":1}
+{"payload":{"item":{"id":"3h08KBP26mpvtNkR","kind":"message","parentId":"lu2nLnWETfp0Tii_","payload":{"content":"Write a haiku about append-only logs.","role":"user"}},"sessionId":"dvo3r0BFp-Mb2tXg","type":"entry"},"v":1}
+{"payload":{"item":{"id":"TrKHfNDlU2Bl1upH","kind":"operation_started","payload":{"intent":"turn","operationId":"2c3730ef-411a-4a50-b324-7975a5014915","promptEntryId":"3h08KBP26mpvtNkR","turnOrdinal":1}},"sessionId":"dvo3r0BFp-Mb2tXg","type":"record"},"v":1}
+{"payload":{"item":{"id":"PcTxqNc8v8zAbcye","kind":"message","parentId":"3h08KBP26mpvtNkR","payload":{"content":"","diagnostic":{"attempts":1,"detail":"No API key for provider: openai","reason":"provider_error"},"role":"assistant","stopReason":"error"}},"sessionId":"dvo3r0BFp-Mb2tXg","type":"entry"},"v":1}
+{"payload":{"item":{"id":"fyK-36nzDljV73FR","kind":"operation_finished","payload":{"operationId":"2c3730ef-411a-4a50-b324-7975a5014915","outcome":"error"}},"sessionId":"dvo3r0BFp-Mb2tXg","type":"record"},"v":1}
