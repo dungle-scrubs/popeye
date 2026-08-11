@@ -114,7 +114,7 @@ test("explicit empty provider flags do not fall through to environment values", 
   });
 });
 
-test("loopback endpoints need no key while hosted endpoints name every key environment variable", async () => {
+test("loopback endpoints get a provider placeholder while hosted endpoints require a key", async () => {
   const parsed = await Effect.runPromise(parseArgs(["-p", "Explain."]));
   const local = await Effect.runPromise(
     resolveConfig(parsed, {
@@ -131,7 +131,10 @@ test("loopback endpoints need no key while hosted endpoints name every key envir
     ),
   );
 
-  expect(local).toMatchObject({ apiKey: undefined, baseUrlHost: "127.0.0.1" });
+  expect(local).toMatchObject({
+    apiKey: expect.stringMatching(/.+/u),
+    baseUrlHost: "127.0.0.1",
+  });
   expect(hosted).toMatchObject({
     _tag: "CliConfigError",
     message: expect.stringMatching(/PEYE_API_KEY.*OPENAI_API_KEY.*ANTHROPIC_API_KEY/u),
