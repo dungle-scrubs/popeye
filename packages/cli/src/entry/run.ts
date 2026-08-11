@@ -1,8 +1,9 @@
 /**
  * Owns executable I/O, Provider selection, Driver composition, and Head dispatch.
  * It exists so the bin has one Effect boundary and stdout remains owned by the selected Head.
+ * The STARTUP line is written only after Plugin composition succeeds (it carries toolCount);
+ * a failed composition writes the ERROR line alone.
  */
-import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import { JournalJsonl, SessionIdSchema } from "@pop-eye/journal";
@@ -171,7 +172,8 @@ const dispatch = (
       ),
     );
     return yield* Effect.gen(function* () {
-      const grantSessionId = SessionIdSchema.make(randomUUID());
+      // Grants are per-process (D-006); the sentinel id keeps any future debug dump unambiguous.
+      const grantSessionId = SessionIdSchema.make("capability-grants");
       const grants = createCapabilityGrants(
         grantSessionId,
         generationCapabilityUnion(pluginGeneration),

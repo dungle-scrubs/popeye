@@ -19,12 +19,15 @@ import { ToolError } from "../compose.js";
 
 type RegisteredToolContribution = RegisteredContribution<"tool", AnyToolDeclaration>;
 
+/** First-party entries carry an origin marker the plugins package does not define. */
+export type CliGenerationPlugin = GenerationPlugin & { readonly origin?: "first-party" };
+
 interface ToolCandidate {
   readonly contribution: RegisteredToolContribution;
-  readonly plugin: GenerationPlugin;
+  readonly plugin: CliGenerationPlugin;
 }
 
-type PluginIndex = ReadonlyMap<string, GenerationPlugin>;
+type PluginIndex = ReadonlyMap<string, CliGenerationPlugin>;
 
 export const generationCapabilityUnion = (generation: PluginGeneration): ReadonlyArray<string> =>
   [
@@ -61,14 +64,20 @@ const adaptTool = (contribution: RegisteredToolContribution): Tool.Any => {
   };
 };
 
-const pluginNameOf = (contribution: RegisteredToolContribution): string =>
-  contribution.key.slice(0, contribution.key.indexOf("/"));
+const pluginNameOf = (contribution: RegisteredToolContribution): string => {
+  // PluginNameSchema forbids "/", so the first separator always ends the plugin name.
+  const separator = contribution.key.indexOf("/");
+  if (separator < 0) {
+    throw new Error(`Contribution key ${contribution.key} has no plugin namespace.`);
+  }
+  return contribution.key.slice(0, separator);
+};
 
 const compareText = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;
 
-const scopePriority = (plugin: GenerationPlugin): number => {
-  if ("origin" in plugin && plugin.origin === "first-party") {
+const scopePriority = (plugin: CliGenerationPlugin): number => {
+  if (plugin.origin === "first-party") {
     return 0;
   }
   return plugin.scope === "project-local" ? 2 : 1;
@@ -88,7 +97,10 @@ const resolveShadowing = (
     for (const contribution of contributions) {
       const plugin = plugins.get(pluginNameOf(contribution));
       if (plugin === undefined) {
-        continue;
+        // The registry and generation.plugins come from one composition; divergence is a defect.
+        return yield* Effect.die(
+          `Tool contribution ${contribution.key} has no owning Plugin in the generation.`,
+        );
       }
       const candidates = byToolName.get(contribution.payload.name) ?? [];
       candidates.push({ contribution, plugin });
@@ -135,7 +147,11 @@ export const adaptTools = (
   grants: CapabilityGrants,
 ): Effect.Effect<ReadonlyArray<Tool.Any>, ContributionRegistryError> =>
   Effect.gen(function* () {
-    const plugins = new Map(generation.plugins.map((plugin) => [plugin.name, plugin]));
+    const plugins = new Map(
+      generation.plugins.map((plugin) => [plugin.name, plugin as CliGenerationPlugin]),
+    );
+    // listAll then list are two reads, but the generation is immutable after composition,
+    // so the pair cannot observe different states.
     const allContributions = yield* generation.registry.listAll(ToolContributionKind);
     const invalidKeys = new Set<string>();
     for (const contribution of allContributions) {

@@ -437,4 +437,6 @@ test("the built bin exits 2 when a Plugin throws during composition", () => {
   expect(result.stderr).toContain("composition_failed");
   expect(result.stderr).toContain(pluginPath);
   expect(result.stderr).toContain("fixture import explosion");
+  // Contract: STARTUP carries toolCount, so it is written only after composition succeeds.
+  expect(startupRecords(result.stderr)).toEqual([]);
 });
