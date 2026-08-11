@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -195,4 +195,26 @@ test("the built bin rejects empty stdin and explicit empty provider flags", () =
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain(flag);
   }
+});
+
+test("the built bin exits 2 when a Plugin throws during composition", () => {
+  const root = sessionDirectory();
+  const pluginPath = join(root, "throwing-plugin.ts");
+  const userPluginDir = join(root, "user-plugins");
+  mkdirSync(userPluginDir, { recursive: true });
+  writeFileSync(pluginPath, 'throw new Error("fixture import explosion");\n');
+
+  const result = runBuiltBin(
+    ["-p", "--plugin", pluginPath, "--session-dir", join(root, "sessions"), FAKE_PROVIDER_PROMPT],
+    {
+      env: { ...fakeProviderEnvironment(), PEYE_USER_PLUGIN_DIR: userPluginDir },
+    },
+  );
+
+  expect(result.status).toBe(2);
+  expect(result.stdout).toBe("");
+  expect(result.stderr).toContain("ERROR CliRunError");
+  expect(result.stderr).toContain("composition_failed");
+  expect(result.stderr).toContain(pluginPath);
+  expect(result.stderr).toContain("fixture import explosion");
 });

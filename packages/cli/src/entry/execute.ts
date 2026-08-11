@@ -168,8 +168,11 @@ const dispatch = (
   return runConfigured(config, io);
 };
 
+const isCliRunError = (error: unknown): boolean =>
+  typeof error === "object" && error !== null && "_tag" in error && error._tag === "CliRunError";
+
 const cliFailureExitCode = (error: unknown): number =>
-  error instanceof CliArgsError || error instanceof CliConfigError ? 2 : 4;
+  error instanceof CliArgsError || error instanceof CliConfigError || isCliRunError(error) ? 2 : 4;
 
 const reportCliFailure = (
   error: unknown,
