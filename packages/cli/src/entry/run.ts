@@ -23,7 +23,12 @@ import { runJsonHead } from "../heads/json.js";
 import { runPrintHead } from "../heads/print.js";
 import type { RpcInteractions } from "../heads/rpc.js";
 import { RpcInteractionsLive, runRpcHead } from "../heads/rpc.js";
-import type { HeadExitCode, HeadWriteError, HeadWriter } from "../heads/shared.js";
+import type {
+  HeadExitCode,
+  HeadWriteError,
+  HeadWriter,
+  SnapshotAuditFields,
+} from "../heads/shared.js";
 import { errorMessage, makeWritableHeadWriter, makeWritableLogfmtLogger } from "../heads/shared.js";
 import { composePluginRuntime } from "../plugins/pipeline.js";
 import { adaptTools, generationCapabilityUnion } from "../tools/adapter.js";
@@ -178,6 +183,13 @@ const dispatch = (
         grantSessionId,
         generationCapabilityUnion(pluginGeneration),
       );
+      const snapshotAudit = {
+        capabilityGrants: grants.capabilities,
+        loadedGeneration: {
+          id: pluginGeneration.id,
+          plugins: pluginGeneration.plugins.map((plugin) => plugin.name),
+        },
+      } satisfies SnapshotAuditFields;
       const adaptedTools = yield* adaptTools(pluginGeneration, grants).pipe(
         Effect.mapError((cause) =>
           runError(
@@ -222,6 +234,7 @@ const dispatch = (
           input: io.input,
           loggerOutput: io.stderr,
           ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
+          snapshotAudit,
           writer,
         });
       } else if (config.prompt === undefined) {
@@ -232,6 +245,7 @@ const dispatch = (
         head = runJsonHead({
           prompts: [config.prompt],
           ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
+          snapshotAudit,
           writer,
         });
       } else {

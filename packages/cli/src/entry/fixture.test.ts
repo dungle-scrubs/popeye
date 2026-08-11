@@ -40,11 +40,17 @@ const captureBuiltStream = (): string => {
 
 test("the committed CLI JSON stream decodes as Progress followed by a Snapshot", async () => {
   const fixture = readFileSync(FIXTURE_PATH, "utf8");
+  const snapshot = JSON.parse(lines(fixture).at(-1) ?? "null") as Record<string, unknown>;
 
   await expect(decodeWireStream(fixture)).resolves.toBeUndefined();
-  expect(
-    (JSON.parse(lines(fixture).at(-1) ?? "null") as { readonly entries?: unknown }).entries,
-  ).toBeDefined();
+  expect(snapshot.entries).toBeDefined();
+  expect(snapshot).toMatchObject({
+    capabilityGrants: [],
+    loadedGeneration: {
+      id: expect.any(String),
+      plugins: ["compact", "session-name"],
+    },
+  });
 });
 
 test("the normalized CLI JSON stream is stable across 2 built-bin runs", () => {

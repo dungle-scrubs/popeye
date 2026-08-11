@@ -42,7 +42,9 @@ import {
   HeadWriteError,
   type HeadWriter,
   makeWritableLogfmtLogger,
+  protocolSnapshot,
   runHeadBoundary,
+  type SnapshotAuditFields,
   stderrHeadWriter,
   stdoutHeadWriter,
 } from "./shared.js";
@@ -59,6 +61,7 @@ export interface RpcHeadOptions {
   readonly input: Readable;
   readonly loggerOutput?: Writable;
   readonly resumeSessionId?: SessionId;
+  readonly snapshotAudit?: SnapshotAuditFields;
   readonly writer?: HeadWriter;
 }
 
@@ -409,17 +412,14 @@ const decodeRpcInboundCommand = (frame: string): Effect.Effect<RpcInboundCommand
     }),
   );
 
-const connectionSnapshot = (snapshot: DriverSnapshot, attached: boolean) => ({
+const connectionSnapshot = (
+  snapshot: DriverSnapshot,
+  attached: boolean,
+  snapshotAudit: SnapshotAuditFields | undefined,
+) => ({
   _tag: "snapshot" as const,
   attached,
-  entries: snapshot.entries,
-  leafEntryId: snapshot.leaf.id,
-  ...(snapshot.model === undefined ? {} : { model: snapshot.model }),
-  ...(snapshot.name === undefined ? {} : { name: snapshot.name }),
-  phase: snapshot.phase,
-  revision: snapshot.revision,
-  sessionId: snapshot.sessionId,
-  ...(snapshot.thinkingLevel === undefined ? {} : { thinkingLevel: snapshot.thinkingLevel }),
+  ...protocolSnapshot(snapshot, snapshotAudit),
 });
 
 const writeResponse = (
@@ -434,8 +434,9 @@ const writeSnapshotResponse = (
   id: string | undefined,
   snapshot: DriverSnapshot,
   attached: boolean,
+  snapshotAudit: SnapshotAuditFields | undefined,
 ): Effect.Effect<void, HeadWriteError> =>
-  writeResponse(writer, id, connectionSnapshot(snapshot, attached));
+  writeResponse(writer, id, connectionSnapshot(snapshot, attached, snapshotAudit));
 
 const writeProtocolError = (
   writer: HeadWriter,
@@ -745,6 +746,12 @@ const abortResult = (result: {
 
 export const runRpcHead = (options: RpcHeadOptions) => {
   const writer = options.writer ?? stdoutHeadWriter;
+  const writeSnapshot = (
+    id: string | undefined,
+    snapshot: DriverSnapshot,
+    attached: boolean,
+  ): Effect.Effect<void, HeadWriteError> =>
+    writeSnapshotResponse(writer, id, snapshot, attached, options.snapshotAudit);
   return runHeadBoundary(
     Effect.gen(function* () {
       const attached = new Set<string>();
@@ -771,9 +778,7 @@ export const runRpcHead = (options: RpcHeadOptions) => {
               if (command._tag === "attach") {
                 return driver.getSnapshot(command.sessionId).pipe(
                   Effect.tap(() => Effect.sync(() => attached.add(command.sessionId))),
-                  Effect.flatMap((snapshot) =>
-                    writeSnapshotResponse(writer, command.id, snapshot, true),
-                  ),
+                  Effect.flatMap((snapshot) => writeSnapshot(command.id, snapshot, true)),
                   Effect.flatMap(() => {
                     if (command.interactive === false) {
                       return Effect.void;
@@ -795,9 +800,7 @@ export const runRpcHead = (options: RpcHeadOptions) => {
               if (command._tag === "detach") {
                 return driver.getSnapshot(command.sessionId).pipe(
                   Effect.tap(() => Effect.sync(() => attached.delete(command.sessionId))),
-                  Effect.flatMap((snapshot) =>
-                    writeSnapshotResponse(writer, command.id, snapshot, false),
-                  ),
+                  Effect.flatMap((snapshot) => writeSnapshot(command.id, snapshot, false)),
                   Effect.flatMap(() => {
                     const subscription = progressSubscriptions.get(command.sessionId);
                     if (subscription !== undefined) {
@@ -837,43 +840,27 @@ export const runRpcHead = (options: RpcHeadOptions) => {
                   .branch(command.sessionId, command.toEntryId, command.expectedRevision)
                   .pipe(
                     Effect.flatMap((snapshot) =>
-                      writeSnapshotResponse(
-                        writer,
-                        command.id,
-                        snapshot,
-                        attached.has(command.sessionId),
-                      ),
+                      writeSnapshot(command.id, snapshot, attached.has(command.sessionId)),
                     ),
                   );
               }
               if (command._tag === "create") {
                 return driver.createSession().pipe(
                   Effect.flatMap((session) => driver.getSnapshot(session.id)),
-                  Effect.flatMap((snapshot) =>
-                    writeSnapshotResponse(writer, command.id, snapshot, false),
-                  ),
+                  Effect.flatMap((snapshot) => writeSnapshot(command.id, snapshot, false)),
                 );
               }
               if (command._tag === "fork") {
                 return driver
                   .fork(command.sessionId, command.fromEntryId, command.expectedRevision)
-                  .pipe(
-                    Effect.flatMap((snapshot) =>
-                      writeSnapshotResponse(writer, command.id, snapshot, false),
-                    ),
-                  );
+                  .pipe(Effect.flatMap((snapshot) => writeSnapshot(command.id, snapshot, false)));
               }
               if (command._tag === "get-snapshot") {
                 return driver
                   .getSnapshot(command.sessionId)
                   .pipe(
                     Effect.flatMap((snapshot) =>
-                      writeSnapshotResponse(
-                        writer,
-                        command.id,
-                        snapshot,
-                        attached.has(command.sessionId),
-                      ),
+                      writeSnapshot(command.id, snapshot, attached.has(command.sessionId)),
                     ),
                   );
               }
@@ -917,12 +904,7 @@ export const runRpcHead = (options: RpcHeadOptions) => {
                   .pipe(
                     Effect.zipRight(driver.getSnapshot(command.sessionId)),
                     Effect.flatMap((snapshot) =>
-                      writeSnapshotResponse(
-                        writer,
-                        command.id,
-                        snapshot,
-                        attached.has(command.sessionId),
-                      ),
+                      writeSnapshot(command.id, snapshot, attached.has(command.sessionId)),
                     ),
                   );
               }
@@ -930,12 +912,7 @@ export const runRpcHead = (options: RpcHeadOptions) => {
                 return driver.resumeSession(command.sessionId).pipe(
                   Effect.zipRight(driver.getSnapshot(command.sessionId)),
                   Effect.flatMap((snapshot) =>
-                    writeSnapshotResponse(
-                      writer,
-                      command.id,
-                      snapshot,
-                      attached.has(command.sessionId),
-                    ),
+                    writeSnapshot(command.id, snapshot, attached.has(command.sessionId)),
                   ),
                 );
               }
@@ -945,12 +922,7 @@ export const runRpcHead = (options: RpcHeadOptions) => {
                   .pipe(
                     Effect.zipRight(driver.getSnapshot(command.sessionId)),
                     Effect.flatMap((snapshot) =>
-                      writeSnapshotResponse(
-                        writer,
-                        command.id,
-                        snapshot,
-                        attached.has(command.sessionId),
-                      ),
+                      writeSnapshot(command.id, snapshot, attached.has(command.sessionId)),
                     ),
                   );
               }
@@ -964,12 +936,7 @@ export const runRpcHead = (options: RpcHeadOptions) => {
                   .pipe(
                     Effect.zipRight(driver.getSnapshot(command.sessionId)),
                     Effect.flatMap((snapshot) =>
-                      writeSnapshotResponse(
-                        writer,
-                        command.id,
-                        snapshot,
-                        attached.has(command.sessionId),
-                      ),
+                      writeSnapshot(command.id, snapshot, attached.has(command.sessionId)),
                     ),
                   );
               }

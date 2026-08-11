@@ -143,6 +143,47 @@ test("the built bin reports the adapted project Plugin Tool count", () => {
   expect(startupRecords(result.stderr)).toMatchObject([{ toolCount: 1 }]);
 });
 
+test("the built RPC Head Snapshot audits the loaded Plugin generation and sorted Capability grants", () => {
+  const projectPath = sessionDirectory();
+  const projectPluginDir = join(projectPath, ".peye", "plugins");
+  const sessionDir = join(projectPath, "sessions");
+  const userPluginDir = join(projectPath, "user-plugins");
+  mkdirSync(projectPluginDir, { recursive: true });
+  mkdirSync(userPluginDir, { recursive: true });
+  writeFileSync(
+    join(projectPluginDir, "snapshot-audit.ts"),
+    [
+      "export default () => ({",
+      "  contributions: [],",
+      "  manifest: {",
+      "    capabilities: [{ name: 'shell' }, { name: 'filesystem-read' }],",
+      "    name: 'snapshot-audit',",
+      "    version: '1.0.0',",
+      "  },",
+      "});",
+      "",
+    ].join("\n"),
+  );
+
+  const result = runBuiltBin(["-p", "--mode", "rpc", "--session-dir", sessionDir], {
+    cwd: projectPath,
+    env: { ...fakeProviderEnvironment(), PEYE_USER_PLUGIN_DIR: userPluginDir },
+    input: `${JSON.stringify({ _tag: "create", id: "create-audited-session" })}\n`,
+  });
+
+  expect(result.status, result.stderr).toBe(0);
+  const response = JSON.parse(result.stdout.trimEnd()) as {
+    readonly result?: Record<string, unknown>;
+  };
+  expect(response.result).toMatchObject({
+    capabilityGrants: ["filesystem-read", "shell"],
+    loadedGeneration: {
+      id: expect.any(String),
+      plugins: ["compact", "session-name", "snapshot-audit"],
+    },
+  });
+});
+
 test("the built JSON Head emits only parseable wire lines and can resume its Session", () => {
   const directory = sessionDirectory();
   const first = runBuiltBin(
@@ -172,12 +213,59 @@ test("the built JSON Head emits only parseable wire lines and can resume its Ses
       env: fakeProviderEnvironment(),
     },
   );
-  expect(resumed.status).toBe(0);
+  expect(resumed.status, resumed.stderr).toBe(0);
   expect(resumed.stdout).toBe("Fake provider answer.\n");
   expect(startupRecords(resumed.stderr)).toMatchObject([
     { mode: "print", sessionAction: `resume:${sessionId}` },
   ]);
 }, 15_000);
+
+test("the built JSON Head Snapshot audits the current process after Session resume", () => {
+  const directory = sessionDirectory();
+  const first = runBuiltBin(
+    ["-p", "--mode", "json", "--session-dir", directory, FAKE_PROVIDER_PROMPT],
+    { env: fakeProviderEnvironment() },
+  );
+  expect(first.status, first.stderr).toBe(0);
+  const firstFrames = first.stdout
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const firstSnapshot = firstFrames.at(-1);
+  const sessionId = firstSnapshot?.sessionId;
+  expect(sessionId).toBeTypeOf("string");
+  if (typeof sessionId !== "string") {
+    throw new Error("JSON Head Snapshot did not contain a Session id.");
+  }
+
+  const resumed = runBuiltBin(
+    [
+      "-p",
+      "--mode",
+      "json",
+      "--resume",
+      sessionId,
+      "--session-dir",
+      directory,
+      FAKE_PROVIDER_PROMPT,
+    ],
+    { env: fakeProviderEnvironment() },
+  );
+
+  expect(resumed.status, resumed.stderr).toBe(0);
+  const resumedFrames = resumed.stdout
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  expect(resumedFrames.at(-1)).toMatchObject({
+    capabilityGrants: [],
+    loadedGeneration: {
+      id: expect.any(String),
+      plugins: ["compact", "session-name"],
+    },
+    sessionId,
+  });
+});
 
 test("the built JSON CLI exposes invalid project Plugin Tool arguments to the Provider", () => {
   const projectPath = sessionDirectory();
