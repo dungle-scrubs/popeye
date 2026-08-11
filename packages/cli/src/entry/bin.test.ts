@@ -48,6 +48,36 @@ test("the built bin reports the package version and help without Provider config
   expect(help.stderr).toBe("");
 });
 
+test("the built help documents plugin flags in alphabetical order", () => {
+  const help = runBuiltBin(["--help"]);
+  const options = help.stdout.slice(
+    help.stdout.indexOf("Options:"),
+    help.stdout.indexOf("\n\nLoopback"),
+  );
+  const orderedFlags = [
+    "--base-url",
+    "--help",
+    "--headless",
+    "--mode",
+    "--model",
+    "--no-project-plugins",
+    "--plugin",
+    "--resume",
+    "--session-dir",
+    "--version",
+  ];
+
+  expect(help.status).toBe(0);
+  expect(options).toContain("--no-project-plugins");
+  expect(options).toContain("--plugin <path>");
+  for (const [index, flag] of orderedFlags.entries()) {
+    const nextFlag = orderedFlags[index + 1];
+    if (nextFlag !== undefined) {
+      expect(options.indexOf(flag)).toBeLessThan(options.indexOf(nextFlag));
+    }
+  }
+});
+
 test("the built print Head accepts positional and piped prompts with pure stdout", () => {
   const positional = runBuiltBin(
     ["-p", "--session-dir", sessionDirectory(), FAKE_PROVIDER_PROMPT],

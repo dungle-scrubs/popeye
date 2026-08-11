@@ -1,8 +1,10 @@
 /**
- * Owns provider and Session configuration for the peye executable.
+ * Owns Plugin, Provider, and Session configuration for the peye executable.
  * It exists so precedence, secret handling, and startup validation stay at one interface.
  */
 import { isIP } from "node:net";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 import { Data, Effect } from "effect";
 
@@ -30,9 +32,12 @@ export interface CliRunConfig {
   readonly fakeProviderScript: string | undefined;
   readonly mode: CliMode;
   readonly model: string;
+  readonly noProjectPlugins: boolean;
+  readonly pluginPaths: ReadonlyArray<string>;
   readonly prompt: string | undefined;
   readonly resume: string | undefined;
   readonly sessionDir: string;
+  readonly userPluginDir: string;
 }
 
 export type CliConfig = CliRunConfig | { readonly action: "help" } | { readonly action: "version" };
@@ -133,8 +138,11 @@ export const resolveConfig = (
       fakeProviderScript,
       mode: parsed.mode,
       model,
+      noProjectPlugins: parsed.noProjectPlugins,
+      pluginPaths: parsed.pluginPaths,
       prompt: parsed.prompt,
       resume: configured(parsed.resume),
       sessionDir: configured(parsed.sessionDir) ?? ".peye/sessions",
+      userPluginDir: configured(env.PEYE_USER_PLUGIN_DIR) ?? join(homedir(), ".peye", "plugins"),
     };
   });

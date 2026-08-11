@@ -18,6 +18,7 @@ export const cleanCliEnvironment = (): NodeJS.ProcessEnv => {
     "PEYE_FAKE_PROVIDER",
     "PEYE_FAKE_PROVIDER_SCRIPT",
     "PEYE_MODEL",
+    "PEYE_USER_PLUGIN_DIR",
   ]) {
     delete env[key];
   }

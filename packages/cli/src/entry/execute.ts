@@ -31,14 +31,16 @@ const CLI_USAGE = `Usage:
   echo "<prompt>" | peye -p
 
 Options:
-  -p                     Run headless.
-  --mode <print|json|rpc> Select the Head. Default: print.
-  --model <model>        Select the Provider model. Env: PEYE_MODEL.
-  --base-url <url>       Set the OpenAI-compatible endpoint. Env: PEYE_BASE_URL.
-  --resume <sessionId>   Resume a Session.
-  --session-dir <dir>    Set the Journal directory. Default: .peye/sessions.
-  --version              Print the @pop-eye/cli version.
-  --help                 Print this usage text.
+  --base-url <url>         Set the OpenAI-compatible endpoint. Env: PEYE_BASE_URL.
+  --help                   Print this usage text.
+  -p, --headless           Run headless.
+  --mode <print|json|rpc>  Select the Head. Default: print.
+  --model <model>          Select the Provider model. Env: PEYE_MODEL.
+  --no-project-plugins     Do not load project-local Plugins.
+  --plugin <path>          Add a Plugin path. Repeatable.
+  --resume <sessionId>     Resume a Session.
+  --session-dir <dir>      Set the Journal directory. Default: .peye/sessions.
+  --version                Print the @pop-eye/cli version.
 
 Loopback endpoints need no API key; the CLI supplies its local placeholder automatically.
 Hosted endpoints require PEYE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.
