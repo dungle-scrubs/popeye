@@ -3280,3 +3280,85 @@ test("every terminal path leaves a well-formed entry sequence in a fixture repla
     });
   }
 });
+
+test("abort between provider retry attempts aborts with one provider start and leaves Session usable", async () => {
+  const retryScheduled = await Effect.runPromise(Deferred.make<void>());
+  const observed: Array<Progress> = [];
+  let providerStarts = 0;
+  const transientProvider: ProviderService = {
+    streamAssistant: () => {
+      providerStarts += 1;
+      if (providerStarts === 1) {
+        return Stream.fail(new ProviderError({ message: "Transient blip.", transient: true }));
+      }
+      return Stream.fromIterable([
+        { _tag: "textDelta" as const, text: "Should not reach." },
+        { _tag: "done" as const, stopReason: "done" as const },
+      ]);
+    },
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const turns = yield* Turns;
+      const session = yield* sessions.create();
+      const progressFiber = yield* Effect.fork(
+        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+          Effect.gen(function* () {
+            observed.push(item);
+            if (item._tag === "providerRetryScheduled" && item.attempt === 2) {
+              yield* Deferred.succeed(retryScheduled, undefined);
+            }
+          }),
+        ),
+      );
+      yield* Effect.yieldNow();
+      const running = yield* Effect.fork(
+        turns.runTurn(session.id, "Transient then abort", {
+          maxAttempts: 3,
+          retryBaseDelayMs: 5000,
+        }),
+      );
+      yield* Deferred.await(retryScheduled).pipe(Effect.timeout("2 seconds"), Effect.orDie);
+      expect(providerStarts).toStrictEqual(1);
+      const aborted = yield* turns.abortTurn(session.id);
+      const settled = yield* Fiber.join(running);
+      yield* Fiber.interrupt(progressFiber);
+      const providerStartsAtAbort = providerStarts;
+      const secondSettled = yield* turns.runTurn(session.id, "Follow-up usable");
+      const branch = yield* journal.readBranch(session.id);
+      return {
+        aborted,
+        branch,
+        providerStarts: providerStartsAtAbort,
+        providerStartsTotal: providerStarts,
+        secondSettled,
+        settled,
+      };
+    }).pipe(Effect.provide(testLayer(transientProvider))),
+  );
+
+  expect(providerStarts).toStrictEqual(2);
+  expect(result.providerStarts).toStrictEqual(1);
+  expect(result.providerStartsTotal).toStrictEqual(2);
+  expect(result.aborted).toStrictEqual({ aborted: true, turnOrdinal: 1 });
+  expect(result.settled).toStrictEqual({ stopReason: "aborted" });
+  expect(result.branch.at(-2)?.payload).toMatchObject({
+    content: "Follow-up usable",
+    role: "user",
+  });
+  expect(result.secondSettled).toStrictEqual({ stopReason: "done" });
+  const abortedEntry = result.branch[2];
+  expect(abortedEntry).toBeDefined();
+  expect(abortedEntry?.payload).toMatchObject({ role: "assistant", stopReason: "aborted" });
+  expect(
+    abortedEntry === undefined
+      ? undefined
+      : (abortedEntry.payload as { readonly content?: unknown }).content,
+  ).toStrictEqual("");
+  const retries = observed.filter((item) => item._tag === "providerRetryScheduled");
+  expect(retries).toStrictEqual([{ _tag: "providerRetryScheduled", attempt: 2, delayMs: 5000 }]);
+  expect(observed.filter((item) => item._tag === "assistantText")).toStrictEqual([]);
+});

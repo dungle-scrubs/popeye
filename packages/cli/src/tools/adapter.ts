@@ -38,22 +38,121 @@ export const generationCapabilityUnion = (generation: PluginGeneration): Readonl
     ),
   ].sort();
 
-const adaptTool = (contribution: RegisteredToolContribution): Tool.Any => {
+const adaptTool = (
+  contribution: RegisteredToolContribution,
+  generation: PluginGeneration,
+  grants: CapabilityGrants,
+): Tool.Any => {
   const tool = contribution.payload;
   return {
     description: tool.description,
     execute: (arguments_, context) =>
-      tool.execute(arguments_, context).pipe(
-        Effect.map((result) => ({ ...result })),
-        Effect.mapError(
-          (error) =>
-            new ToolError({
-              message: error.message,
-              toolCallId: error.toolCallId,
-              toolName: error.toolName,
+      Effect.gen(function* () {
+        const toolCallId = (context as { readonly toolCallId?: string }).toolCallId ?? "unknown";
+        const sessionId = context.sessionId as unknown as string | undefined;
+        const gateInput = {
+          arguments: arguments_ as unknown,
+          toolCallId,
+          toolName: tool.name,
+          ...(sessionId === undefined ? {} : { sessionId }),
+        };
+        const gateResult = yield* generation.emitter
+          .emit("tool-call-gate", gateInput as never, grants)
+          .pipe(Effect.either);
+
+        if (gateResult._tag === "Left") {
+          const error = gateResult.left as unknown as {
+            readonly _tag?: string;
+            readonly plugin?: string;
+            readonly reason?: string;
+            readonly message?: string;
+          };
+          if (
+            error !== null &&
+            typeof error === "object" &&
+            "_tag" in error &&
+            (error as { _tag: string })._tag === "GateRejected"
+          ) {
+            const plugin = (error as { plugin?: string }).plugin ?? "unknown";
+            const reason =
+              (error as { reason?: string }).reason ??
+              (error as { message?: string }).message ??
+              `Tool ${tool.name} was rejected by vetting gate.`;
+            yield* Effect.logWarning(
+              JSON.stringify({
+                diagnostic: "tool_gate_rejected",
+                plugin,
+                reason,
+                toolCallId,
+                toolName: tool.name,
+                type: "tool_gate_rejected",
+              }),
+            ).pipe(
+              Effect.annotateLogs({
+                diagnostic: "tool_gate_rejected",
+                plugin,
+                reason,
+                toolCallId,
+                toolName: tool.name,
+              }),
+              Effect.ignore,
+            );
+            return { content: reason, isError: true as const };
+          }
+          yield* Effect.logWarning(
+            JSON.stringify({
+              diagnostic: "tool_gate_error",
+              error: String(error),
+              toolCallId,
+              toolName: tool.name,
+              type: "tool_gate_error",
             }),
-        ),
-      ),
+          ).pipe(Effect.ignore);
+        } else {
+          const hookResult = gateResult.right as unknown;
+          if (
+            hookResult !== undefined &&
+            hookResult !== null &&
+            typeof hookResult === "object" &&
+            "arguments" in (hookResult as Record<string, unknown>) &&
+            "toolCallId" in (hookResult as Record<string, unknown>) &&
+            "toolName" in (hookResult as Record<string, unknown>)
+          ) {
+            const replacement = hookResult as { readonly arguments: unknown };
+            const replacedArguments = replacement.arguments;
+            yield* Effect.logInfo(
+              JSON.stringify({
+                diagnostic: "tool_gate_replaced",
+                toolCallId,
+                toolName: tool.name,
+                type: "tool_gate_replaced",
+              }),
+            ).pipe(Effect.ignore);
+            return yield* tool.execute(replacedArguments as never, context).pipe(
+              Effect.map((result) => ({ ...result })),
+              Effect.mapError(
+                (error) =>
+                  new ToolError({
+                    message: error.message,
+                    toolCallId: error.toolCallId,
+                    toolName: error.toolName,
+                  }),
+              ),
+            );
+          }
+        }
+        return yield* tool.execute(arguments_, context).pipe(
+          Effect.map((result) => ({ ...result })),
+          Effect.mapError(
+            (error) =>
+              new ToolError({
+                message: error.message,
+                toolCallId: error.toolCallId,
+                toolName: error.toolName,
+              }),
+          ),
+        );
+      }),
     ...(tool.executionMode === undefined ? {} : { executionMode: tool.executionMode }),
     name: tool.name,
     parameters: tool.parameters,
@@ -173,5 +272,5 @@ export const adaptTools = (
       (contribution) => !invalidKeys.has(contribution.key),
     );
     const selectedContributions = yield* resolveShadowing(declaredContributions, plugins);
-    return selectedContributions.map(adaptTool);
+    return selectedContributions.map((contribution) => adaptTool(contribution, generation, grants));
   });

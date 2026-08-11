@@ -176,6 +176,56 @@ An explicit path that resolves inside the project is project-local and cannot an
 request. A content change requires a new Trust decision. Trusted Plugin code still runs with the
 host process's authority. Use an OS or container boundary when isolation is required.
 
+## Opt-in gate Plugins
+
+Two gates ship as linkable modules under `packages/cli/src/features/` and never load by default:
+
+- `trust-gate.ts` - contributes to the `trust` Hook. It raises a confirm interaction (project path, digest, change summary) with a 25s timeout and fallback `untrusted`. With the null `PluginInteractions` layer (print/json heads and startup composition in every mode) the fallback resolves immediately: unknown project code is denied without stalling. Over rpc with an interactive Head, the Head answers; `trusted` loads stage-2 project plugins, fallback `untrusted` swaps without them and the `/reload` result reports the reduced counts.
+- `tool-vetting.ts` - contributes to `tool-call-gate`. It raises a select (`allow once` / `allow for session` / `reject`) with a 25s timeout and fallback `reject`. Session memory is generation-scoped: a reload forgets prior allows (fail-closed). A rejection becomes a model-visible error `ToolResult` with `isError: true` in the call's journal position, preserving call order.
+
+Install them by symlinking or copying into a user-global Plugin directory (the host's `userPluginDir`, by default `~/.peye/plugins/`):
+
+```bash
+mkdir -p ~/.peye/plugins
+ln -s "$PWD/packages/cli/src/features/tool-vetting.ts" ~/.peye/plugins/tool-vetting.ts
+ln -s "$PWD/packages/cli/src/features/trust-gate.ts" ~/.peye/plugins/trust-gate.ts
+# or copy instead of symlink
+cp packages/cli/src/features/tool-vetting.ts ~/.peye/plugins/
+cp packages/cli/src/features/trust-gate.ts ~/.peye/plugins/
+```
+
+The default first-party set is `compact`, `reload`, and `session-name` only; the gates load only when the user places them in the Plugin source directory. Remove the symlink or file to uninstall.
+
+## PluginInteractions author guidance
+
+`PluginInteractions` lets Plugin code ask the user. The emitter stamps the originating Plugin name via `CurrentPluginFiberRef` around every Hook and Command execution, so you do not supply `pluginName` yourself; Heads receive it for attribution and a malicious Plugin cannot impersonate another. Declare the `interaction` Capability in the manifest; without it the request resolves its declared fallback with an `interaction_ungranted` diagnostic and never reaches a Head.
+
+```typescript
+import { PluginInteractions, DEFAULT_INTERACTION_TIMEOUT_MILLIS } from "@pop-eye/plugins";
+import { Effect } from "effect";
+
+const run = Effect.gen(function* () {
+  const interactions = yield* PluginInteractions;
+  const resolution = yield* interactions.request({
+    fallback: { kind: "select", value: "reject" },
+    id: `my-plugin-${Date.now()}`,
+    kind: "select",
+    options: [
+      { label: "Allow once", value: "allow-once" },
+      { label: "Allow for session", value: "allow-for-session" },
+      { label: "Reject", value: "reject" },
+    ],
+    prompt: "Allow tool X?",
+    timeoutMs: DEFAULT_INTERACTION_TIMEOUT_MILLIS, // 25s, nests inside the 30s hook timeout
+    // sessionId: context.sessionId when you have one (tool-call-gate); omit for trust
+  });
+  const choice = resolution.response.value; // typed by kind
+  const source = resolution.source; // "head" or "fallback"
+});
+```
+
+Timeout layering: gate Plugins default to 25s, which nests inside the emitter's 30s Hook timeout, so the interaction fallback - not the Hook timeout - decides the outcome. The rpc live Layer delivers pending requests on attach, times out to the fallback, and removes pending entries on interruption (id reusable, no stale delivery). The null Layer (print/json and startup composition) resolves fallbacks immediately. Always provide a safe fallback: `reject` for vetting, `untrusted` (`false`) for trust. Check `resolution.error` (`InteractionTimeout`) when you need to distinguish a fallback from a Head answer. Every allow/deny should log with plugin attribution (the vetting and trust gates already do).
+
 ## Supported TypeScript syntax
 
 The loader uses Node 24 native TypeScript stripping through an absolute `file:` URL. Type

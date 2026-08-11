@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 
 import { Clock, Context, Deferred, Effect, Exit, Layer, Ref, Scope } from "effect";
 
-import type { CapabilityGrants } from "./capability.js";
+import { type CapabilityGrants, createCapabilityGrants } from "./capability.js";
 import type { PluginDiscoveryConfig } from "./discovery.js";
 import { phase1Sources, phase2Sources } from "./discovery.js";
 import type { HookDiagnostic, HookEmitError, HookEmitterService } from "./emitter.js";
@@ -241,8 +241,21 @@ const loadGenerationRuntime = (
         externalSources,
         options.importTimeoutMillis,
       );
+      // Trust Hook needs capability grants to gate the opt-in trust-gate plugin.
+      // When the caller (pipeline) does not supply grants, derive them from the
+      // external Plugin manifests already registered, so the trust gate can answer
+      // via PluginInteractions (null layer at startup, live layer on reload).
+      const externalCapabilities = externalPlugins.flatMap((plugin) =>
+        plugin.manifest.capabilities.map((capability) => capability.name),
+      );
+      const trustGrants =
+        options.grants ??
+        createCapabilityGrants(
+          "trust-check" as unknown as CapabilityGrants["sessionId"],
+          externalCapabilities,
+        );
       const trustOptions = {
-        ...(options.grants === undefined ? {} : { grants: options.grants }),
+        grants: trustGrants,
         hookEmitter: emitter,
         ...(options.trustDiagnosticSink === undefined
           ? {}

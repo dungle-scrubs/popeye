@@ -138,6 +138,8 @@ export type ToolReplay = "never" | "safe";
 
 export interface ToolExecutionContext {
   readonly sessionId: SessionId;
+  readonly toolCallId?: string;
+  readonly toolName?: string;
 }
 
 export interface ToolExecutionResult {

@@ -20,6 +20,8 @@ export type ToolExecutionMode = "parallel" | "sequential";
 
 export interface ToolExecutionContext {
   readonly sessionId: SessionId;
+  readonly toolCallId?: string;
+  readonly toolName?: string;
 }
 
 export interface ToolResult {

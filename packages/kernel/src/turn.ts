@@ -71,6 +71,7 @@ export const TurnOptionsSchema = Schema.Struct({
   /** @deprecated Use maxProviderRounds. */
   maxToolRounds: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
   model: Schema.optional(Schema.NonEmptyString),
+  retryBaseDelayMs: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.nonNegative())),
   thinkingLevel: Schema.optional(ThinkingLevelSchema),
   toolConcurrency: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
 });
@@ -447,6 +448,9 @@ export const TurnsLive = (): Layer.Layer<
           const operationRecorded = yield* Ref.make(false);
           const compactionAttempted = yield* Ref.make(false);
           const providerRuntime = yield* makeProviderRequestRuntime({
+            ...(options.retryBaseDelayMs === undefined
+              ? {}
+              : { baseDelayMs: options.retryBaseDelayMs }),
             maxAttempts: options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
             maxProviderRounds: providerRoundBound(options),
             onRetry: (attempt, delayMs) =>

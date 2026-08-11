@@ -5,7 +5,7 @@
 > file as features are implemented - never mark a milestone complete
 > until every current-cutoff checkbox under it is checked.
 
-> Current focus: Phase 3 - Interactions and gates (M8 remaining; M9 hardening)
+> Current focus: Phase 4 - Hardening complete — all milestones done
 
 ## Phase 1: Leasing and Session-scoped Tools
 
@@ -78,21 +78,21 @@ Source: `implementation.md` (M7); D-009, D-010, D-014
 ### M8: Opt-in gate Plugins and emission
 Source: `implementation.md` (M8); D-002, D-007, D-008
 
-- [ ] The adapter emits `tool-call-gate` after `tool_started` and before execute; with no contributor everything is allowed and existing tests stay green (default run zero-cost)
-- [ ] Vetting rejection becomes a model-visible error tool result in call order
-- [ ] Allow-once and allow-for-session work via a scripted interactive head; session memory is generation-scoped (a reload forgets, asserted)
-- [ ] Trust gate: headless startup denies immediately with no stall (clocked); reload over rpc answered trusted loads stage-2 sources; fallback untrusted swaps without project plugins, reported in the result counts
-- [ ] The linkable-module install path (symlink into the user dir) loads the gates; the default set never includes them
-- [ ] Live harness: a vetting prompt answered over rpc against the local endpoint
+- [x] The adapter emits `tool-call-gate` after `tool_started` and before execute; with no contributor everything is allowed and existing tests stay green (default run zero-cost)
+- [x] Vetting rejection becomes a model-visible error tool result in call order
+- [x] Allow-once and allow-for-session work via a scripted interactive head; session memory is generation-scoped (a reload forgets, asserted)
+- [x] Trust gate: headless startup denies immediately with no stall (clocked); reload over rpc answered trusted loads stage-2 sources; fallback untrusted swaps without project plugins, reported in the result counts
+- [x] The linkable-module install path (symlink into the user dir) loads the gates; the default set never includes them
+- [x] Live harness: a vetting prompt answered over rpc against the local endpoint
 
 ## Phase 4: Hardening
 
 ### M9: Test hardening
 Source: `implementation.md` (M9); 02/D-025
 
-- [ ] rpc soak captures raw stdout bytes and asserts frame integrity on byte boundaries, provider-start ordering per Session, and tightened assertions
-- [ ] Kernel test: abort between provider retry attempts asserts one provider start, stop reason `aborted`, and a usable Session afterward
-- [ ] Full gate plus 10x flake runs green
+- [x] rpc soak captures raw stdout bytes and asserts frame integrity on byte boundaries, provider-start ordering per Session, and tightened assertions
+- [x] Kernel test: abort between provider retry attempts asserts one provider start, stop reason `aborted`, and a usable Session afterward
+- [x] Full gate plus 10x flake runs green
 
 ## Deferred follow-up
 
@@ -108,8 +108,8 @@ Source: `implementation.md` (Deferred follow-up); D-007
 
 ## Summary
 - Total features: 43
-- Completed: 34
-- Remaining: 9
-- Current cutoff blockers: 9
+- Completed: 43
+- Remaining: 0
+- Current cutoff blockers: 0
 - Accepted/deferred follow-up: 3
 - Superseded/obsolete checklist debt: 0

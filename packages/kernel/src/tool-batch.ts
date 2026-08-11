@@ -91,6 +91,11 @@ const executeCall = <E>(
       const registry = yield* ToolRegistry;
       yield* onToolStarted?.(call) ?? Effect.void;
       const tool = registry.get(call.name);
+      const callContext: ToolExecutionContext = {
+        sessionId: context.sessionId,
+        toolCallId: call.id,
+        toolName: call.name,
+      };
       const result =
         tool === undefined
           ? errorResult(call, `Unknown tool: ${call.name}.`)
@@ -98,7 +103,7 @@ const executeCall = <E>(
               Effect.flatMap((decoded) =>
                 Either.isLeft(decoded)
                   ? Effect.succeed(decoded.left)
-                  : restore(Effect.scoped(tool.execute(decoded.right, context))).pipe(
+                  : restore(Effect.scoped(tool.execute(decoded.right, callContext))).pipe(
                       Effect.map((output) => ({ ...output, toolCallId: call.id })),
                       Effect.catchAllCause((cause) => {
                         if (Cause.isInterruptedOnly(cause)) {

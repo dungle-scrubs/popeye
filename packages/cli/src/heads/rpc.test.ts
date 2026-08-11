@@ -481,6 +481,7 @@ test("rpc soaks interleaved Session queues, slow Progress, and an oversized fina
   const subscribeResponseWritten = Promise.withResolvers<void>();
   const allResponsesWritten = Promise.withResolvers<void>();
   const outputChunks: Array<string> = [];
+  const rawStdoutBytes: Array<Buffer> = [];
   const expectedResponseIds = new Set([
     "model-soak-a",
     "model-soak-b",
@@ -496,6 +497,7 @@ test("rpc soaks interleaved Session queues, slow Progress, and an oversized fina
   const writtenResponseIds = new Set<string>();
   let promptCompleteCount = 0;
   let providerStartCount = 0;
+  const providerStartLog: Array<string> = [];
   let slowProgressSessionId = "";
   let slowWriteUsed = false;
   const waitForSignal = (label: string, signal: Promise<void>) =>
@@ -507,8 +509,18 @@ test("rpc soaks interleaved Session queues, slow Progress, and an oversized fina
       }),
     );
   const stalledProvider: ProviderService = {
-    streamAssistant: () =>
-      Stream.fromEffect(
+    streamAssistant: (context) => {
+      const promptContent = context.find((item) => item.role === "user")?.content ?? "unknown";
+      // Derive a stable per-Session label from prompt content for FIFO ordering.
+      const label = promptContent.includes("Session A")
+        ? "A"
+        : promptContent.includes("Session B")
+          ? "B"
+          : promptContent.includes("Session C")
+            ? "C"
+            : `other:${promptContent.slice(0, 20)}`;
+      providerStartLog.push(label);
+      return Stream.fromEffect(
         Effect.sync(() => {
           providerStartCount += 1;
           if (providerStartCount === 3) {
@@ -531,7 +543,8 @@ test("rpc soaks interleaved Session queues, slow Progress, and an oversized fina
             ),
           ),
         ),
-      ),
+      );
+    },
   };
   const stalledLayer = Layer.merge(
     FirstPartyDriverDefault().pipe(
@@ -559,6 +572,7 @@ test("rpc soaks interleaved Session queues, slow Progress, and an oversized fina
           await releaseSlowProgressWrite.promise;
         }
         outputChunks.push(text);
+        rawStdoutBytes.push(Buffer.from(text, "utf8"));
         if (frame._tag === "phaseChanged" && frame.sessionId === slowProgressSessionId) {
           initialProgressWritten.resolve();
         }
@@ -689,43 +703,107 @@ test("rpc soaks interleaved Session queues, slow Progress, and an oversized fina
       return resultFrame?.sessionId === sessionId && typeof frame.id === "string" ? [frame.id] : [];
     });
 
-  expect(result.exitCode).toBe(0);
-  expect(providerStartCount).toBe(3);
-  expect(slowWriteUsed).toBe(true);
-  expect(correlatedIds.sort()).toEqual([...expectedResponseIds].sort());
-  expect(responseOrderFor(result.sessionA.id)).toEqual([
+  // === Tightened core assertions (no loose equalities) ===
+  expect(result.exitCode).toStrictEqual(0);
+  expect(providerStartCount).toStrictEqual(3);
+  expect(providerStartLog).toHaveLength(3);
+  // FIFO per Session: each Session's provider start appears at most once here; assert no duplicate labels and all expected sessions present.
+  expect(new Set(providerStartLog)).toStrictEqual(new Set(["A", "B", "C"]));
+  // Provider starts are concurrent across Sessions but FIFO per Session is trivially satisfied with one prompt each;
+  // ensure the log has exactly the three sessions, proving every Session's prompt ran.
+  expect(slowWriteUsed).toStrictEqual(true);
+  // Correlated ids must be exactly the expected set, no extra/missing, strict length.
+  expect(correlatedIds).toHaveLength(expectedResponseIds.size);
+  expect(new Set(correlatedIds)).toStrictEqual(expectedResponseIds);
+  expect(new Set(correlatedIds).size).toStrictEqual(expectedResponseIds.size);
+  expect(responseOrderFor(result.sessionA.id)).toStrictEqual([
     "subscribe-soak",
     "prompt-soak-a",
     "model-soak-a",
     "snapshot-soak-a",
   ]);
-  expect(responseOrderFor(result.sessionB.id)).toEqual([
+  expect(responseOrderFor(result.sessionB.id)).toStrictEqual([
     "prompt-soak-b",
     "snapshot-soak-b",
     "model-soak-b",
   ]);
-  expect(responseOrderFor(result.sessionC.id)).toEqual([
+  expect(responseOrderFor(result.sessionC.id)).toStrictEqual([
     "prompt-soak-c",
     "model-soak-c",
     "snapshot-soak-c",
   ]);
-  expect(frames).toContainEqual(
-    expect.objectContaining({
-      _tag: "progressDropped",
-      count: expect.any(Number),
-      sessionId: result.sessionA.id,
-    }),
-  );
-  expect(frames).toContainEqual(
-    expect.objectContaining({
-      error: expect.objectContaining({
-        code: "protocol_error",
-        details: expect.objectContaining({ reason: "malformed_frame" }),
-      }),
-    }),
-  );
-  expect(outputChunks.every((chunk) => chunk.endsWith("\n"))).toBe(true);
+  // progressDropped must be a bounded integer >0, not any Number.
+  const dropped = frames.find((f) => (f as Record<string, unknown>)._tag === "progressDropped") as
+    | Record<string, unknown>
+    | undefined;
+  expect(dropped).toBeDefined();
+  expect(typeof dropped?.count).toBe("number");
+  expect(Number.isInteger(dropped?.count)).toBe(true);
+  expect((dropped?.count as number) > 0).toBe(true);
+  expect(dropped?.sessionId).toStrictEqual(result.sessionA.id);
+  // Oversized frame must be a typed protocol_error with malformed_frame and byte limit in message.
+  const oversizedError = frames.find(
+    (f) => typeof (f as Record<string, unknown>).error === "object",
+  ) as Record<string, unknown> | undefined;
+  expect(oversizedError).toBeDefined();
+  const oversizeErr = (oversizedError?.error ?? {}) as Record<string, unknown>;
+  expect(oversizeErr.code).toStrictEqual("protocol_error");
+  expect((oversizeErr.details as Record<string, unknown>)?.reason).toStrictEqual("malformed_frame");
+  expect(String(oversizeErr.message)).toContain(String(MAX_RPC_FRAME_BYTES));
+  // Every writer chunk must be LF-terminated and respect the byte bound.
+  expect(outputChunks.every((chunk) => chunk.endsWith("\n"))).toStrictEqual(true);
+  // Raw stdout bytes: capture must equal the string chunks byte-for-byte, each chunk LF-terminated, and total decodes to same frames.
+  const rawStdout = Buffer.concat(rawStdoutBytes);
+  expect(rawStdout.length).toStrictEqual(Buffer.byteLength(stdout, "utf8"));
+  expect(rawStdout.toString("utf8")).toStrictEqual(stdout);
+  for (const buf of rawStdoutBytes) {
+    expect(buf.length > 0).toStrictEqual(true);
+    expect(buf[buf.length - 1]).toStrictEqual(0x0a); // LF
+    expect(buf.length).toBeLessThanOrEqual(MAX_RPC_FRAME_BYTES + 1 + 128); // frame + newline + JSON overhead slack
+    // Each buffer must decode to exactly one LF-terminated JSON line.
+    const text = buf.toString("utf8");
+    expect(text.endsWith("\n")).toStrictEqual(true);
+    expect(() => JSON.parse(text.trimEnd())).not.toThrow();
+  }
   expect(frames).toHaveLength(stdoutLines.length);
+  // Byte-boundary frame integrity: re-chunk raw bytes at arbitrary byte offsets and re-parse must yield identical frames.
+  const reparseWithChunkSize = async (byteChunkSize: number) => {
+    const chunks: Array<Buffer> = [];
+    for (let offset = 0; offset < rawStdout.length; offset += byteChunkSize) {
+      chunks.push(rawStdout.subarray(offset, Math.min(offset + byteChunkSize, rawStdout.length)));
+    }
+    const inputStream = Readable.from(chunks);
+    const reparsed = await Effect.runPromise(Stream.runCollect(strictLfFrames(inputStream)));
+    const lines = Array.from(reparsed, (f) => JSON.parse(f) as Record<string, unknown>);
+    expect(lines).toHaveLength(frames.length);
+    expect(lines).toStrictEqual(frames);
+  };
+  // Deterministic byte-boundary sizes: 1-byte, 7-byte, 13-byte, 256-byte, and 1024-byte torn frames.
+  await reparseWithChunkSize(1);
+  await reparseWithChunkSize(7);
+  await reparseWithChunkSize(13);
+  await reparseWithChunkSize(256);
+  await reparseWithChunkSize(1024);
+  // Random-ish split: 3 + 5 + varying to cover UTF-8 boundary tearing (frames are ASCII but decoder must handle splits).
+  const mixedChunks: Array<Buffer> = [];
+  const pattern = [3, 5, 2, 11, 17];
+  let pi = 0;
+  for (let offset = 0; offset < rawStdout.length; ) {
+    const size = pattern[pi % pattern.length] ?? 1;
+    pi += 1;
+    mixedChunks.push(rawStdout.subarray(offset, Math.min(offset + size, rawStdout.length)));
+    offset += size;
+  }
+  {
+    const mixedStream = Readable.from(mixedChunks);
+    const reparsed = await Effect.runPromise(Stream.runCollect(strictLfFrames(mixedStream)));
+    const lines = Array.from(reparsed, (f) => JSON.parse(f) as Record<string, unknown>);
+    expect(lines).toStrictEqual(frames);
+  }
+  // Each frame's raw byte length (without trailing LF) must be <= MAX_RPC_FRAME_BYTES
+  for (const line of stdoutLines) {
+    expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(MAX_RPC_FRAME_BYTES);
+  }
 }, 10_000);
 
 test("rpc EOF interrupts a waiting prompt handler without cancelling accepted kernel work", async () => {

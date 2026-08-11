@@ -20,6 +20,7 @@ export interface ProviderRequestRuntime {
 }
 
 export interface ProviderRequestRuntimeOptions {
+  readonly baseDelayMs?: number;
   readonly maxAttempts: number;
   readonly maxProviderRounds: number;
   readonly onRetry: (nextAttempt: number, delayMs: number) => Effect.Effect<void>;
@@ -32,7 +33,7 @@ const retryTransientProvider = <TValue, TEnvironment>(
 ): Effect.Effect<TValue, ProviderError, TEnvironment> =>
   request.pipe(
     Effect.retry(
-      Schedule.exponential(`${DEFAULT_RETRY_BASE_DELAY_MS} millis`).pipe(
+      Schedule.exponential(`${options.baseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS} millis`).pipe(
         Schedule.intersect(Schedule.recurs(options.maxAttempts - 1)),
         Schedule.whileInput((error: ProviderError) => error.transient),
         Schedule.onDecision(([delay], decision) =>
