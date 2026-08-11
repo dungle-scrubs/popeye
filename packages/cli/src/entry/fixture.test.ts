@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { decodeProgress, decodeSnapshot } from "@peye/protocol";
+import { decodeProgress, decodeSnapshot } from "@pop-eye/protocol";
 import { Effect } from "effect";
 import { expect, test } from "vitest";
 

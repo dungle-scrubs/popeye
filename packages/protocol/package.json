@@ -1,5 +1,5 @@
 {
-  "name": "@peye/protocol",
+  "name": "@pop-eye/protocol",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -16,10 +16,10 @@
     }
   },
   "imports": {
-    "#journal": "@peye/journal"
+    "#journal": "@pop-eye/journal"
   },
   "dependencies": {
-    "@peye/journal": "workspace:*"
+    "@pop-eye/journal": "workspace:*"
   },
   "peerDependencies": {
     "effect": "^3.22.1"

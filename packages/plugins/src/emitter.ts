@@ -673,7 +673,7 @@ export interface HookEmitterService {
   ) => Effect.Effect<void, ContributionRegistryError>;
 }
 
-export class HookEmitter extends Context.Tag("@peye/plugins/HookEmitter")<
+export class HookEmitter extends Context.Tag("@pop-eye/plugins/HookEmitter")<
   HookEmitter,
   HookEmitterService
 >() {}

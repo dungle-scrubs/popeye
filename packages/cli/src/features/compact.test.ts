@@ -1,4 +1,4 @@
-import type { CommandExecutionContext } from "@peye/plugins";
+import type { CommandExecutionContext } from "@pop-eye/plugins";
 import { Effect, Schema } from "effect";
 import { expect, test } from "vitest";
 

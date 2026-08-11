@@ -6,8 +6,8 @@
  * deadline because the Provider seam owns idle timeout enforcement.
  */
 
-import type { SessionId } from "@peye/journal";
-import { ProgressSchema, SnapshotSchema } from "@peye/protocol";
+import type { SessionId } from "@pop-eye/journal";
+import { ProgressSchema, SnapshotSchema } from "@pop-eye/protocol";
 import { Deferred, Effect, Fiber, Schema, Stream } from "effect";
 
 import { Driver } from "../compose.js";

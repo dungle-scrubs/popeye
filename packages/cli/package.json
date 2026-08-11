@@ -1,5 +1,5 @@
 {
-  "name": "@peye/cli",
+  "name": "@pop-eye/cli",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -19,10 +19,10 @@
     }
   },
   "dependencies": {
-    "@peye/journal": "workspace:*",
-    "@peye/kernel": "workspace:*",
-    "@peye/plugins": "workspace:*",
-    "@peye/protocol": "workspace:*"
+    "@pop-eye/journal": "workspace:*",
+    "@pop-eye/kernel": "workspace:*",
+    "@pop-eye/plugins": "workspace:*",
+    "@pop-eye/protocol": "workspace:*"
   },
   "peerDependencies": {
     "effect": "^3.22.1"

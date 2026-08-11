@@ -37,7 +37,7 @@ Options:
   --base-url <url>       Set the OpenAI-compatible endpoint. Env: PEYE_BASE_URL.
   --resume <sessionId>   Resume a Session.
   --session-dir <dir>    Set the Journal directory. Default: .peye/sessions.
-  --version              Print the @peye/cli version.
+  --version              Print the @pop-eye/cli version.
   --help                 Print this usage text.
 
 Loopback endpoints need no API key; the CLI supplies its local placeholder automatically.
@@ -110,14 +110,18 @@ const packageVersion = (): Effect.Effect<string, CliEntryError> =>
   Effect.gen(function* () {
     const source = yield* Effect.tryPromise({
       catch: (cause) =>
-        entryError("package_metadata_invalid", "Could not read @peye/cli package metadata.", cause),
+        entryError(
+          "package_metadata_invalid",
+          "Could not read @pop-eye/cli package metadata.",
+          cause,
+        ),
       try: () => readFile(new URL("../../package.json", import.meta.url), "utf8"),
     });
     const metadata = yield* Effect.try({
       catch: (cause) =>
         entryError(
           "package_metadata_invalid",
-          "@peye/cli package metadata is not valid JSON.",
+          "@pop-eye/cli package metadata is not valid JSON.",
           cause,
         ),
       try: () => JSON.parse(source) as unknown,
@@ -130,7 +134,7 @@ const packageVersion = (): Effect.Effect<string, CliEntryError> =>
     ) {
       return yield* entryError(
         "package_metadata_invalid",
-        "@peye/cli package metadata has no version.",
+        "@pop-eye/cli package metadata has no version.",
       );
     }
     return metadata.version;

@@ -11,7 +11,7 @@ import {
   type JournalFailure,
   type SessionId,
   SessionIdSchema,
-} from "@peye/journal";
+} from "@pop-eye/journal";
 import { Context, Effect, Layer, Schema } from "effect";
 import { SessionNamePayloadSchema } from "./entry-payloads.js";
 import { Mailbox, type MailboxFailure } from "./mailbox.js";
@@ -65,7 +65,10 @@ export interface SessionsService {
   ) => Effect.Effect<void, SessionsFailure>;
 }
 
-export class Sessions extends Context.Tag("@peye/kernel/Sessions")<Sessions, SessionsService>() {}
+export class Sessions extends Context.Tag("@pop-eye/kernel/Sessions")<
+  Sessions,
+  SessionsService
+>() {}
 
 const defaultRecoveryDiagnosticSink = (report: RecoveryReport): Effect.Effect<void> =>
   Effect.logInfo(

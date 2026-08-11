@@ -4,7 +4,7 @@
  * This is not the plugin contribution system - Phase 3 owns contribution and feeds this registry.
  */
 
-import type { SessionId } from "@peye/journal";
+import type { SessionId } from "@pop-eye/journal";
 import type { Scope } from "effect";
 import { Context, Effect, Layer, type Schema } from "effect";
 
@@ -75,7 +75,7 @@ export interface ToolRegistryService {
   readonly list: () => ReadonlyArray<RegisteredTool>;
 }
 
-export class ToolRegistry extends Context.Tag("@peye/kernel/ToolRegistry")<
+export class ToolRegistry extends Context.Tag("@pop-eye/kernel/ToolRegistry")<
   ToolRegistry,
   ToolRegistryService
 >() {}

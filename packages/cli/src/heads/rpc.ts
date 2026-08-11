@@ -8,7 +8,7 @@
 import type { Readable, Writable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 
-import type { SessionId } from "@peye/journal";
+import type { SessionId } from "@pop-eye/journal";
 import {
   type Command,
   decodeCommand,
@@ -18,7 +18,7 @@ import {
   InteractionTimeout,
   ProtocolError,
   type WireError,
-} from "@peye/protocol";
+} from "@pop-eye/protocol";
 import {
   Cause,
   Chunk,
@@ -117,7 +117,7 @@ export interface RpcInteractionsService {
   readonly respond: (response: InteractionResponse) => Effect.Effect<void, ProtocolError>;
 }
 
-export class RpcInteractions extends Context.Tag("@peye/cli/RpcInteractions")<
+export class RpcInteractions extends Context.Tag("@pop-eye/cli/RpcInteractions")<
   RpcInteractions,
   RpcInteractionsService
 >() {}

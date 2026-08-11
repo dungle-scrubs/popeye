@@ -8,7 +8,7 @@ import {
   JournalJsonl,
   type JournalService,
   type SessionId,
-} from "@peye/journal";
+} from "@pop-eye/journal";
 import { Effect, Exit, Layer, Schema, Stream } from "effect";
 import { expect, test } from "vitest";
 

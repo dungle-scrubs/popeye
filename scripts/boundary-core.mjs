@@ -15,10 +15,10 @@ const staticImportPattern =
   /\b(?:export|import)\s+(?:type\s+)?(?:[^'";]*?\s+from\s+)?["']([^"']+)["']/g;
 const dynamicImportPattern = /\b(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/g;
 const featurePublicPackages = Object.freeze([
-  "@peye/journal",
-  "@peye/kernel",
-  "@peye/plugins",
-  "@peye/protocol",
+  "@pop-eye/journal",
+  "@pop-eye/kernel",
+  "@pop-eye/plugins",
+  "@pop-eye/protocol",
 ]);
 
 /** @param {string} path */
@@ -76,16 +76,17 @@ export async function checkBoundaries(rootDirectory) {
     const isProtocolSource = sourcePath.startsWith("packages/protocol/src/");
 
     for (const specifier of findImportSpecifiers(source)) {
-      const importsKernel = specifier === "@peye/kernel" || specifier.startsWith("@peye/kernel/");
+      const importsKernel =
+        specifier === "@pop-eye/kernel" || specifier.startsWith("@pop-eye/kernel/");
       const importsPiAi =
         specifier === "@earendil-works/pi-ai" || specifier.startsWith("@earendil-works/pi-ai/");
-      const importsPeye = specifier.startsWith("@peye/");
+      const importsPeye = specifier.startsWith("@pop-eye/");
 
       if (isCliSource && importsKernel && !isCompositionModule) {
         violations.push({
           code: BOUNDARY_CODES.CLI_KERNEL_IMPORT,
           file: sourcePath,
-          message: "CLI sources may import @peye/kernel only from packages/cli/src/compose.ts.",
+          message: "CLI sources may import @pop-eye/kernel only from packages/cli/src/compose.ts.",
           specifier,
         });
       }
@@ -104,7 +105,7 @@ export async function checkBoundaries(rootDirectory) {
           code: BOUNDARY_CODES.FEATURE_DEEP_IMPORT,
           file: sourcePath,
           message:
-            "Feature modules may import @peye packages only from package roots and may not escape their own package through relative imports.",
+            "Feature modules may import @pop-eye packages only from package roots and may not escape their own package through relative imports.",
           specifier,
         });
       }
@@ -113,7 +114,7 @@ export async function checkBoundaries(rootDirectory) {
         violations.push({
           code: BOUNDARY_CODES.PROTOCOL_PEYE_IMPORT,
           file: sourcePath,
-          message: "Protocol sources may not import @peye packages.",
+          message: "Protocol sources may not import @pop-eye packages.",
           specifier,
         });
       }

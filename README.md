@@ -1,14 +1,14 @@
-# peye
+# pop-eye
 
 Keep coding-agent work durable when providers and interfaces change.
 
-peye is for coding-agent hosts that have outgrown mutable transcripts, hardcoded commands, and
+pop-eye is for coding-agent hosts that have outgrown mutable transcripts, hardcoded commands, and
 provider rules spread across the runtime. It stores each Session as an append-only Journal. One
 Plugin primitive adds Tools, Commands, Hooks, and instruction fragments. Effect services keep
 resource lifetime, typed failure, interruption, and concurrency rules visible at module boundaries.
 
 Existing agents often make a Head reconstruct truth from streamed output or put policy in one large
-session object. peye makes Snapshots authoritative and keeps Progress disposable. A stopped process
+session object. pop-eye makes Snapshots authoritative and keeps Progress disposable. A stopped process
 can reopen the Journal, recover unfinished work, and continue from durable Entries and Records.
 
 ```text
@@ -24,7 +24,7 @@ append-only Session tree, but it also has parallel old and new stacks, hardcoded
 session policy, and more than one remote protocol. See
 [`docs/research/pi-analysis.md`](docs/research/pi-analysis.md) for the evidence.
 
-peye keeps pi-ai behind one ai seam. The Kernel owns Turn execution but not presentation policy.
+pop-eye keeps pi-ai behind one ai seam. The Kernel owns Turn execution but not presentation policy.
 The Journal is the only durable representation. Context and Snapshots are pure Branch folds.
 First-party behavior uses the same Plugin API as project behavior. Heads send protocol commands and
 render Progress, but they replace local assumptions with each new Snapshot.
@@ -33,11 +33,11 @@ render Progress, but they replace local assumptions with each new Snapshot.
 
 | Package | Owns |
 | --- | --- |
-| `@peye/journal` | Session Entries and Records, Branch reads, Compaction, JSONL and memory Layers, Journal conformance |
-| `@peye/kernel` | Driver, mailbox, Turns, Steering, Follow-ups, Tool execution, recovery, Context fold, ai seam |
-| `@peye/plugins` | manifests, Contributions, Capabilities, Trust, generic Hook emission, generations and reload |
-| `@peye/protocol` | commands, Snapshots, Progress, results, and interaction wire Schemas |
-| `@peye/cli` | print, JSON, and RPC Head functions plus first-party Plugin composition |
+| `@pop-eye/journal` | Session Entries and Records, Branch reads, Compaction, JSONL and memory Layers, Journal conformance |
+| `@pop-eye/kernel` | Driver, mailbox, Turns, Steering, Follow-ups, Tool execution, recovery, Context fold, ai seam |
+| `@pop-eye/plugins` | manifests, Contributions, Capabilities, Trust, generic Hook emission, generations and reload |
+| `@pop-eye/protocol` | commands, Snapshots, Progress, results, and interaction wire Schemas |
+| `@pop-eye/cli` | print, JSON, and RPC Head functions plus first-party Plugin composition |
 
 The package graph points inward. Protocol has no Kernel dependency. pi-ai imports stay inside the
 kernel ai seam. Feature modules import public package roots only.
@@ -45,7 +45,7 @@ kernel ai seam. Feature modules import public package roots only.
 ## Install
 
 For a repository quickstart, use Node 24 or later and pnpm 11.5.2. The workspace packages remain
-private. `@peye/cli` is version `0.1.0` and is linked as the `peye` executable in this workspace.
+private. `@pop-eye/cli` is version `0.1.0` and is linked as the `peye` executable in this workspace.
 No npm release exists yet.
 
 ```sh
@@ -71,7 +71,7 @@ peye "Explain this repository."
 echo "Explain this repository." | peye -p
 ```
 
-Inside this repository, replace `peye` with `pnpm --filter @peye/cli peye` when the installed bin
+Inside this repository, replace `peye` with `pnpm --filter @pop-eye/cli peye` when the installed bin
 is not on `PATH`. Use `--resume <sessionId>` to continue a Session. Use `--session-dir <dir>` to
 replace the default `.peye/sessions` Journal directory. Print mode writes settled assistant text.
 JSON mode writes only Progress and Snapshot JSON lines. RPC mode stays open and accepts LF-delimited

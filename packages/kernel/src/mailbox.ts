@@ -8,8 +8,13 @@
  * the Journal when they need a result after cancellation.
  */
 
-import { Journal, type JournalFailure, type JournalService, type SessionId } from "@peye/journal";
-import { StaleRevision } from "@peye/protocol";
+import {
+  Journal,
+  type JournalFailure,
+  type JournalService,
+  type SessionId,
+} from "@pop-eye/journal";
+import { StaleRevision } from "@pop-eye/protocol";
 import {
   Context,
   Deferred,
@@ -60,7 +65,7 @@ export interface MailboxService {
   ) => Effect.Effect<MailboxResult<TValue>, MailboxFailure | TError>;
 }
 
-export class Mailbox extends Context.Tag("@peye/kernel/Mailbox")<Mailbox, MailboxService>() {}
+export class Mailbox extends Context.Tag("@pop-eye/kernel/Mailbox")<Mailbox, MailboxService>() {}
 
 interface WorkItem {
   readonly close: Effect.Effect<void>;

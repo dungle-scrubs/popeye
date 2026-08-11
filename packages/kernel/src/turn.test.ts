@@ -5,7 +5,7 @@ import {
   Journal,
   JournalError,
   JournalMemory,
-} from "@peye/journal";
+} from "@pop-eye/journal";
 import {
   Deferred,
   Effect,

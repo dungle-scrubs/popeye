@@ -4,7 +4,7 @@
  */
 import { readFile } from "node:fs/promises";
 
-import { JournalJsonl, SessionIdSchema } from "@peye/journal";
+import { JournalJsonl, SessionIdSchema } from "@pop-eye/journal";
 import { Data, Effect, Layer, Logger, Schema, Stream } from "effect";
 
 import type { AssistantItem, Driver, ProviderService } from "../compose.js";

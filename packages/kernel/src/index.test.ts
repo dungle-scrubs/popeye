@@ -3,7 +3,7 @@ import { expect, test } from "vitest";
 import * as kernel from "./index.js";
 
 test("exports the kernel package marker", () => {
-  expect(kernel.kernelPackage).toBe("@peye/kernel");
+  expect(kernel.kernelPackage).toBe("@pop-eye/kernel");
 });
 
 test("exports every public kernel failure", () => {

@@ -7,7 +7,7 @@ import {
   JournalMemory,
   RecordIdSchema,
   RecordSchema,
-} from "@peye/journal";
+} from "@pop-eye/journal";
 import { Effect } from "effect";
 import { expect, test } from "vitest";
 import {

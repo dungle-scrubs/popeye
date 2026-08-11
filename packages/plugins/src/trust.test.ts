@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { SessionIdSchema } from "@peye/journal";
+import { SessionIdSchema } from "@pop-eye/journal";
 import { Context, Effect, Exit, Layer, Schema, Tracer } from "effect";
 import { expect, test } from "vitest";
 
