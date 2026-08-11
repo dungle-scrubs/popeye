@@ -5,7 +5,7 @@
 > file as features are implemented - never mark a milestone complete
 > until every current-cutoff checkbox under it is checked.
 
-> Current focus: Phase 2 - Tool adaptation and audit surface
+> Current focus: Phase 3 - rpc per-Session dispatch
 
 ## Phase 1: Plugin pipeline in the CLI
 
@@ -40,30 +40,32 @@ Source: `implementation.md` (M2); D-002, D-008, D-010, D-011, D-014
 ### M3: Tool adapter
 Source: `implementation.md` (M3); D-003, D-006, D-007, D-009, D-015
 
-- [ ] A fixture tool contribution adapts with every field intact (name, description, parameters schema, execute, executionMode, replay, requiredCapabilities)
-- [ ] Session grants are the union of loaded manifests' capabilities
-- [ ] A tool requiring a capability its own plugin does not declare is skipped with a diagnostic naming the plugin and the missing declaration, even when another plugin declares that capability
-- [ ] Duplicate tool name across scopes: project-local shadows user-global shadows first-party
-- [ ] Duplicate tool name within one scope: manifest priority wins, then lexical plugin-name order
-- [ ] Every shadowing emits a diagnostic naming both plugins and the survivor; startup does not fail
-- [ ] The per-process registry built after generation load replaces `ToolRegistryLive([])` in `run.ts`
-- [ ] An empty adapted tool set is valid; the startup line reports the tool count (0 and N cases)
-- [ ] An adapted tool executes through the kernel with Schema-validated arguments; invalid arguments become a model-visible error result
+- [x] `PluginGeneration` exposes each loaded plugin's manifest via an additive accessor (D-022), test-covered in `@pop-eye/plugins`, existing tests unchanged
+- [x] A fixture tool contribution adapts with every field intact (name, description, parameters schema, execute, executionMode, replay, requiredCapabilities)
+- [x] Session grants are the union of loaded manifests' capabilities
+- [x] A tool requiring a capability its own plugin does not declare is skipped with a diagnostic naming the plugin and the missing declaration, even when another plugin declares that capability
+- [x] Duplicate tool name across scopes: project-local shadows user-global shadows first-party
+- [x] Duplicate tool name within one scope: contribution priority wins, then lexical plugin-name order (D-023)
+- [x] Every shadowing emits a diagnostic naming both plugins and the survivor; startup does not fail
+- [x] The per-process registry built after generation load replaces `ToolRegistryLive([])` in `run.ts`
+- [x] An empty adapted tool set is valid; the startup line reports the tool count (0 and N cases)
+- [x] An adapted tool executes through the kernel with Schema-validated arguments; invalid arguments become a model-visible error result
 
 ### M4: Snapshot audit fields
 Source: `implementation.md` (M4); D-012
 
-- [ ] rpc snapshots carry `capabilityGrants` (sorted) and `loadedGeneration` for a loaded fixture plugin
-- [ ] json head emits both fields; golden transcripts regenerated and stable
-- [ ] Both fields survive session resume (fields present on a resumed session's snapshot)
+- [x] rpc snapshots carry `capabilityGrants` (sorted) and `loadedGeneration` for a loaded fixture plugin
+- [x] json head emits both fields; golden transcripts regenerated and stable
+- [x] Both fields survive session resume (fields present on a resumed session's snapshot)
 
 ### M5: End-to-end tool proof
 Source: `implementation.md` (M5)
 
-- [ ] A fake-provider toolCall turn completes through the spawned bin (`--mode json`); the captured stream decodes through `@pop-eye/protocol`
-- [ ] The captured fixture is stable across two consecutive runs
-- [ ] Live harness: a real model turn calls the fixture tool through the shipped bin (env-gated)
-- [ ] `01-cli-entry` ledger finding 2 (tool loading) resolved with harness evidence
+- [x] A fake-provider toolCall turn completes through the spawned bin (`--mode json`); the captured stream decodes through `@pop-eye/protocol`
+- [x] The captured fixture is stable across two consecutive runs
+- [x] Live harness: a real model turn calls the fixture tool through the shipped bin (env-gated)
+- [x] `01-cli-entry` ledger finding 2 (tool loading) resolved with harness evidence
+- [x] No-argument tool schemas normalize to an object root providers accept (kernel seam defect found by the live proof; D-024, seam unit test)
 
 ## Phase 3: rpc per-Session dispatch
 
@@ -111,9 +113,9 @@ Source: `implementation.md` (Deferred follow-up); D-006, D-010
 (none)
 
 ## Summary
-- Total features: 52
-- Completed: 18
-- Remaining: 34
-- Current cutoff blockers: 34
+- Total features: 54
+- Completed: 36
+- Remaining: 18
+- Current cutoff blockers: 18
 - Accepted/deferred follow-up: 4
 - Superseded/obsolete checklist debt: 0

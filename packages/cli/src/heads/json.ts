@@ -10,18 +10,22 @@ import type { SessionId } from "@pop-eye/journal";
 import { ProgressSchema, SnapshotSchema } from "@pop-eye/protocol";
 import { Deferred, Effect, Fiber, Schema, Stream } from "effect";
 
+import type { DriverSnapshot } from "../compose.js";
 import { Driver } from "../compose.js";
 import {
   exitCodeForStopReason,
   type HeadExitCode,
   type HeadWriter,
+  protocolSnapshot,
   runHeadBoundary,
+  type SnapshotAuditFields,
   stdoutHeadWriter,
 } from "./shared.js";
 
 export interface JsonHeadOptions {
   readonly prompts: ReadonlyArray<string>;
   readonly sessionId?: SessionId;
+  readonly snapshotAudit?: SnapshotAuditFields;
   readonly writer?: HeadWriter;
 }
 
@@ -31,26 +35,13 @@ const encodeProgressLine = (progress: unknown) =>
     Effect.map((encoded) => `${JSON.stringify(encoded)}\n`),
   );
 
-const encodeSnapshotLine = (snapshot: {
-  readonly entries: ReadonlyArray<unknown>;
-  readonly leaf: { readonly id: string };
-  readonly model?: string | undefined;
-  readonly name?: string | undefined;
-  readonly phase: unknown;
-  readonly revision: number;
-  readonly sessionId: string;
-  readonly thinkingLevel?: unknown;
-}) =>
-  Schema.decodeUnknown(SnapshotSchema, { onExcessProperty: "error" })({
-    entries: snapshot.entries,
-    leafEntryId: snapshot.leaf.id,
-    ...(snapshot.model === undefined ? {} : { model: snapshot.model }),
-    ...(snapshot.name === undefined ? {} : { name: snapshot.name }),
-    phase: snapshot.phase,
-    revision: snapshot.revision,
-    sessionId: snapshot.sessionId,
-    ...(snapshot.thinkingLevel === undefined ? {} : { thinkingLevel: snapshot.thinkingLevel }),
-  }).pipe(
+const encodeSnapshotLine = (
+  snapshot: DriverSnapshot,
+  snapshotAudit: SnapshotAuditFields | undefined,
+) =>
+  Schema.decodeUnknown(SnapshotSchema, { onExcessProperty: "error" })(
+    protocolSnapshot(snapshot, snapshotAudit),
+  ).pipe(
     Effect.flatMap(Schema.encode(SnapshotSchema)),
     Effect.map((encoded) => `${JSON.stringify(encoded)}\n`),
   );
@@ -83,7 +74,9 @@ export const runJsonHead = (options: JsonHeadOptions) =>
             const result = yield* driver.prompt(session.id, prompt);
             yield* Fiber.join(progressFiber);
             const snapshot = yield* driver.getSnapshot(session.id);
-            yield* encodeSnapshotLine(snapshot).pipe(Effect.flatMap(writer.write));
+            yield* encodeSnapshotLine(snapshot, options.snapshotAudit).pipe(
+              Effect.flatMap(writer.write),
+            );
             return result.stopReason;
           }),
         );

@@ -61,7 +61,8 @@ peye bin
 | Constraint | Impact |
 |-----------|--------|
 | Kernel `ToolRegistryService` is Session-less; ai seam captures `list()` at Layer build | One per-process registry, built after generation load, before Driver composition (D-006) |
-| ContributionRegistry keys are `plugin/name` - cross-plugin tool-name collisions surface only in the adapter | Adapter owns shadowing policy (D-007) |
+| ContributionRegistry keys are `plugin/name` - cross-plugin tool-name collisions surface only in the adapter | Adapter owns shadowing policy (D-007; within-scope tiebreak corrected by D-023: contribution priority, then lexical plugin name) |
+| `loadGeneration` discards plugin manifests; the registry strips plugin metadata from listed contributions | One additive accessor on `PluginGeneration` exposes loaded manifests (D-022) so the adapter can enforce D-009; the only plugins-package change in this plan |
 | `loadGeneration` is all-or-nothing (no per-plugin skip) | Fail-closed startup with named diagnostic (D-010) |
 | `loadGeneration` requires a TrustStore layer | Compose `TrustStoreMemory` (D-008) |
 | Protocol command `id` is optional | rpc ordering must come from dispatch structure, not correlation (D-005) |
@@ -69,9 +70,11 @@ peye bin
 
 ### Boundaries
 
-- All new code lives in `@pop-eye/cli`. Import-boundary CI rules are
-  unchanged and must stay green: no kernel internals, no pi-ai outside the
-  seam.
+- All new code lives in `@pop-eye/cli`, with one exception recorded by
+  D-022: an additive, behavior-preserving manifest accessor on
+  `PluginGeneration` in `@pop-eye/plugins` (test-covered there). Import-
+  boundary CI rules are unchanged and must stay green: no kernel internals,
+  no pi-ai outside the seam.
 - New module seams (each gets a module comment stating what it owns and why
   it exists):
   - `packages/cli/src/plugins/pipeline.ts` - owns discovery-config
@@ -200,10 +203,14 @@ report what loaded.
   skipped-tool diagnostics naming plugin + missing declaration; adapted
   tool count in startup line)
 - **Tasks:**
+  0. RED (in `@pop-eye/plugins`): `PluginGeneration` exposes each loaded
+     plugin's manifest via an additive accessor <!-- D-022 -->; existing
+     plugins tests stay green (behavior-preserving). GREEN: expose it.
   1. Seams under test: new `packages/cli/src/plugins/tool-adapter.ts`
-     exporting `adaptTools(registry, grants, manifests)` →
-     `ReadonlyArray<Tool.Any>`; per-process `ToolRegistryLive(adapted)`
-     built after load <!-- D-006 -->.
+     exporting `adaptTools(generation, grants)` →
+     `ReadonlyArray<Tool.Any>` (manifests via the D-022 accessor);
+     per-process `ToolRegistryLive(adapted)` built after load
+     <!-- D-006 -->.
   2. RED: a fixture tool contribution round-trips: name, description,
      parameters schema, execute, executionMode, replay,
      requiredCapabilities. GREEN: adapt from contribution payload.
@@ -212,9 +219,10 @@ report what loaded.
      a diagnostic even when another plugin declares it <!-- D-009 -->.
      GREEN: self-declaration rule.
   4. RED: two plugins contributing one tool name: project-local shadows
-     user-global shadows first-party; within a scope, manifest priority
-     then lexical plugin name; diagnostic names both plugins and the
-     survivor; startup does not fail <!-- D-007 -->. GREEN: shadowing.
+     user-global shadows first-party; within a scope, contribution
+     priority then lexical plugin name <!-- D-023 -->; diagnostic names
+     both plugins and the survivor; startup does not fail <!-- D-007 -->.
+     GREEN: shadowing.
   5. RED: empty adapted set is valid; startup line reports tool count 0
      <!-- D-015 -->. GREEN: degraded-operation diagnostic.
   6. REFACTOR: `run.ts` replaces `ToolRegistryLive([])` with the adapted

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,9 +7,12 @@ import { Effect } from "effect";
 import { expect, test } from "vitest";
 
 import { FAKE_PROVIDER_PROMPT, fakeProviderEnvironment, runBuiltBin } from "../test-support/cli.js";
-import { normalizeJsonStream } from "../test-support/json.js";
+import { normalizeJsonLines, normalizeJsonStream } from "../test-support/json.js";
 
 const FIXTURE_PATH = new URL("../../test-fixtures/cli-json-stream.jsonl", import.meta.url).pathname;
+const TOOL_FIXTURE_PATH = new URL("../../test-fixtures/cli-json-tool-stream.jsonl", import.meta.url)
+  .pathname;
+const TOOL_FIXTURE_PROMPT = "Call project-echo once with the fixture value.";
 
 const lines = (stream: string): ReadonlyArray<string> => stream.trimEnd().split("\n");
 
@@ -38,13 +41,94 @@ const captureBuiltStream = (): string => {
   }
 };
 
+const captureBuiltToolStream = (): string => {
+  const projectPath = mkdtempSync(join(tmpdir(), "peye-cli-tool-stream-"));
+  const projectPluginDir = join(projectPath, ".peye", "plugins");
+  const providerScriptPath = join(projectPath, "tool-provider.json");
+  const sessionDir = join(projectPath, "sessions");
+  const userPluginDir = join(projectPath, "user-plugins");
+  try {
+    mkdirSync(projectPluginDir, { recursive: true });
+    mkdirSync(userPluginDir, { recursive: true });
+    writeFileSync(
+      join(projectPluginDir, "project-echo.ts"),
+      [
+        `import { Effect, Schema } from ${JSON.stringify(new URL("../../node_modules/effect/dist/esm/index.js", import.meta.url).href)};`,
+        "export default () => ({",
+        "  contributions: [{",
+        "    kind: 'tool',",
+        "    name: 'project-echo',",
+        "    payload: {",
+        "      description: 'Echo a project value.',",
+        "      execute: ({ value }) => Effect.succeed({ content: 'echo:' + value }),",
+        "      name: 'project-echo',",
+        "      parameters: Schema.Struct({ value: Schema.String }),",
+        "    },",
+        "    priority: 0,",
+        "  }],",
+        "  manifest: { capabilities: [], name: 'project-echo-plugin', version: '1.0.0' },",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      providerScriptPath,
+      JSON.stringify({
+        responses: [
+          {
+            items: [
+              {
+                _tag: "toolCall",
+                argumentsJson: JSON.stringify({ value: "fixture-value" }),
+                id: "project-echo-call",
+                name: "project-echo",
+              },
+              { _tag: "done", stopReason: "toolCalls" },
+            ],
+            prompt: TOOL_FIXTURE_PROMPT,
+          },
+          {
+            items: [
+              { _tag: "textDelta", text: "Provider observed echo:fixture-value." },
+              { _tag: "done", stopReason: "done" },
+            ],
+            prompt: TOOL_FIXTURE_PROMPT,
+          },
+        ],
+      }),
+    );
+
+    const result = runBuiltBin(
+      ["-p", "--mode", "json", "--session-dir", sessionDir, TOOL_FIXTURE_PROMPT],
+      {
+        cwd: projectPath,
+        env: {
+          ...fakeProviderEnvironment(),
+          PEYE_FAKE_PROVIDER_SCRIPT: providerScriptPath,
+          PEYE_USER_PLUGIN_DIR: userPluginDir,
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout;
+  } finally {
+    rmSync(projectPath, { force: true, recursive: true });
+  }
+};
+
 test("the committed CLI JSON stream decodes as Progress followed by a Snapshot", async () => {
   const fixture = readFileSync(FIXTURE_PATH, "utf8");
+  const snapshot = JSON.parse(lines(fixture).at(-1) ?? "null") as Record<string, unknown>;
 
   await expect(decodeWireStream(fixture)).resolves.toBeUndefined();
-  expect(
-    (JSON.parse(lines(fixture).at(-1) ?? "null") as { readonly entries?: unknown }).entries,
-  ).toBeDefined();
+  expect(snapshot.entries).toBeDefined();
+  expect(snapshot).toMatchObject({
+    capabilityGrants: [],
+    loadedGeneration: {
+      id: expect.any(String),
+      plugins: ["compact", "session-name"],
+    },
+  });
 });
 
 test("the normalized CLI JSON stream is stable across 2 built-bin runs", () => {
@@ -53,5 +137,42 @@ test("the normalized CLI JSON stream is stable across 2 built-bin runs", () => {
   const second = captureBuiltStream();
 
   expect(normalizeJsonStream(first)).toEqual(normalizeJsonStream(second));
+  expect(normalizeJsonStream(first)).toEqual(normalizeJsonStream(fixture));
+}, 15_000);
+
+test("the committed CLI JSON Tool stream decodes as Progress followed by a Snapshot", async () => {
+  const fixture = readFileSync(TOOL_FIXTURE_PATH, "utf8");
+  const snapshot = JSON.parse(lines(fixture).at(-1) ?? "null") as Record<string, unknown>;
+
+  await expect(decodeWireStream(fixture)).resolves.toBeUndefined();
+  expect(snapshot.entries).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          content: "echo:fixture-value",
+          role: "toolResult",
+          toolName: "project-echo",
+        }),
+      }),
+    ]),
+  );
+  expect(snapshot).toMatchObject({
+    capabilityGrants: [],
+    loadedGeneration: {
+      id: expect.any(String),
+      plugins: ["compact", "session-name", "project-echo-plugin"],
+    },
+  });
+});
+
+test("the normalized CLI JSON Tool stream is stable across 2 built-bin runs", () => {
+  const first = captureBuiltToolStream();
+  const second = captureBuiltToolStream();
+
+  expect(normalizeJsonStream(first)).toEqual(normalizeJsonStream(second));
+  if (process.env.PEYE_UPDATE_RECORDED_FIXTURES === "1") {
+    writeFileSync(TOOL_FIXTURE_PATH, normalizeJsonLines(first));
+  }
+  const fixture = readFileSync(TOOL_FIXTURE_PATH, "utf8");
   expect(normalizeJsonStream(first)).toEqual(normalizeJsonStream(fixture));
 }, 15_000);

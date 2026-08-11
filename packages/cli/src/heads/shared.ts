@@ -4,9 +4,27 @@
  */
 import type { Writable } from "node:stream";
 
+import type { Snapshot } from "@pop-eye/protocol";
 import { Cause, Chunk, Data, Effect, Exit, Logger, Option } from "effect";
 
 import type { DriverSnapshot, TurnResult } from "../compose.js";
+
+export type SnapshotAuditFields = Required<Pick<Snapshot, "capabilityGrants" | "loadedGeneration">>;
+
+export const protocolSnapshot = (
+  snapshot: DriverSnapshot,
+  snapshotAudit: SnapshotAuditFields | undefined,
+) => ({
+  ...(snapshotAudit === undefined ? {} : snapshotAudit),
+  entries: snapshot.entries,
+  leafEntryId: snapshot.leaf.id,
+  ...(snapshot.model === undefined ? {} : { model: snapshot.model }),
+  ...(snapshot.name === undefined ? {} : { name: snapshot.name }),
+  phase: snapshot.phase,
+  revision: snapshot.revision,
+  sessionId: snapshot.sessionId,
+  ...(snapshot.thinkingLevel === undefined ? {} : { thinkingLevel: snapshot.thinkingLevel }),
+});
 
 /**
  * 0: done or truncated; 1: provider-settled error; 2: aborted; 3: unresolved tool calls;

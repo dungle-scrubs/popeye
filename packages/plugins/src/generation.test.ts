@@ -30,6 +30,40 @@ const pluginSource = (name: string, content: string): string =>
     "",
   ].join("\n");
 
+test("a loaded Plugin generation exposes its name-correlated manifest", async () => {
+  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-manifest-"));
+  const projectPath = join(root, "project");
+  const pluginPath = join(root, "manifest-plugin.ts");
+
+  try {
+    await mkdir(projectPath, { recursive: true });
+    await writeFile(pluginPath, pluginSource("manifest-plugin", "manifest"));
+
+    const plugin = await Effect.runPromise(
+      Effect.gen(function* () {
+        const generation = yield* loadGeneration({
+          config: { cliPaths: [pluginPath], projectPath, userGlobalDirectories: [] },
+          trust: "untrusted",
+        });
+        const [loadedPlugin] = generation.plugins;
+        yield* generation.close;
+        return loadedPlugin;
+      }).pipe(Effect.provide(TrustStoreMemory())),
+    );
+
+    expect(plugin).toMatchObject({
+      manifest: {
+        capabilities: [],
+        name: "manifest-plugin",
+        version: "1.0.0",
+      },
+      name: "manifest-plugin",
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 interface CapturedSpan {
   readonly attributes: Map<string, unknown>;
   exit: Exit.Exit<unknown, unknown> | undefined;

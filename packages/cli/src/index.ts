@@ -49,3 +49,4 @@ export {
   makeWritableHeadWriter,
   stdoutHeadWriter,
 } from "./heads/shared.js";
+export { adaptTools, generationCapabilityUnion } from "./tools/adapter.js";

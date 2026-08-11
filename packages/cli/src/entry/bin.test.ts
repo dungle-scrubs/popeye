@@ -99,10 +99,90 @@ test("the built print Head accepts positional and piped prompts with pure stdout
         mode: "print",
         model: "fake-model",
         sessionAction: "create",
+        toolCount: 0,
       },
     ]);
   }
 }, 15_000);
+
+test("the built bin reports the adapted project Plugin Tool count", () => {
+  const projectPath = sessionDirectory();
+  const projectPluginDir = join(projectPath, ".peye", "plugins");
+  const sessionDir = join(projectPath, "sessions");
+  const userPluginDir = join(projectPath, "user-plugins");
+  mkdirSync(projectPluginDir, { recursive: true });
+  mkdirSync(userPluginDir, { recursive: true });
+  writeFileSync(
+    join(projectPluginDir, "project-tool.ts"),
+    [
+      `import { Effect, Schema } from ${JSON.stringify(new URL("../../node_modules/effect/dist/esm/index.js", import.meta.url).href)};`,
+      "export default () => ({",
+      "  contributions: [{",
+      "    kind: 'tool',",
+      "    name: 'project-tool',",
+      "    payload: {",
+      "      description: 'Run project-tool.',",
+      "      execute: () => Effect.succeed({ content: 'project-tool-result' }),",
+      "      name: 'project-tool',",
+      "      parameters: Schema.Struct({}),",
+      "    },",
+      "    priority: 0,",
+      "  }],",
+      "  manifest: { capabilities: [], name: 'project-tool-plugin', version: '1.0.0' },",
+      "});",
+      "",
+    ].join("\n"),
+  );
+
+  const result = runBuiltBin(["-p", "--session-dir", sessionDir, FAKE_PROVIDER_PROMPT], {
+    cwd: projectPath,
+    env: { ...fakeProviderEnvironment(), PEYE_USER_PLUGIN_DIR: userPluginDir },
+  });
+
+  expect(result.status).toBe(0);
+  expect(startupRecords(result.stderr)).toMatchObject([{ toolCount: 1 }]);
+});
+
+test("the built RPC Head Snapshot audits the loaded Plugin generation and sorted Capability grants", () => {
+  const projectPath = sessionDirectory();
+  const projectPluginDir = join(projectPath, ".peye", "plugins");
+  const sessionDir = join(projectPath, "sessions");
+  const userPluginDir = join(projectPath, "user-plugins");
+  mkdirSync(projectPluginDir, { recursive: true });
+  mkdirSync(userPluginDir, { recursive: true });
+  writeFileSync(
+    join(projectPluginDir, "snapshot-audit.ts"),
+    [
+      "export default () => ({",
+      "  contributions: [],",
+      "  manifest: {",
+      "    capabilities: [{ name: 'shell' }, { name: 'filesystem-read' }],",
+      "    name: 'snapshot-audit',",
+      "    version: '1.0.0',",
+      "  },",
+      "});",
+      "",
+    ].join("\n"),
+  );
+
+  const result = runBuiltBin(["-p", "--mode", "rpc", "--session-dir", sessionDir], {
+    cwd: projectPath,
+    env: { ...fakeProviderEnvironment(), PEYE_USER_PLUGIN_DIR: userPluginDir },
+    input: `${JSON.stringify({ _tag: "create", id: "create-audited-session" })}\n`,
+  });
+
+  expect(result.status, result.stderr).toBe(0);
+  const response = JSON.parse(result.stdout.trimEnd()) as {
+    readonly result?: Record<string, unknown>;
+  };
+  expect(response.result).toMatchObject({
+    capabilityGrants: ["filesystem-read", "shell"],
+    loadedGeneration: {
+      id: expect.any(String),
+      plugins: ["compact", "session-name", "snapshot-audit"],
+    },
+  });
+});
 
 test("the built JSON Head emits only parseable wire lines and can resume its Session", () => {
   const directory = sessionDirectory();
@@ -133,11 +213,161 @@ test("the built JSON Head emits only parseable wire lines and can resume its Ses
       env: fakeProviderEnvironment(),
     },
   );
-  expect(resumed.status).toBe(0);
+  expect(resumed.status, resumed.stderr).toBe(0);
   expect(resumed.stdout).toBe("Fake provider answer.\n");
   expect(startupRecords(resumed.stderr)).toMatchObject([
     { mode: "print", sessionAction: `resume:${sessionId}` },
   ]);
+}, 15_000);
+
+test("the built JSON Head Snapshot audits the current process after Session resume", () => {
+  const directory = sessionDirectory();
+  const first = runBuiltBin(
+    ["-p", "--mode", "json", "--session-dir", directory, FAKE_PROVIDER_PROMPT],
+    { env: fakeProviderEnvironment() },
+  );
+  expect(first.status, first.stderr).toBe(0);
+  const firstFrames = first.stdout
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const firstSnapshot = firstFrames.at(-1);
+  const sessionId = firstSnapshot?.sessionId;
+  expect(sessionId).toBeTypeOf("string");
+  if (typeof sessionId !== "string") {
+    throw new Error("JSON Head Snapshot did not contain a Session id.");
+  }
+
+  const resumed = runBuiltBin(
+    [
+      "-p",
+      "--mode",
+      "json",
+      "--resume",
+      sessionId,
+      "--session-dir",
+      directory,
+      FAKE_PROVIDER_PROMPT,
+    ],
+    { env: fakeProviderEnvironment() },
+  );
+
+  expect(resumed.status, resumed.stderr).toBe(0);
+  const resumedFrames = resumed.stdout
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  expect(resumedFrames.at(-1)).toMatchObject({
+    capabilityGrants: [],
+    loadedGeneration: {
+      id: expect.any(String),
+      plugins: ["compact", "session-name"],
+    },
+    sessionId,
+  });
+});
+
+test("the built JSON CLI exposes invalid project Plugin Tool arguments to the Provider", () => {
+  const projectPath = sessionDirectory();
+  const projectPluginDir = join(projectPath, ".peye", "plugins");
+  const sessionDir = join(projectPath, "sessions");
+  const userPluginDir = join(projectPath, "user-plugins");
+  const providerScriptPath = join(projectPath, "tool-provider.json");
+  const prompt = "Run the project echo Tool.";
+  mkdirSync(projectPluginDir, { recursive: true });
+  mkdirSync(userPluginDir, { recursive: true });
+  writeFileSync(
+    join(projectPluginDir, "project-echo.ts"),
+    [
+      `import { Effect, Schema } from ${JSON.stringify(new URL("../../node_modules/effect/dist/esm/index.js", import.meta.url).href)};`,
+      "export default () => ({",
+      "  contributions: [{",
+      "    kind: 'tool',",
+      "    name: 'project-echo',",
+      "    payload: {",
+      "      description: 'Echo a project value.',",
+      "      execute: ({ value }) => Effect.succeed({ content: 'echo:' + value }),",
+      "      name: 'project-echo',",
+      "      parameters: Schema.Struct({ value: Schema.String }),",
+      "    },",
+      "    priority: 0,",
+      "  }],",
+      "  manifest: { capabilities: [], name: 'project-echo-plugin', version: '1.0.0' },",
+      "});",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    providerScriptPath,
+    JSON.stringify({
+      responses: [
+        {
+          items: [
+            {
+              _tag: "toolCall",
+              argumentsJson: JSON.stringify({ unexpected: true }),
+              id: "project-echo-call",
+              name: "project-echo",
+            },
+            { _tag: "done", stopReason: "toolCalls" },
+          ],
+          prompt,
+        },
+        {
+          items: [
+            { _tag: "textDelta", text: "Provider observed the Tool error." },
+            { _tag: "done", stopReason: "done" },
+          ],
+          prompt,
+        },
+      ],
+    }),
+  );
+
+  const result = runBuiltBin(["-p", "--mode", "json", "--session-dir", sessionDir, prompt], {
+    cwd: projectPath,
+    env: {
+      ...fakeProviderEnvironment(),
+      PEYE_FAKE_PROVIDER_SCRIPT: providerScriptPath,
+      PEYE_USER_PLUGIN_DIR: userPluginDir,
+    },
+  });
+  const frames = result.stdout
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const snapshot = frames.at(-1) as
+    | { readonly entries?: ReadonlyArray<{ readonly payload?: Record<string, unknown> }> }
+    | undefined;
+  const toolResult = snapshot?.entries?.find(
+    (entry) => entry.payload?.role === "toolResult",
+  )?.payload;
+
+  expect(result.status).toBe(0);
+  expect(frames).toContainEqual({
+    _tag: "toolStarted",
+    name: "project-echo",
+    toolCallId: "project-echo-call",
+  });
+  expect(frames).toContainEqual({
+    _tag: "toolCompleted",
+    isError: true,
+    toolCallId: "project-echo-call",
+  });
+  expect(frames).toContainEqual({
+    _tag: "assistantText",
+    text: "Provider observed the Tool error.",
+  });
+  expect(toolResult).toMatchObject({
+    isError: true,
+    role: "toolResult",
+    toolCallId: "project-echo-call",
+    toolName: "project-echo",
+  });
+  expect(toolResult?.content).toEqual(
+    expect.stringContaining("Invalid arguments for tool project-echo"),
+  );
+  expect(startupRecords(result.stderr)).toMatchObject([{ toolCount: 1 }]);
 }, 15_000);
 
 test("the built RPC Head serves LF-delimited commands until stdin closes", () => {
@@ -295,4 +525,6 @@ test("the built bin exits 2 when a Plugin throws during composition", () => {
   expect(result.stderr).toContain("composition_failed");
   expect(result.stderr).toContain(pluginPath);
   expect(result.stderr).toContain("fixture import explosion");
+  // Contract: STARTUP carries toolCount, so it is written only after composition succeeds.
+  expect(startupRecords(result.stderr)).toEqual([]);
 });

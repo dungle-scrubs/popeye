@@ -1,0 +1,12 @@
+{"_tag":"phaseChanged","phase":"IDLE"}
+{"_tag":"phaseChanged","phase":"ASSEMBLING"}
+{"_tag":"phaseChanged","phase":"STREAMING"}
+{"_tag":"phaseChanged","phase":"EXECUTING"}
+{"_tag":"toolStarted","name":"project-echo","toolCallId":"<id-1>"}
+{"_tag":"toolCompleted","isError":false,"toolCallId":"<id-1>"}
+{"_tag":"phaseChanged","phase":"ASSEMBLING"}
+{"_tag":"phaseChanged","phase":"STREAMING"}
+{"_tag":"assistantText","text":"Provider observed echo:fixture-value."}
+{"_tag":"phaseChanged","phase":"SETTLING"}
+{"_tag":"turnSettled","revision":8,"stopReason":"done"}
+{"capabilityGrants":[],"entries":[{"id":"<id-2>","kind":"session_root","parentId":null,"payload":{}},{"id":"<id-3>","kind":"message","parentId":"<id-2>","payload":{"content":"Call project-echo once with the fixture value.","role":"user"}},{"id":"<id-4>","kind":"message","parentId":"<id-3>","payload":{"content":"","role":"assistant","stopReason":"toolCalls","toolCalls":[{"argumentsJson":"{\"value\":\"fixture-value\"}","id":"<id-1>","name":"project-echo"}]}},{"id":"<id-5>","kind":"message","parentId":"<id-4>","payload":{"content":"echo:fixture-value","isError":false,"role":"toolResult","toolCallId":"<id-1>","toolName":"project-echo"}},{"id":"<id-6>","kind":"message","parentId":"<id-5>","payload":{"content":"Provider observed echo:fixture-value.","role":"assistant","stopReason":"done"}}],"leafEntryId":"<id-6>","loadedGeneration":{"id":"<id-7>","plugins":["compact","session-name","project-echo-plugin"]},"phase":"IDLE","revision":8,"sessionId":"<id-8>"}
