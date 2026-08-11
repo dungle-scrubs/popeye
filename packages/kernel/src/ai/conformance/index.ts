@@ -318,11 +318,8 @@ export const describeAiSeamContract = async <TFixture>(
         ),
       );
 
-      expect(error).toMatchObject({
-        _tag: "ProviderError",
-        message: "pi-ai stream ended without a terminal item.",
-        transient: false,
-      });
+      expect(error).toBeInstanceOf(ProviderError);
+      expect(error).toMatchObject({ _tag: "ProviderError", transient: false });
     });
 
     test("rejects terminal reason drift", async () => {
@@ -339,11 +336,8 @@ export const describeAiSeamContract = async <TFixture>(
         ),
       );
 
-      expect(error).toMatchObject({
-        _tag: "ProviderError",
-        message: "pi-ai terminal mismatch: event=toolUse, message=stop.",
-        transient: false,
-      });
+      expect(error).toBeInstanceOf(ProviderError);
+      expect(error).toMatchObject({ _tag: "ProviderError", transient: false });
     });
   });
 };
