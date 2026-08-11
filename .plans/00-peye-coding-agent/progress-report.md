@@ -205,14 +205,14 @@ Source: `implementation.md` (M16); D-020; Normative Contracts (hook points)
 ### M17: Trust with digest binding
 Source: `implementation.md` (M17); D-015
 
-- [ ] Phase 1 loads only user-global and out-of-tree CLI plugins before any trust decision
-- [ ] Untrusted project: no project-local plugin code executes (asserted via canary)
-- [ ] A CLI-passed path resolving inside the project tree is classified project-local and cannot answer trust
-- [ ] Trust decision records a content digest of project plugin files
-- [ ] Unchanged digest: no re-prompt on subsequent loads
-- [ ] Changed digest: re-prompt with a summary of changed files
-- [ ] Trust decisions emit structured diagnostics (digest, scope, decision)
-- [ ] Phase 2 reuses phase-1 plugin instances (no double-build)
+- [x] Phase 1 loads only user-global and out-of-tree CLI plugins before any trust decision
+- [x] Untrusted project: no project-local plugin code executes (asserted via canary)
+- [x] A CLI-passed path resolving inside the project tree is classified project-local and cannot answer trust
+- [x] Trust decision records a content digest of project plugin files
+- [x] Unchanged digest: no re-prompt on subsequent loads
+- [x] Changed digest: re-prompt with a summary of changed files
+- [x] Trust decisions emit structured diagnostics (digest, scope, decision)
+- [x] Phase 2 reuses phase-1 plugin instances (no double-build)
 
 ### M18: Plugin loading and hot reload
 Source: `implementation.md` (M18); D-027; spikes A-002/A-003
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 119
-- Remaining: 58
-- Current cutoff blockers: 58
+- Completed: 127
+- Remaining: 50
+- Current cutoff blockers: 50
 - Accepted/deferred follow-up: 5
 - Superseded/obsolete checklist debt: 0
