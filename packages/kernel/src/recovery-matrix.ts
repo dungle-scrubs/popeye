@@ -20,7 +20,12 @@ import { Deferred, Effect, type Exit, Fiber, Layer, Schema, Stream, Tracer } fro
 
 import { Driver, DriverDefault } from "./driver.js";
 import { Provider, type ProviderService } from "./provider.js";
-import type { RecoveryReport } from "./recovery.js";
+import {
+  applyRecoveryPlan,
+  boundedRecoveryRecords,
+  type RecoveryReport,
+  recoverSession,
+} from "./recovery.js";
 import { defineTool, type Tool, ToolRegistryLive } from "./tool.js";
 
 export interface JournalBoundary {
@@ -102,6 +107,18 @@ export interface DoubleRecoveryCell {
   readonly recoveryReportEmitted: boolean;
   readonly recoverySpanEmitted: boolean;
   readonly toolResultIds: ReadonlyArray<string>;
+}
+
+export interface OrphanedPromptDoubleRecoveryCell {
+  readonly finalReportActionCount: number;
+  readonly finalReportEntriesAppendedCount: number;
+  readonly firstRecoveryCrashed: boolean;
+  readonly interruptedAssistantCount: number;
+  readonly operationRecordCount: number;
+  readonly originalTurnCrashed: boolean;
+  readonly retryActionCount: number;
+  readonly retryEntriesAppendedCount: number;
+  readonly retryOperationIdFound: string | undefined;
 }
 
 interface CapturedSpan {
@@ -578,6 +595,18 @@ const messagePayload = (entry: Entry): Record<string, unknown> | undefined =>
     ? (entry.payload as Record<string, unknown>)
     : undefined;
 
+const isInterruptedAssistantPayload = (payload: Record<string, unknown> | undefined): boolean => {
+  const diagnostic = payload?.diagnostic;
+  return (
+    payload?.role === "assistant" &&
+    (payload.stopReason === "aborted" || payload.stopReason === "error") &&
+    typeof diagnostic === "object" &&
+    diagnostic !== null &&
+    !Array.isArray(diagnostic) &&
+    (diagnostic as Record<string, unknown>).detail === "interrupted by crash"
+  );
+};
+
 const resultCallIds = (entries: ReadonlyArray<Entry>): ReadonlyArray<string> =>
   entries.flatMap((entry) => {
     const payload = messagePayload(entry);
@@ -765,9 +794,7 @@ const recoverMatrixCell = async (input: {
       recoverySpan.attributes.get("entriesAppendedCount") === report.entriesAppended.length &&
       recoverySpan.exit?._tag === "Success",
     recoveryTerminalMarked:
-      report.entriesAppended.length === 0 ||
-      (recoveryLastPayload?.role === "assistant" &&
-        typeof recoveryLastPayload.stopReason === "string"),
+      report.entriesAppended.length === 0 || isInterruptedAssistantPayload(recoveryLastPayload),
     replay: input.boundary.replay,
     safeReplayToolCallIds: report.safeReplay.map(({ toolCallId }) => toolCallId),
     script: input.script,
@@ -1068,17 +1095,9 @@ export const runDoubleRecoveryCell = async (directory: string): Promise<DoubleRe
   return {
     finalReportActionCount: result.final.recovery.actions.length,
     firstRecoveryCrashed: firstRecovery._tag === "Failure",
-    interruptedAssistantCount: result.branch.filter((entry) => {
-      const payload = messagePayload(entry);
-      if (
-        payload?.role !== "assistant" ||
-        typeof payload.diagnostic !== "object" ||
-        payload.diagnostic === null
-      ) {
-        return false;
-      }
-      return (payload.diagnostic as Record<string, unknown>).detail === "interrupted by crash";
-    }).length,
+    interruptedAssistantCount: result.branch.filter((entry) =>
+      isInterruptedAssistantPayload(messagePayload(entry)),
+    ).length,
     operationFinishedCount: result.records.filter(({ kind }) => kind === "operation_finished")
       .length,
     originalTurnCrashed,
@@ -1091,5 +1110,108 @@ export const runDoubleRecoveryCell = async (directory: string): Promise<DoubleRe
         .filter(({ name }) => name === "kernel.recovery")
         .every(({ exit }) => exit?._tag === "Success"),
     toolResultIds: resultCallIds(result.branch),
+  };
+};
+
+export const runOrphanedPromptDoubleRecoveryCell = async (
+  directory: string,
+): Promise<OrphanedPromptDoubleRecoveryCell> => {
+  const recorded = await recordToolFreeTurn(join(directory, "recorded"));
+  const promptBoundary = recorded.boundaries.find(({ kind }) => kind === "message:user");
+  if (promptBoundary === undefined) {
+    throw new Error("The Tool-free Turn fixture has no user prompt boundary.");
+  }
+
+  const cellDirectory = join(directory, "cell");
+  const originalFault: FaultState = {
+    acknowledgements: 0,
+    failAfter: promptBoundary.acknowledgement,
+    killed: false,
+    sessionId: undefined,
+  };
+  const originalTurnCrashed = await executeScript(
+    "tool-free-turn",
+    cellDirectory,
+    originalFault,
+  ).then(
+    () => false,
+    () => true,
+  );
+  if (originalFault.sessionId === undefined) {
+    throw new Error("The orphaned-prompt crash did not identify a Session.");
+  }
+  const sessionId = originalFault.sessionId;
+
+  const plan = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const records = yield* journal.readRecords(sessionId);
+      const entries = yield* journal.readBranch(sessionId);
+      return yield* recoverSession(boundedRecoveryRecords(records), entries);
+    }).pipe(Effect.provide(JournalJsonl(cellDirectory, { diagnosticSink: () => Effect.void }))),
+  );
+  if (plan.operationId !== undefined) {
+    throw new Error("The orphaned-prompt recovery unexpectedly found an operationId.");
+  }
+
+  const provider: ProviderService = {
+    streamAssistant: () => Stream.fromIterable([{ _tag: "done", stopReason: "done" }]),
+  };
+  const recoveryFault: FaultState = {
+    acknowledgements: 0,
+    failAfter: 1,
+    killed: false,
+    sessionId: undefined,
+  };
+  const firstRecoveryLayer = jsonlLayer(cellDirectory, recoveryFault);
+  const firstRecoveryDriver = DriverDefault().pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        firstRecoveryLayer,
+        Layer.succeed(Provider, provider),
+        ToolRegistryLive(recoveryTools()),
+      ),
+    ),
+  );
+  const firstRecovery = await Effect.runPromiseExit(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      yield* driver.resumeSession(sessionId);
+    }).pipe(Effect.provide(firstRecoveryDriver)),
+  );
+
+  const journalLayer = JournalJsonl(cellDirectory, { diagnosticSink: () => Effect.void });
+  const drivers = DriverDefault().pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        journalLayer,
+        Layer.succeed(Provider, provider),
+        ToolRegistryLive(recoveryTools()),
+      ),
+    ),
+  );
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const retry = yield* applyRecoveryPlan(journal, sessionId, plan);
+      const resumed = yield* (yield* Driver).resumeSession(sessionId);
+      const branch = yield* journal.readBranch(sessionId);
+      const records = yield* journal.readRecords(sessionId);
+      return { branch, records, resumed, retry };
+    }).pipe(Effect.provide(Layer.merge(journalLayer, drivers))),
+  );
+
+  return {
+    finalReportActionCount: result.resumed.recovery.actions.length,
+    finalReportEntriesAppendedCount: result.resumed.recovery.entriesAppended.length,
+    firstRecoveryCrashed: firstRecovery._tag === "Failure",
+    interruptedAssistantCount: result.branch.filter((entry) =>
+      isInterruptedAssistantPayload(messagePayload(entry)),
+    ).length,
+    operationRecordCount: result.records.length,
+    originalTurnCrashed,
+    retryActionCount: result.retry.actions.length,
+    retryEntriesAppendedCount: result.retry.entriesAppended.length,
+    retryOperationIdFound: result.retry.operationIdFound,
   };
 };

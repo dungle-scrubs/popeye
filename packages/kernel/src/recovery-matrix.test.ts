@@ -14,6 +14,7 @@ import {
   recordCanonicalRecoverySessions,
   runCorruptionRejectionCell,
   runDoubleRecoveryCell,
+  runOrphanedPromptDoubleRecoveryCell,
   runRecoveryBoundaryMatrix,
   runTornTailRecoveryMatrix,
 } from "./recovery-matrix.js";
@@ -58,6 +59,27 @@ test("a second crash during synthesis remains idempotent on the next resume", as
       recoveryReportEmitted: true,
       recoverySpanEmitted: true,
       toolResultIds: ["never-call", "safe-call"],
+    });
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test("orphaned-prompt recovery remains idempotent after its assistant append crashes", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m24-orphaned-double-"));
+  try {
+    const cell = await runOrphanedPromptDoubleRecoveryCell(directory);
+
+    expect(cell).toEqual({
+      finalReportActionCount: 0,
+      finalReportEntriesAppendedCount: 0,
+      firstRecoveryCrashed: true,
+      interruptedAssistantCount: 1,
+      operationRecordCount: 0,
+      originalTurnCrashed: true,
+      retryActionCount: 1,
+      retryEntriesAppendedCount: 0,
+      retryOperationIdFound: undefined,
     });
   } finally {
     await rm(directory, { force: true, recursive: true });
