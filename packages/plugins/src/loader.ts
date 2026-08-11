@@ -1,0 +1,121 @@
+/**
+ * Owns native Plugin module import and factory construction.
+ * It exists because D-027 requires Node type stripping through absolute file URLs, without a
+ * transforming loader, and reload needs an explicit query-string cache key.
+ */
+import { isAbsolute } from "node:path";
+import { pathToFileURL } from "node:url";
+
+import { Effect } from "effect";
+
+import type { Contribution } from "./contribution.js";
+import { PluginLoadError } from "./errors.js";
+import { decodePluginManifest, type PluginManifest } from "./manifest.js";
+
+export interface LoadedPlugin {
+  readonly contributions: ReadonlyArray<Contribution>;
+  readonly manifest: PluginManifest;
+  readonly path: string;
+}
+
+export interface PluginModuleLoadOptions {
+  readonly cacheKey?: string;
+}
+
+type PluginFactory = () => unknown;
+
+const nativeImport = (specifier: string): Promise<unknown> => import(specifier);
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null;
+
+const errorCode = (cause: unknown): string | undefined =>
+  isRecord(cause) && typeof cause.code === "string" ? cause.code : undefined;
+
+const errorMessage = (cause: unknown): string =>
+  cause instanceof Error ? cause.message : String(cause);
+
+const unsupportedConstruct = (message: string): "enum" | "namespace" | "unknown" => {
+  if (/\benum\b/i.test(message)) return "enum";
+  if (/\bnamespace\b/i.test(message)) return "namespace";
+  return "unknown";
+};
+
+const loadFailure = (path: string, cause: unknown): PluginLoadError => {
+  const message = errorMessage(cause);
+  const construct = unsupportedConstruct(message);
+  if (
+    errorCode(cause) === "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX" ||
+    (construct !== "unknown" && /not supported in strip-only mode/i.test(message))
+  ) {
+    return new PluginLoadError({
+      cause: "unsupported_syntax",
+      message: `Plugin ${path} uses unsupported TypeScript ${construct} syntax: ${message}`,
+      plugin: path,
+      schemaCause: cause,
+    });
+  }
+  return new PluginLoadError({
+    cause: "build_failed",
+    message: `Plugin ${path} failed to load or build: ${message}`,
+    plugin: path,
+    schemaCause: cause,
+  });
+};
+
+const pluginFactory = (
+  module: unknown,
+  path: string,
+): Effect.Effect<PluginFactory, PluginLoadError> => {
+  if (!isRecord(module)) {
+    return Effect.fail(loadFailure(path, "module did not expose named exports"));
+  }
+  const candidate = module.default ?? module.plugin;
+  return typeof candidate === "function"
+    ? Effect.succeed(candidate as PluginFactory)
+    : Effect.fail(loadFailure(path, "default or named plugin export must be a factory"));
+};
+
+const pluginDefinition = (
+  input: unknown,
+  path: string,
+): Effect.Effect<LoadedPlugin, PluginLoadError> => {
+  if (!isRecord(input) || !Array.isArray(input.contributions) || !("manifest" in input)) {
+    return Effect.fail(
+      loadFailure(path, "factory must return an object with manifest and contributions"),
+    );
+  }
+  return decodePluginManifest(input.manifest).pipe(
+    Effect.map((manifest) => ({
+      contributions: input.contributions as ReadonlyArray<Contribution>,
+      manifest,
+      path,
+    })),
+  );
+};
+
+export const loadPluginModule = (
+  path: string,
+  options: PluginModuleLoadOptions = {},
+): Effect.Effect<LoadedPlugin, PluginLoadError> => {
+  if (!isAbsolute(path)) {
+    return Effect.fail(loadFailure(path, "Plugin path must be absolute"));
+  }
+  const url = pathToFileURL(path);
+  if (options.cacheKey !== undefined) {
+    url.searchParams.set("reload", options.cacheKey);
+  }
+  return Effect.tryPromise({
+    catch: (cause) => loadFailure(path, cause),
+    try: () => nativeImport(url.href),
+  }).pipe(
+    Effect.flatMap((module) => pluginFactory(module, path)),
+    Effect.flatMap((factory) =>
+      Effect.tryPromise({
+        catch: (cause) => loadFailure(path, cause),
+        try: () => Promise.resolve(factory()),
+      }),
+    ),
+    Effect.flatMap((definition) => pluginDefinition(definition, path)),
+  );
+};

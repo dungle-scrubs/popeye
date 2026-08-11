@@ -115,6 +115,7 @@ test("two-phase source discovery is stable and idempotent for phase-1 instance r
   const inTreeCliPath = join(projectPath, "cli-plugin.ts");
   const outsideCliPath = join(root, "outside-cli.ts");
   const userGlobalDirectory = join(root, "user-global");
+  const userGlobalPluginPath = join(userGlobalDirectory, "user-plugin.ts");
 
   try {
     await mkdir(projectPluginDirectory, { recursive: true });
@@ -122,6 +123,7 @@ test("two-phase source discovery is stable and idempotent for phase-1 instance r
     await writeFile(projectPluginPath, "export const source = 'project';\n");
     await writeFile(inTreeCliPath, "export const source = 'in-tree-cli';\n");
     await writeFile(outsideCliPath, "export const source = 'outside-cli';\n");
+    await writeFile(userGlobalPluginPath, "export const source = 'user-global';\n");
 
     const config = {
       cliPaths: [outsideCliPath, inTreeCliPath],
@@ -147,7 +149,7 @@ test("two-phase source discovery is stable and idempotent for phase-1 instance r
       },
       {
         origin: "user-global",
-        path: await realpath(userGlobalDirectory),
+        path: await realpath(userGlobalPluginPath),
         scope: "external",
       },
     ]);

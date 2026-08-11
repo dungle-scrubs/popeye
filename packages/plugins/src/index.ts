@@ -79,6 +79,18 @@ export {
   type PluginLoadCause,
   PluginLoadError,
 } from "./errors.js";
+export type {
+  GenerationLoadError,
+  GenerationPlugin,
+  GenerationSwapDiagnostic,
+  LoadGenerationOptions,
+  PluginGeneration,
+  PluginRuntime,
+  PluginRuntimeDebugInfo,
+  TrustResolutionRequest,
+  TrustResolver,
+} from "./generation.js";
+export { loadGeneration, makePluginRuntime } from "./generation.js";
 export {
   type CompactionGateHookInput,
   CompactionGateHookInputSchema,
@@ -149,6 +161,8 @@ export {
   type TurnLifecycleHookOutput,
   TurnLifecycleHookOutputSchema,
 } from "./hook-points.js";
+export type { LoadedPlugin, PluginModuleLoadOptions } from "./loader.js";
+export { loadPluginModule } from "./loader.js";
 export {
   type CapabilityDeclaration,
   CapabilityDeclarationSchema,

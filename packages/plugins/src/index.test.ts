@@ -65,3 +65,9 @@ test("exports the M17 Trust and discovery interfaces from the public Plugin seam
     ]),
   );
 });
+
+test("exports the M18 loader and generation interfaces from the public Plugin seam", () => {
+  expect(Object.keys(plugins)).toEqual(
+    expect.arrayContaining(["loadGeneration", "loadPluginModule", "makePluginRuntime"]),
+  );
+});

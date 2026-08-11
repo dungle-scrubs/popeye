@@ -92,6 +92,15 @@ const projectPluginPaths = (
   );
 };
 
+const userGlobalPluginPaths = (
+  directory: string,
+): Effect.Effect<ReadonlyArray<string>, PluginDiscoveryError> =>
+  Effect.tryPromise({
+    catch: (cause) =>
+      new PluginDiscoveryError({ cause, path: directory, reason: "read_directory_failed" }),
+    try: () => readdir(directory),
+  }).pipe(Effect.map((names) => names.map((name) => join(directory, name))));
+
 const resolveCandidates = (
   candidates: ReadonlyArray<{ readonly origin: PluginSourceOrigin; readonly path: string }>,
   resolvedProjectPath: string,
@@ -111,8 +120,12 @@ export const phase1ExecutionSources = (
 ): Effect.Effect<ReadonlyArray<PluginSource>, PluginDiscoveryError> =>
   Effect.gen(function* () {
     const resolvedProjectPath = yield* resolveRealPath(config.projectPath);
+    const userGlobalPaths = yield* Effect.forEach(
+      config.userGlobalDirectories,
+      userGlobalPluginPaths,
+    ).pipe(Effect.map((directories) => directories.flat()));
     const candidates = [
-      ...config.userGlobalDirectories.map((path) => ({ origin: "user-global" as const, path })),
+      ...userGlobalPaths.map((path) => ({ origin: "user-global" as const, path })),
       ...config.cliPaths.map((path) => ({ origin: "cli" as const, path })),
     ];
     const resolved = yield* resolveCandidates(candidates, resolvedProjectPath);
