@@ -11,6 +11,7 @@ export class GateRejected extends Data.TaggedError("GateRejected")<{
   readonly cause: string;
   readonly plugin: string;
   readonly point: HookPointName;
+  readonly rejection: "block" | "failure";
   readonly reason: string;
   readonly timedOut: boolean;
 }> {}

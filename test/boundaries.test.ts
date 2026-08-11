@@ -30,8 +30,20 @@ const expectedViolations = [
     file: "packages/protocol/src/invalid-peye-import.ts",
   },
   {
-    code: BOUNDARY_CODES.FEATURE_KERNEL_INTERNAL_IMPORT,
+    code: BOUNDARY_CODES.FEATURE_DEEP_IMPORT,
     file: "packages/plugins/src/features/invalid-kernel-internal-import.ts",
+  },
+  {
+    code: BOUNDARY_CODES.FEATURE_DEEP_IMPORT,
+    file: "packages/plugins/src/features/invalid-plugins-deep-import.ts",
+  },
+  {
+    code: BOUNDARY_CODES.FEATURE_DEEP_IMPORT,
+    file: "packages/cli/src/features/invalid-relative-kernel-import.ts",
+  },
+  {
+    code: BOUNDARY_CODES.FEATURE_DEEP_IMPORT,
+    file: "packages/cli/src/features/invalid-relative-plugins-import.ts",
   },
 ] as const;
 const commentOnlyFixture = "packages/kernel/src/comment-mentions-pi-ai.ts";
@@ -43,13 +55,13 @@ function runBoundaryCheck(root: string) {
 }
 
 describe("import boundaries", () => {
-  test("first-party feature sources pass the kernel-internal boundary", async () => {
+  test("the compact and session-name feature Plugins use only package-root public APIs", async () => {
     const violations = await checkBoundaries(process.cwd());
 
     expect(violations).toEqual([]);
   });
 
-  test("first-party feature boundary rejects kernel internal imports and reports all fixtures", async () => {
+  test("feature public-API boundary rejects deep and package-escaping imports by exact fixture count", async () => {
     const violations = await checkBoundaries(fixtures);
 
     expect(violations).toHaveLength(expectedViolations.length);

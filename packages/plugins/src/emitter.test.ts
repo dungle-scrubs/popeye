@@ -28,7 +28,12 @@ import {
   type HookEmitterOptions,
 } from "./emitter.js";
 import { type ContributionRegistryError, GateRejected, HookInputInvalid } from "./errors.js";
-import { HOOK_POINT_NAMES, HOOK_POINTS } from "./hook-points.js";
+import {
+  CompactionGateHookOutputSchema,
+  CompactionGateResultSchema,
+  HOOK_POINT_NAMES,
+  HOOK_POINTS,
+} from "./hook-points.js";
 import { ContributionRegistry, ContributionRegistryLive } from "./registry.js";
 
 const grants = (capabilities: ReadonlyArray<string> = []) =>
@@ -85,6 +90,26 @@ test("emit error unions narrow from each point's failure policy", () => {
     chainErrorsAreNarrow: true,
     gateErrorsIncludeRejection: true,
   });
+});
+
+test("Compaction gate schema is veto-only and has typed compact or skip host results", () => {
+  expect(Schema.is(CompactionGateHookOutputSchema)({ action: "compact" })).toBe(true);
+  expect(
+    Schema.is(CompactionGateHookOutputSchema)({
+      action: "skip",
+      reason: "Keep the current Context.",
+    }),
+  ).toBe(true);
+  expect(
+    Schema.is(CompactionGateHookOutputSchema)({
+      decision: "replace",
+      value: { action: "skip", reason: "unsupported" },
+    }),
+  ).toBe(false);
+  expect(Schema.is(CompactionGateResultSchema)({ action: "compact" })).toBe(true);
+  expect(Schema.is(CompactionGateResultSchema)({ action: "skip", reason: "Plugin vetoed." })).toBe(
+    true,
+  );
 });
 
 interface CapturedSpan {
@@ -193,7 +218,7 @@ test("all twelve typed Hook points execute real contributions through one emitte
       mergeClass: "FirstWins",
       name: "compaction-real",
       point: "compaction-gate",
-      run: () => Effect.succeed({ decision: "continue" as const }),
+      run: () => Effect.succeed({ action: "compact" as const }),
     }),
     defineHookContribution({
       mergeClass: "FirstWins",
@@ -421,6 +446,7 @@ test("gate decisions continue, block, and replace", async () => {
     cause: "block(not allowed)",
     plugin: "block-gate",
     point: "tool-call-gate",
+    rejection: "block",
     reason: "not allowed",
   });
 });
@@ -580,6 +606,8 @@ test("throwing and dying gate contributions fail closed with bounded causes", as
   }
   expect(result.threw.cause).toContain("gate throw");
   expect(result.died.cause).toContain("gate die");
+  expect(result.threw.rejection).toBe("failure");
+  expect(result.died.rejection).toBe("failure");
   expect(result.threw.cause.length).toBeLessThanOrEqual(1_024);
 });
 

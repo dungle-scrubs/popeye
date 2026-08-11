@@ -224,11 +224,13 @@ const gateRejected = (
   contribution: RegisteredHook,
   details: FailureDetails,
   point: HookPointName,
+  rejection: GateRejected["rejection"],
 ): GateRejected =>
   new GateRejected({
     cause: details.cause,
     plugin: pluginName(contribution),
     point,
+    rejection,
     reason: details.reason,
     timedOut: details.timedOut,
   });
@@ -403,7 +405,7 @@ const runFirstWins = (
       const result = yield* runContribution(contribution, definition, input, point);
       if (result.status === "failure") {
         if (definition.failurePolicy === "reject") {
-          const error = gateRejected(contribution, result.details, point);
+          const error = gateRejected(contribution, result.details, point, "failure");
           traceState.rejectedPlugins.push(pluginName(contribution));
           yield* diagnosticSink({
             ...result.details,
@@ -424,6 +426,28 @@ const runFirstWins = (
         continue;
       }
       const decision = result.value as Readonly<Record<string, unknown>>;
+      if (decision.action === "compact") {
+        continue;
+      }
+      if (decision.action === "skip") {
+        const reason = String(decision.reason);
+        const details: FailureDetails = {
+          cause: `skip(${reason})`,
+          errorPayload: null,
+          errorTag: null,
+          reason,
+          timedOut: false,
+        };
+        const error = gateRejected(contribution, details, point, "block");
+        traceState.rejectedPlugins.push(pluginName(contribution));
+        yield* diagnosticSink({
+          ...details,
+          plugin: error.plugin,
+          point,
+          type: "hook_gate_rejected",
+        });
+        return yield* error;
+      }
       if (decision.decision === "continue") {
         continue;
       }
@@ -436,7 +460,7 @@ const runFirstWins = (
           reason,
           timedOut: false,
         };
-        const error = gateRejected(contribution, details, point);
+        const error = gateRejected(contribution, details, point, "block");
         traceState.rejectedPlugins.push(pluginName(contribution));
         yield* diagnosticSink({
           ...details,

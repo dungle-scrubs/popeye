@@ -36,6 +36,7 @@ import {
 import type { AssistantDiagnostic } from "./entry-payloads.js";
 import { BudgetExceeded, type ProviderError, TurnQueueFull } from "./errors.js";
 import { Mailbox, type MailboxFailure } from "./mailbox.js";
+import { PluginHost } from "./plugin-host.js";
 import { type Progress, ProgressHub, type TurnPhase } from "./progress.js";
 import {
   type AssistantStopReason,
@@ -239,7 +240,7 @@ const journalFailureDetail = (failure: JournalFailure, cause: Cause.Cause<unknow
 export const TurnsLive = (): Layer.Layer<
   Turns,
   never,
-  Compaction | Journal | Mailbox | ProgressHub | Provider | ToolRegistry
+  Compaction | Journal | Mailbox | PluginHost | ProgressHub | Provider | ToolRegistry
 > =>
   Layer.effect(
     Turns,
@@ -247,6 +248,7 @@ export const TurnsLive = (): Layer.Layer<
       const compaction = yield* Compaction;
       const journal = yield* Journal;
       const mailbox = yield* Mailbox;
+      const pluginHost = yield* PluginHost;
       const progress = yield* ProgressHub;
       const provider = yield* Provider;
       const toolRegistry = yield* ToolRegistry;
@@ -868,40 +870,59 @@ export const TurnsLive = (): Layer.Layer<
                     );
                     return Ref.getAndSet(compactionAttempted, true).pipe(
                       Effect.flatMap((alreadyAttempted) =>
-                        compactionOptions.enabled && !alreadyAttempted
-                          ? compactBranch({
-                              journal,
-                              options: compactionOptions,
-                              progress,
-                              provider,
-                              providerRuntime,
-                              sessionId,
-                              turnOrdinal,
-                            }).pipe(
-                              // An overflow follows the current user or tool-result Entry, so the
-                              // unsummarized span is non-empty. Either error is an invariant defect
-                              // in this in-turn path, while compactNow keeps both errors typed.
-                              Effect.catchTags({
-                                CompactionDisabled: (failure) => Effect.die(failure),
-                                NothingToCompact: (failure) => Effect.die(failure),
-                              }),
-                              Effect.zipRight(fold()),
-                            )
-                          : Effect.fail(error),
+                        Effect.gen(function* () {
+                          if (!compactionOptions.enabled || alreadyAttempted) {
+                            return yield* error;
+                          }
+                          const decision = yield* pluginHost.compactionGate(sessionId, {
+                            reason: "overflow",
+                            tokenCount: error.required,
+                          });
+                          if (decision.action === "skip") {
+                            return yield* new BudgetExceeded({
+                              budget: error.budget,
+                              ...(error.compactionApplied === undefined
+                                ? {}
+                                : { compactionApplied: error.compactionApplied }),
+                              optionsDiagnostic: `Compaction was vetoed by a Plugin: ${decision.reason} Branch to an earlier Entry or start a new Session.`,
+                              required: error.required,
+                            });
+                          }
+                          yield* compactBranch({
+                            journal,
+                            options: compactionOptions,
+                            progress,
+                            provider,
+                            providerRuntime,
+                            sessionId,
+                            turnOrdinal,
+                          }).pipe(
+                            // An overflow follows the current user or tool-result Entry, so the
+                            // unsummarized span is non-empty. Either error is an invariant defect
+                            // in this in-turn path, while compactNow keeps both errors typed.
+                            Effect.catchTags({
+                              CompactionDisabled: (failure) => Effect.die(failure),
+                              NothingToCompact: (failure) => Effect.die(failure),
+                            }),
+                          );
+                          return yield* fold();
+                        }),
                       ),
                     );
                   }),
                   Effect.mapError((error) =>
-                    error._tag === "ContextBudgetExceeded"
-                      ? new BudgetExceeded({
-                          budget: error.budget,
-                          ...(error.compactionApplied === undefined
-                            ? {}
-                            : { compactionApplied: error.compactionApplied }),
-                          optionsDiagnostic: error.optionsDiagnostic,
-                          required: error.required,
-                        })
-                      : error,
+                    error._tag === "BudgetExceeded"
+                      ? error
+                      : error._tag === "ContextBudgetExceeded"
+                        ? new BudgetExceeded({
+                            budget: error.budget,
+                            ...(error.compactionApplied === undefined
+                              ? {}
+                              : { compactionApplied: error.compactionApplied }),
+                            optionsDiagnostic: error.optionsDiagnostic,
+                            required: error.required,
+                          })
+                        : error,
                   ),
                 );
                 yield* phaseChanged(progress, sessionId, "STREAMING");

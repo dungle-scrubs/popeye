@@ -39,14 +39,12 @@ export interface RegisteredContribution<TKind extends string = string, TPayload 
   readonly registrationRevision: number;
 }
 
-export type CommandCompactionResult =
-  | {
-      readonly compactionEntryId: string;
-      readonly entriesCovered: number;
-      readonly sliceCount: number;
-      readonly summaryLength: number;
-    }
-  | { readonly reason: string; readonly skipped: true };
+export interface CommandCompactionResult {
+  readonly compactionEntryId: string;
+  readonly entriesCovered: number;
+  readonly sliceCount: number;
+  readonly summaryLength: number;
+}
 
 export interface CommandExecutionContext {
   readonly compactNow: (

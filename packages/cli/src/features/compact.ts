@@ -19,7 +19,7 @@ export interface CompactPluginOptions {
 }
 
 const continueCompaction = (): Effect.Effect<CompactionGateHookOutput> =>
-  Effect.succeed({ decision: "continue" });
+  Effect.succeed({ action: "compact" });
 
 export const makeCompactPlugin = (options: CompactPluginOptions = {}) => ({
   contributions: [

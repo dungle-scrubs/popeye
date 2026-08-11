@@ -14,6 +14,7 @@ import { expect, test } from "vitest";
 
 import { CompactionLive } from "./compaction-policy.js";
 import { MailboxLive } from "./mailbox.js";
+import { PluginHostNone } from "./plugin-host.js";
 import { ProgressHubLive } from "./progress.js";
 import { type ContextItem, Provider, type ProviderService } from "./provider.js";
 import { appendOperationStarted, appendToolStarted, OperationIdSchema } from "./records.js";
@@ -82,7 +83,7 @@ const kernelLayer = <E>(
     Layer.provide(Layer.mergeAll(journalLayer, mailboxLayer, toolLayer)),
   );
   const compactionLayer = CompactionLive().pipe(Layer.provide(dependencies));
-  const turnDependencies = Layer.merge(dependencies, compactionLayer);
+  const turnDependencies = Layer.mergeAll(dependencies, compactionLayer, PluginHostNone);
   return Layer.mergeAll(
     turnDependencies,
     sessionsLayer,

@@ -46,10 +46,10 @@ export const ToolCallGateResultSchema = Schema.Struct({
 });
 export const ToolCallGateHookInputSchema = ToolCallGateResultSchema;
 
-export const CompactionGateResultSchema = Schema.Struct({
-  action: Schema.Literal("compact", "skip"),
-  reason: Schema.String,
-});
+export const CompactionGateResultSchema = Schema.Union(
+  Schema.Struct({ action: Schema.Literal("compact") }),
+  Schema.Struct({ action: Schema.Literal("skip"), reason: Schema.String }),
+);
 export const CompactionGateHookInputSchema = Schema.Struct({
   reason: Schema.String,
   tokenCount: Schema.Number,
@@ -78,7 +78,7 @@ const gateDecisionSchema = <TValue, TEncoded>(value: Schema.Schema<TValue, TEnco
   );
 
 export const ToolCallGateHookOutputSchema = gateDecisionSchema(ToolCallGateResultSchema);
-export const CompactionGateHookOutputSchema = gateDecisionSchema(CompactionGateResultSchema);
+export const CompactionGateHookOutputSchema = CompactionGateResultSchema;
 export const TrustHookOutputSchema = gateDecisionSchema(TrustResultSchema);
 
 export const ToolResultHookInputSchema = Schema.Struct({

@@ -507,13 +507,14 @@ test("every mutating Driver primitive rejects a stale expectedRevision", async (
         Effect.flip(driver.branch(created.id, created.leaf.id, stale)),
         Effect.flip(driver.fork(created.id, created.leaf.id, stale)),
         Effect.flip(driver.compactNow(created.id, stale)),
+        Effect.flip(driver.invokeCommand(created.id, "missing", {}, stale)),
         Effect.flip(driver.setModel(created.id, "fixture-model", stale)),
         Effect.flip(driver.setThinkingLevel(created.id, "medium", stale)),
       ]);
     }).pipe(Effect.provide(driverLayer(provider))),
   );
 
-  expect(errors).toHaveLength(5);
+  expect(errors).toHaveLength(6);
   for (const error of errors) {
     expect(error).toMatchObject({ _tag: "StaleRevision", actual: 1, expected: 0 });
   }

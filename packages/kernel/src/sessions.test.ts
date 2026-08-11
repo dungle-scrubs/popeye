@@ -85,6 +85,34 @@ test("create opens a journal-backed session at the root revision", async () => {
   expect(created.leaf.kind).toBe("session_root");
 });
 
+test("setSessionName rejects empty, whitespace-only, and overlong names at the kernel boundary", async () => {
+  const backing = createMemoryJournalBacking();
+  const layer = SessionsLive().pipe(
+    Layer.provide(ToolRegistryLive([])),
+    Layer.provide(MailboxLive()),
+    Layer.provide(JournalMemory(backing)),
+  );
+
+  const errors = await Effect.runPromise(
+    Effect.gen(function* () {
+      const sessions = yield* Sessions;
+      const created = yield* sessions.create();
+      return yield* Effect.forEach(["", "   ", "x".repeat(201)], (name) =>
+        Effect.flip(sessions.setSessionName(created.id, name)),
+      );
+    }).pipe(Effect.provide(layer)),
+  );
+
+  expect(errors).toHaveLength(3);
+  for (const error of errors) {
+    expect(error).toMatchObject({
+      _tag: "JournalDraftRejected",
+      kind: "session_name",
+      reason: "invalid_payload",
+    });
+  }
+});
+
 test("resume restores the journal leaf and count of durable lines", async () => {
   const backing = createMemoryJournalBacking();
   const makeLayer = () =>

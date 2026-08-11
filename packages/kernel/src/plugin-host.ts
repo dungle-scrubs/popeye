@@ -13,17 +13,25 @@ export class InvokeCommandError extends Data.TaggedError("InvokeCommandError")<{
     | "arguments_invalid"
     | "command_ambiguous"
     | "command_failed"
-    | "command_not_found";
+    | "command_not_found"
+    | "command_vetoed";
 }> {}
 
-export type PluginCompactionResult =
-  | {
-      readonly compactionEntryId: string;
-      readonly entriesCovered: number;
-      readonly sliceCount: number;
-      readonly summaryLength: number;
-    }
-  | { readonly reason: string; readonly skipped: true };
+export interface PluginCompactionGateRequest {
+  readonly reason: "manual" | "overflow";
+  readonly tokenCount: number;
+}
+
+export type PluginCompactionGateResult =
+  | { readonly action: "compact" }
+  | { readonly action: "skip"; readonly reason: string };
+
+export interface PluginCompactionResult {
+  readonly compactionEntryId: string;
+  readonly entriesCovered: number;
+  readonly sliceCount: number;
+  readonly summaryLength: number;
+}
 
 export interface PluginCommandContext {
   readonly compactNow: (
@@ -37,6 +45,10 @@ export interface PluginCommandContext {
 }
 
 export interface PluginHostService {
+  readonly compactionGate: (
+    sessionId: SessionId,
+    request: PluginCompactionGateRequest,
+  ) => Effect.Effect<PluginCompactionGateResult>;
   readonly invokeCommand: (
     name: string,
     args: unknown,
@@ -50,6 +62,7 @@ export class PluginHost extends Context.Tag("@peye/kernel/PluginHost")<
 >() {}
 
 export const PluginHostNone: Layer.Layer<PluginHost> = Layer.succeed(PluginHost, {
+  compactionGate: () => Effect.succeed({ action: "compact" }),
   invokeCommand: (name) =>
     Effect.fail(
       new InvokeCommandError({

@@ -23,6 +23,7 @@ import { expect, test } from "vitest";
 import { Compaction, CompactionLive, type CompactionPolicyOptions } from "./compaction-policy.js";
 import { ProviderError } from "./errors.js";
 import { MailboxLive } from "./mailbox.js";
+import { PluginHostNone } from "./plugin-host.js";
 import { type Progress, ProgressHubLive } from "./progress.js";
 import {
   type AssistantItem,
@@ -56,7 +57,7 @@ const testLayer = (
     toolLayer,
   );
   const compactionLayer = CompactionLive(compactionOptions).pipe(Layer.provide(dependencies));
-  const turnDependencies = Layer.merge(dependencies, compactionLayer);
+  const turnDependencies = Layer.mergeAll(dependencies, compactionLayer, PluginHostNone);
   return Layer.mergeAll(
     turnDependencies,
     sessionsLayer,

@@ -23,7 +23,10 @@ const provider: ProviderService = {
     ]),
 };
 
-const makeFirstPartyDriverLayer = (hostOptions: FirstPartyPluginHostOptions = {}) =>
+const makeFirstPartyDriverLayer = (
+  hostOptions: FirstPartyPluginHostOptions = {},
+  providerService: ProviderService = provider,
+) =>
   FirstPartyDriverDefault(
     { compaction: { retainedTailCount: 0, sliceBudget: 256 } },
     hostOptions,
@@ -31,7 +34,7 @@ const makeFirstPartyDriverLayer = (hostOptions: FirstPartyPluginHostOptions = {}
     Layer.provide(
       Layer.mergeAll(
         JournalMemory(createMemoryJournalBacking()),
-        Layer.succeed(Provider, provider),
+        Layer.succeed(Provider, providerService),
         ToolRegistryLive([]),
       ),
     ),
@@ -69,23 +72,12 @@ test("Driver.invokeCommand dispatches the session-name Plugin and exposes the na
   );
 });
 
-test("compact Plugin gate vetoes and replaces Compaction through Driver.invokeCommand", async () => {
+test("compact Plugin gate returns a veto-specific command outcome with its reason", async () => {
   const blockedLayer = makeFirstPartyDriverLayer({
     plugins: [
       makeCompactPlugin({
         decideCompaction: () =>
-          Effect.succeed({ decision: "block" as const, reason: "Compaction is paused." }),
-      }),
-    ],
-  });
-  const replacedLayer = makeFirstPartyDriverLayer({
-    plugins: [
-      makeCompactPlugin({
-        decideCompaction: () =>
-          Effect.succeed({
-            decision: "replace" as const,
-            value: { action: "skip" as const, reason: "Use the retained Context." },
-          }),
+          Effect.succeed({ action: "skip" as const, reason: "Compaction is paused." }),
       }),
     ],
   });
@@ -100,19 +92,162 @@ test("compact Plugin gate vetoes and replaces Compaction through Driver.invokeCo
       return { error, snapshot };
     }).pipe(Effect.provide(blockedLayer)),
   );
-  const replaced = await Effect.runPromise(
+  const crashed = await Effect.runPromise(
     Effect.gen(function* () {
       const driver = yield* Driver;
       const created = yield* driver.createSession();
       yield* driver.prompt(created.id, "Keep this Context.");
-      const result = yield* driver.invokeCommand(created.id, "compact", {});
-      const snapshot = yield* driver.getSnapshot(created.id);
-      return { result, snapshot };
-    }).pipe(Effect.provide(replacedLayer)),
+      return yield* Effect.flip(driver.invokeCommand(created.id, "compact", {}));
+    }).pipe(
+      Effect.provide(
+        makeFirstPartyDriverLayer({
+          plugins: [
+            makeCompactPlugin({
+              decideCompaction: () => Effect.die("Compaction gate crashed."),
+            }),
+          ],
+        }),
+      ),
+    ),
   );
 
-  expect(blocked.error).toMatchObject({ reason: "command_failed" });
+  expect(blocked.error).toMatchObject({
+    message: "Compaction is paused.",
+    reason: "command_vetoed",
+  });
+  expect(crashed).toMatchObject({ reason: "command_failed" });
   expect(blocked.snapshot.entries.some((entry) => entry.kind === "compaction")).toBe(false);
-  expect(replaced.result).toEqual({ reason: "Use the retained Context.", skipped: true });
-  expect(replaced.snapshot.entries.some((entry) => entry.kind === "compaction")).toBe(false);
+});
+
+test("a blocking Compaction gate prevents overflow-triggered Compaction", async () => {
+  const requestKinds: Array<string | undefined> = [];
+  const blockingProvider: ProviderService = {
+    streamAssistant: (_context, options) => {
+      requestKinds.push(options.purpose);
+      return Stream.fromIterable([
+        { _tag: "textDelta", text: "unexpected" },
+        { _tag: "done", stopReason: "done" },
+      ]);
+    },
+  };
+  const blockedLayer = makeFirstPartyDriverLayer(
+    {
+      plugins: [
+        makeCompactPlugin({
+          decideCompaction: () =>
+            Effect.succeed({
+              action: "skip" as const,
+              reason: "Keep the full Context for review.",
+            }),
+        }),
+      ],
+    },
+    blockingProvider,
+  );
+
+  const snapshot = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const created = yield* driver.createSession();
+      yield* driver.prompt(created.id, "Overflow before the Provider request.", {
+        contextBudget: 0,
+      });
+      return yield* driver.getSnapshot(created.id);
+    }).pipe(Effect.provide(blockedLayer)),
+  );
+
+  expect(requestKinds).toEqual([]);
+  expect(snapshot.entries.filter((entry) => entry.kind === "compaction")).toHaveLength(0);
+  expect(snapshot.entries.at(-1)).toMatchObject({
+    payload: {
+      diagnostic: {
+        detail: expect.stringContaining("Keep the full Context for review."),
+        reason: "budget_exceeded",
+      },
+      role: "assistant",
+      stopReason: "error",
+    },
+  });
+  expect(JSON.stringify(snapshot.entries.at(-1)?.payload)).toContain(
+    "Branch to an earlier Entry or start a new Session.",
+  );
+});
+
+test("invokeCommand rejects a stale expectedRevision before mutation", async () => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const created = yield* driver.createSession();
+      const error = yield* Effect.flip(
+        driver.invokeCommand(created.id, "session-name", { name: "Rejected" }, 0),
+      );
+      return { error, snapshot: yield* driver.getSnapshot(created.id) };
+    }).pipe(Effect.provide(firstPartyDriverLayer)),
+  );
+
+  expect(result.error).toMatchObject({ _tag: "StaleRevision", actual: 1, expected: 0 });
+  expect(result.snapshot.name).toBeUndefined();
+});
+
+test("session-name rejects empty, whitespace-only, and overlong names", async () => {
+  const errors = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const created = yield* driver.createSession();
+      return yield* Effect.forEach(["", "   ", "x".repeat(201)], (name) =>
+        Effect.flip(driver.invokeCommand(created.id, "session-name", { name })),
+      );
+    }).pipe(Effect.provide(firstPartyDriverLayer)),
+  );
+
+  expect(errors).toHaveLength(3);
+  for (const error of errors) {
+    expect(error).toMatchObject({ reason: "arguments_invalid" });
+  }
+});
+
+test("Session name survives resume and reverts with the Branch", async () => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const created = yield* driver.createSession();
+      yield* driver.invokeCommand(created.id, "session-name", { name: "Earlier name" });
+      const earlier = yield* driver.getSnapshot(created.id);
+      yield* driver.resumeSession(created.id);
+      const resumed = yield* driver.getSnapshot(created.id);
+      yield* driver.invokeCommand(created.id, "session-name", { name: "Later name" });
+      const later = yield* driver.getSnapshot(created.id);
+      const branched = yield* driver.branch(created.id, earlier.leaf.id, later.revision);
+      return { branched, resumed };
+    }).pipe(Effect.provide(firstPartyDriverLayer)),
+  );
+
+  expect(result.resumed.name).toBe("Earlier name");
+  expect(result.branched.name).toBe("Earlier name");
+});
+
+test("session_name never enters Provider request Context", async () => {
+  const contexts: Array<ReadonlyArray<unknown>> = [];
+  const capturingProvider: ProviderService = {
+    streamAssistant: (context) => {
+      contexts.push(context);
+      return Stream.fromIterable([
+        { _tag: "textDelta", text: "reply" },
+        { _tag: "done", stopReason: "done" },
+      ]);
+    },
+  };
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const created = yield* driver.createSession();
+      yield* driver.invokeCommand(created.id, "session-name", { name: "Provider secret name" });
+      yield* driver.prompt(created.id, "Visible user input");
+    }).pipe(Effect.provide(makeFirstPartyDriverLayer({}, capturingProvider))),
+  );
+
+  expect(contexts).toEqual([[{ content: "Visible user input", role: "user" }]]);
+  expect(JSON.stringify(contexts)).not.toContain("Provider secret name");
+  expect(JSON.stringify(contexts)).not.toContain("session_name");
 });

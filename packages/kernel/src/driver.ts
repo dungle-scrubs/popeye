@@ -9,9 +9,10 @@
  * and subscriptions disagree. Fork copies entries after it creates the target Session. A later copy
  * failure leaves that target Session in the Journal because the Journal has no compensation API.
  *
- * Settings are Branch-derived. The newest model_change and thinking_change on the current Branch
- * win independently. Branching to an Entry before a change restores the older value. A Branch
- * command waits behind a running Turn, but expectedRevision can reject a stale queued command.
+ * Settings are Branch-derived. The newest model_change, session_name, and thinking_change on the
+ * current Branch win independently. Branching to an Entry before a change restores the older
+ * value. A Branch command waits behind a running Turn, but expectedRevision can reject a stale
+ * queued command.
  */
 
 import {
@@ -28,7 +29,7 @@ import {
   type SessionId,
   SessionIdSchema,
 } from "@peye/journal";
-import type { ProtocolError } from "@peye/protocol";
+import { type ProtocolError, StaleRevision } from "@peye/protocol";
 import { Context, Effect, Layer, Ref, Schema, type Stream } from "effect";
 
 import {
@@ -37,6 +38,7 @@ import {
   CompactionLive,
   type CompactionPolicyOptions,
   type CompactionResult,
+  compactBranch,
 } from "./compaction-policy.js";
 import {
   MessageEntryPayloadSchema,
@@ -50,7 +52,7 @@ import type { TurnQueueFull } from "./errors.js";
 import { Mailbox, type MailboxFailure, MailboxLive, type MailboxOptions } from "./mailbox.js";
 import { type InvokeCommandError, PluginHost, PluginHostNone } from "./plugin-host.js";
 import { type Progress, ProgressHub, ProgressHubLive, TurnPhaseSchema } from "./progress.js";
-import { type Provider, type ThinkingLevel, ThinkingLevelSchema } from "./provider.js";
+import { Provider, type ThinkingLevel, ThinkingLevelSchema } from "./provider.js";
 import {
   type ResumedSessionInfo,
   type SessionInfo,
@@ -130,7 +132,8 @@ export interface DriverService {
     sessionId: SessionId,
     name: string,
     args: unknown,
-  ) => Effect.Effect<unknown, InvokeCommandError>;
+    expectedRevision?: number,
+  ) => Effect.Effect<unknown, InvokeCommandError | MailboxFailure>;
   readonly listSessions: () => Effect.Effect<ReadonlyArray<SessionSummary>, JournalFailure>;
   readonly prompt: (
     sessionId: SessionId,
@@ -293,7 +296,7 @@ const makeSnapshot = (core: DriverSnapshotCore, revision: number): DriverSnapsho
 export const DriverLive: Layer.Layer<
   Driver,
   never,
-  Compaction | Journal | Mailbox | PluginHost | ProgressHub | Sessions | Turns
+  Compaction | Journal | Mailbox | PluginHost | ProgressHub | Provider | Sessions | Turns
 > = Layer.effect(
   Driver,
   Effect.gen(function* () {
@@ -302,6 +305,7 @@ export const DriverLive: Layer.Layer<
     const mailbox = yield* Mailbox;
     const pluginHost = yield* PluginHost;
     const progress = yield* ProgressHub;
+    const provider = yield* Provider;
     const sessions = yield* Sessions;
     const turns = yield* Turns;
     const sessionSettings = yield* Ref.make<ReadonlyMap<SessionId, SessionSettings>>(new Map());
@@ -461,6 +465,32 @@ export const DriverLive: Layer.Layer<
         })
         .pipe(Effect.asVoid);
 
+    const requireCommandRevision = (
+      expectedRevision: number | undefined,
+      revision: number,
+    ): Effect.Effect<void, StaleRevision> =>
+      expectedRevision === undefined || expectedRevision === revision
+        ? Effect.void
+        : Effect.fail(new StaleRevision({ actual: revision, expected: expectedRevision }));
+
+    const appendSessionName = (
+      sessionId: SessionId,
+      name: string,
+    ): Effect.Effect<void, JournalFailure> =>
+      decodeSessionName({ name }).pipe(
+        Effect.mapError((cause) => invalidEntryPayload("session_name", cause)),
+        Effect.flatMap((payload) =>
+          journal.appendEntry(sessionId, EntryDraftSchema.make({ kind: "session_name", payload })),
+        ),
+        Effect.flatMap(() =>
+          Ref.update(sessionSettings, (current) => {
+            const next = new Map(current);
+            next.set(sessionId, { ...(current.get(sessionId) ?? {}), name });
+            return next;
+          }),
+        ),
+      );
+
     return {
       abortTurn: (sessionId) => turns.abortTurn(sessionId),
       branch: (sessionId, toEntryId, expectedRevision) =>
@@ -486,13 +516,34 @@ export const DriverLive: Layer.Layer<
           })
           .pipe(Effect.map((result) => result.value)),
       getSnapshot: readSnapshot,
-      invokeCommand: (sessionId, name, args) =>
-        pluginHost.invokeCommand(name, args, {
-          compactNow: (expectedRevision) => compaction.compactNow(sessionId, expectedRevision),
-          sessionId,
-          setSessionName: (sessionName, expectedRevision) =>
-            sessions.setSessionName(sessionId, sessionName, expectedRevision),
-        }),
+      invokeCommand: (sessionId, name, args, expectedRevision) =>
+        mailbox
+          .enqueue(sessionId, {
+            ...(expectedRevision === undefined ? {} : { expectedRevision }),
+            name: "invoke-command",
+            run: (revision) =>
+              pluginHost.invokeCommand(name, args, {
+                compactNow: (commandExpectedRevision) =>
+                  requireCommandRevision(commandExpectedRevision, revision).pipe(
+                    Effect.zipRight(
+                      compactBranch({
+                        journal,
+                        options: compaction.policy,
+                        progress,
+                        provider,
+                        sessionId,
+                        turnOrdinal: 0,
+                      }),
+                    ),
+                  ),
+                sessionId,
+                setSessionName: (sessionName, commandExpectedRevision) =>
+                  requireCommandRevision(commandExpectedRevision, revision).pipe(
+                    Effect.zipRight(appendSessionName(sessionId, sessionName)),
+                  ),
+              }),
+          })
+          .pipe(Effect.map((result) => result.value)),
       listSessions: () => sessions.list(),
       prompt: (sessionId, content, options = {}) =>
         turns.runTurn(sessionId, content, options, (turnOptions) =>
@@ -527,7 +578,7 @@ export const DriverDefault = (
   const compaction = CompactionLive(options.compaction).pipe(Layer.provide(shared));
   const kernel = Layer.mergeAll(shared, compaction);
   const sessions = SessionsLive(options.sessions).pipe(Layer.provide(kernel));
-  const turns = TurnsLive().pipe(Layer.provide(kernel));
+  const turns = TurnsLive().pipe(Layer.provide(Layer.merge(kernel, pluginHost)));
   const dependencies = Layer.mergeAll(kernel, pluginHost, sessions, turns);
   return DriverLive.pipe(Layer.provide(dependencies));
 };

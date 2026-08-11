@@ -54,6 +54,8 @@ export {
 export {
   InvokeCommandError,
   type PluginCommandContext,
+  type PluginCompactionGateRequest,
+  type PluginCompactionGateResult,
   type PluginCompactionResult,
   PluginHost,
   PluginHostNone,

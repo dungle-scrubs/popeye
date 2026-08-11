@@ -9,6 +9,7 @@ import { expect, test } from "vitest";
 
 import { CompactionLive } from "../compaction-policy.js";
 import { MailboxLive } from "../mailbox.js";
+import { PluginHostNone } from "../plugin-host.js";
 import { ProgressHubLive } from "../progress.js";
 import { Sessions, SessionsLive } from "../sessions.js";
 import { ToolRegistryLive } from "../tool.js";
@@ -48,7 +49,7 @@ test.skipIf(liveSmoke === undefined)(
       toolLayer,
     );
     const compactionLayer = CompactionLive().pipe(Layer.provide(dependencies));
-    const turnDependencies = Layer.merge(dependencies, compactionLayer);
+    const turnDependencies = Layer.mergeAll(dependencies, compactionLayer, PluginHostNone);
     const liveLayer = Layer.mergeAll(
       turnDependencies,
       SessionsLive().pipe(Layer.provide(Layer.mergeAll(journalLayer, mailboxLayer, toolLayer))),

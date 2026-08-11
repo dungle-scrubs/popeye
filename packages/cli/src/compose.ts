@@ -9,6 +9,8 @@ import {
   InvokeCommandError,
   kernelPackage,
   type PluginCommandContext,
+  type PluginCompactionGateRequest,
+  type PluginCompactionGateResult,
   PluginHost,
   type PluginHostService,
   Provider,
@@ -60,20 +62,37 @@ const invokeCommandError = (
     reason,
   });
 
+const emitCompactionGate = (
+  emitter: HookEmitterService,
+  grants: CapabilityGrants,
+  request: PluginCompactionGateRequest,
+): Effect.Effect<PluginCompactionGateResult, unknown> =>
+  emitter.emit("compaction-gate", request, grants).pipe(
+    Effect.as<PluginCompactionGateResult>({ action: "compact" }),
+    Effect.catchTag("GateRejected", (error) =>
+      error.rejection === "block"
+        ? Effect.succeed<PluginCompactionGateResult>({
+            action: "skip",
+            reason: error.reason,
+          })
+        : Effect.fail(error),
+    ),
+  );
+
 const commandExecutionContext = (
+  commandName: string,
   context: PluginCommandContext,
   emitter: HookEmitterService,
   grants: CapabilityGrants,
 ): CommandExecutionContext => ({
   compactNow: (expectedRevision) =>
     Effect.gen(function* () {
-      const replacement = yield* emitter.emit(
-        "compaction-gate",
-        { reason: "manual", tokenCount: 0 },
-        grants,
-      );
-      if (replacement?.action === "skip") {
-        return { reason: replacement.reason, skipped: true as const };
+      const decision = yield* emitCompactionGate(emitter, grants, {
+        reason: "manual",
+        tokenCount: 0,
+      });
+      if (decision.action === "skip") {
+        return yield* invokeCommandError(commandName, "command_vetoed", decision.reason);
       }
       return yield* context.compactNow(expectedRevision);
     }),
@@ -99,6 +118,18 @@ export const FirstPartyPluginHostLive = (
         (plugin) => registry.registerPlugin(plugin.manifest, plugin.contributions),
         { discard: true },
       ).pipe(Effect.orDie);
+
+      const compactionGate: PluginHostService["compactionGate"] = (sessionId, request) => {
+        const grants = createCapabilityGrants(sessionId);
+        return emitCompactionGate(emitter, grants, request).pipe(
+          Effect.catchAll((error) =>
+            Effect.succeed({
+              action: "skip" as const,
+              reason: `Compaction gate failed closed: ${String(error)}`,
+            }),
+          ),
+        );
+      };
 
       const invokeCommand: PluginHostService["invokeCommand"] = (name, args, context) =>
         Effect.gen(function* () {
@@ -148,17 +179,19 @@ export const FirstPartyPluginHostLive = (
               ),
             ),
           );
-          const commandContext = commandExecutionContext(context, emitter, grants);
+          const commandContext = commandExecutionContext(name, context, emitter, grants);
           return yield* command.payload
             .execute(input, commandContext)
             .pipe(
               Effect.mapError((cause) =>
-                invokeCommandError(name, "command_failed", `Command ${name} failed.`, cause),
+                cause instanceof InvokeCommandError
+                  ? cause
+                  : invokeCommandError(name, "command_failed", `Command ${name} failed.`, cause),
               ),
             );
         });
 
-      return { invokeCommand };
+      return { compactionGate, invokeCommand };
     }),
   );
 

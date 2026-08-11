@@ -13,4 +13,8 @@ test("plugin-author public surface is documented from the first-party Plugins", 
   expect(guide).toContain("CommandExecutionContext");
   expect(guide).toContain("compactNow");
   expect(guide).toContain("setSessionName");
+  expect(guide).toContain('action: "compact"');
+  expect(guide).toContain('action: "skip"');
+  expect(guide).toContain("overflow-triggered");
+  expect(guide).not.toContain("veto or replace");
 });

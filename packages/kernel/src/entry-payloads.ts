@@ -20,8 +20,19 @@ export const ThinkingChangePayloadSchema = Schema.Struct({
 
 export type ThinkingChangePayload = Schema.Schema.Type<typeof ThinkingChangePayloadSchema>;
 
+export const SESSION_NAME_MAX_LENGTH = 200;
+
+export const SessionNameSchema = Schema.String.pipe(
+  Schema.filter((name) => name.trim().length > 0, {
+    message: () => "Session name must contain a non-whitespace character",
+  }),
+  Schema.maxLength(SESSION_NAME_MAX_LENGTH, {
+    message: () => `Session name must be at most ${SESSION_NAME_MAX_LENGTH} characters`,
+  }),
+);
+
 export const SessionNamePayloadSchema = Schema.Struct({
-  name: Schema.NonEmptyString,
+  name: SessionNameSchema,
 });
 
 export type SessionNamePayload = Schema.Schema.Type<typeof SessionNamePayloadSchema>;

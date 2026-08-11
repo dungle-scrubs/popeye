@@ -23,18 +23,23 @@ The `CommandExecutionContext` is scoped to one Session. It provides the Session 
 kernel operations:
 
 - `compactNow(expectedRevision?)` applies Compaction through the public Compaction operation.
-- `setSessionName(name, expectedRevision?)` appends a non-model-visible `session_name` Entry.
+- `setSessionName(name, expectedRevision?)` appends a non-model-visible `session_name` Entry. A
+  Session name must contain a non-whitespace character and must not exceed 200 characters.
 
 A Command must use these operations. It must not write to the Journal or import kernel source paths.
-The Driver exposes Commands through `invokeCommand(sessionId, name, args)`.
+The Driver exposes Commands through `invokeCommand(sessionId, name, args, expectedRevision?)`.
+The Driver checks `expectedRevision` inside the Session mailbox before it decodes arguments, runs a
+Hook, or mutates the Journal.
 
 ## Gate Hook
 
 Use `defineHookContribution` for a Hook. The compact Plugin contributes the `compaction-gate` Hook.
-This Hook uses the `FirstWins` merge class. It returns `continue`, `block`, or `replace`. A block
-rejects Compaction. A replacement with `action: "skip"` returns a skip result without appending a
-Compaction Entry.
+This Hook uses the `FirstWins` merge class. It returns `action: "compact"` or `action: "skip"`. A
+skip vetoes manual Compaction with a `command_vetoed` error. A skip also prevents overflow-triggered
+Compaction. The Turn settles with a budget diagnostic that tells the user to branch or start a new
+Session. The v1 Hook does not replace a Compaction summary or instruction.
 
-The import-boundary check scans every file under a `features/` directory. It rejects kernel internal
-paths. Feature modules use `@peye/plugins` from its package root. The CLI composition module uses
-`@peye/kernel` from its package root.
+The import-boundary check scans every file under a `features/` directory. It rejects deep imports
+from `@peye/kernel`, `@peye/plugins`, `@peye/journal`, and `@peye/protocol`. It also rejects relative
+imports that escape the feature's package. Feature modules use `@peye/plugins` from its package
+root. The CLI composition module uses `@peye/kernel` from its package root.

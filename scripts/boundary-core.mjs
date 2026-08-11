@@ -1,9 +1,9 @@
 import { glob, readFile } from "node:fs/promises";
-import { relative, resolve, sep } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 
 export const BOUNDARY_CODES = Object.freeze({
   CLI_KERNEL_IMPORT: "CLI_KERNEL_IMPORT",
-  FEATURE_KERNEL_INTERNAL_IMPORT: "FEATURE_KERNEL_INTERNAL_IMPORT",
+  FEATURE_DEEP_IMPORT: "FEATURE_DEEP_IMPORT",
   PI_AI_SEAM_IMPORT: "PI_AI_SEAM_IMPORT",
   PROTOCOL_PEYE_IMPORT: "PROTOCOL_PEYE_IMPORT",
 });
@@ -14,7 +14,35 @@ export const BOUNDARY_CODES = Object.freeze({
 const staticImportPattern =
   /\b(?:export|import)\s+(?:type\s+)?(?:[^'";]*?\s+from\s+)?["']([^"']+)["']/g;
 const dynamicImportPattern = /\b(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/g;
-const internalPathPattern = /(^|\/)internal(\/|$|\.)/;
+const featurePublicPackages = Object.freeze([
+  "@peye/journal",
+  "@peye/kernel",
+  "@peye/plugins",
+  "@peye/protocol",
+]);
+
+/** @param {string} path */
+const slashPath = (path) => path.split(sep).join("/");
+
+/** @param {string} sourcePath @param {string} specifier */
+function isFeatureDeepImport(sourcePath, specifier) {
+  if (featurePublicPackages.some((packageRoot) => specifier.startsWith(`${packageRoot}/`))) {
+    return true;
+  }
+  if (!specifier.startsWith(".")) {
+    return false;
+  }
+  const segments = sourcePath.split("/");
+  const packageRoot = segments.length >= 2 ? segments.slice(0, 2).join("/") : undefined;
+  if (packageRoot === undefined) {
+    return false;
+  }
+  const resolvedImport = slashPath(resolve(dirname(sourcePath), specifier));
+  const resolvedPackageRoot = slashPath(resolve(packageRoot));
+  return (
+    resolvedImport !== resolvedPackageRoot && !resolvedImport.startsWith(`${resolvedPackageRoot}/`)
+  );
+}
 
 /** @param {string} source */
 function findImportSpecifiers(source) {
@@ -40,7 +68,7 @@ export async function checkBoundaries(rootDirectory) {
   })) {
     const absoluteSourceFile = resolve(rootDirectory, sourceFile);
     const source = await readFile(absoluteSourceFile, "utf8");
-    const sourcePath = relative(rootDirectory, absoluteSourceFile).split(sep).join("/");
+    const sourcePath = slashPath(relative(rootDirectory, absoluteSourceFile));
     const isCliSource = sourcePath.startsWith("packages/cli/src/");
     const isCompositionModule = sourcePath === "packages/cli/src/compose.ts";
     const isFeatureSource = sourcePath.split("/").includes("features");
@@ -52,9 +80,6 @@ export async function checkBoundaries(rootDirectory) {
       const importsPiAi =
         specifier === "@earendil-works/pi-ai" || specifier.startsWith("@earendil-works/pi-ai/");
       const importsPeye = specifier.startsWith("@peye/");
-      const importsInternalPath =
-        internalPathPattern.test(specifier) &&
-        (specifier.startsWith("@peye/kernel") || specifier.startsWith("."));
 
       if (isCliSource && importsKernel && !isCompositionModule) {
         violations.push({
@@ -74,11 +99,12 @@ export async function checkBoundaries(rootDirectory) {
         });
       }
 
-      if (isFeatureSource && importsInternalPath) {
+      if (isFeatureSource && isFeatureDeepImport(sourcePath, specifier)) {
         violations.push({
-          code: BOUNDARY_CODES.FEATURE_KERNEL_INTERNAL_IMPORT,
+          code: BOUNDARY_CODES.FEATURE_DEEP_IMPORT,
           file: sourcePath,
-          message: "Feature modules may not import internal module paths.",
+          message:
+            "Feature modules may import @peye packages only from package roots and may not escape their own package through relative imports.",
           specifier,
         });
       }
