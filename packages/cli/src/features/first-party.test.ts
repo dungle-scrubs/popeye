@@ -1,4 +1,4 @@
-import { createMemoryJournalBacking, JournalMemory } from "@peye/journal";
+import { createMemoryJournalBacking, JournalMemory } from "@pop-eye/journal";
 import { Effect, Layer, Stream } from "effect";
 import { expect, test } from "vitest";
 

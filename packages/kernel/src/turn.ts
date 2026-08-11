@@ -9,8 +9,8 @@ import {
   Journal,
   type JournalFailure,
   type SessionId,
-} from "@peye/journal";
-import { ProtocolError } from "@peye/protocol";
+} from "@pop-eye/journal";
+import { ProtocolError } from "@pop-eye/protocol";
 import {
   Cause,
   Context,
@@ -123,7 +123,7 @@ export interface TurnsService {
   readonly subscribeProgress: (sessionId: SessionId) => Stream.Stream<Progress>;
 }
 
-export class Turns extends Context.Tag("@peye/kernel/Turns")<Turns, TurnsService>() {}
+export class Turns extends Context.Tag("@pop-eye/kernel/Turns")<Turns, TurnsService>() {}
 
 interface ActiveTurn {
   readonly abortGraceMs: number;

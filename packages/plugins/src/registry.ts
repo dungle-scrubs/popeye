@@ -212,7 +212,7 @@ export interface ContributionRegistryService {
   readonly revision: Effect.Effect<number>;
 }
 
-export class ContributionRegistry extends Context.Tag("@peye/plugins/ContributionRegistry")<
+export class ContributionRegistry extends Context.Tag("@pop-eye/plugins/ContributionRegistry")<
   ContributionRegistry,
   ContributionRegistryService
 >() {}

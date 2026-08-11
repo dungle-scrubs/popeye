@@ -5,7 +5,7 @@
  * PEYE_LIVE_ENDPOINT=http://127.0.0.1:1234/v1 \
  * PEYE_LIVE_MODEL=lmstudio-community/qwen3.6-27b-mlx \
  * PEYE_LIVE_MODEL_ALT=openai/gpt-oss-20b \
- * pnpm vitest run --project @peye/cli src/entry/live.test.ts
+ * pnpm vitest run --project @pop-eye/cli src/entry/live.test.ts
  *
  * The local suite is skipped unless PEYE_LIVE_ENDPOINT and PEYE_LIVE_MODEL are set. Spawned local
  * processes have every supported API-key variable removed, so they exercise keyless loopback.
@@ -19,8 +19,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import type { Progress, Snapshot } from "@peye/protocol";
-import { decodeProgress, decodeSnapshot } from "@peye/protocol";
+import type { Progress, Snapshot } from "@pop-eye/protocol";
+import { decodeProgress, decodeSnapshot } from "@pop-eye/protocol";
 import { Effect } from "effect";
 import { afterEach, beforeAll, expect, test } from "vitest";
 

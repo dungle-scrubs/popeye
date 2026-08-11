@@ -1,1 +1,1 @@
-export const loadKernel = async () => import("@peye/kernel");
+export const loadKernel = async () => import("@pop-eye/kernel");

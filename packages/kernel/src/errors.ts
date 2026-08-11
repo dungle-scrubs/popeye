@@ -3,7 +3,7 @@
  * It exists to prevent provider, tool, gate, and budget concerns from leaking into heads.
  */
 
-import type { EntryId, SessionId } from "@peye/journal";
+import type { EntryId, SessionId } from "@pop-eye/journal";
 import { Data } from "effect";
 
 export class ProviderError extends Data.TaggedError("ProviderError")<{

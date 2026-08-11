@@ -6,7 +6,7 @@
  * enforcement.
  */
 
-import type { SessionId } from "@peye/journal";
+import type { SessionId } from "@pop-eye/journal";
 import { Effect } from "effect";
 
 import { Driver } from "../compose.js";

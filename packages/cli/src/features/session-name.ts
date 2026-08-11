@@ -2,7 +2,7 @@
  * Owns the first-party Session naming Plugin.
  * It exists so Session naming uses a Command Contribution instead of a built-in command path.
  */
-import { defineCommandContribution, type PluginManifest } from "@peye/plugins";
+import { defineCommandContribution, type PluginManifest } from "@pop-eye/plugins";
 import { Schema } from "effect";
 
 const SESSION_NAME_MAX_LENGTH = 200;

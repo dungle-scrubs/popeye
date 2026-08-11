@@ -41,25 +41,25 @@ const packedTarball = async (directory: string, prefix: string): Promise<string>
 };
 
 test("packed packages run both conformance suites in a clean consumer", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-conformance-consumer-"));
+  const root = await mkdtemp(join(tmpdir(), "pop-eye-conformance-consumer-"));
   const consumerDirectory = join(root, "consumer");
   const packDirectory = join(root, "packs");
   try {
     await mkdir(consumerDirectory, { recursive: true });
     await mkdir(packDirectory, { recursive: true });
     run(repositoryRoot, ["build"]);
-    for (const packageName of ["@peye/journal", "@peye/protocol", "@peye/kernel"]) {
+    for (const packageName of ["@pop-eye/journal", "@pop-eye/protocol", "@pop-eye/kernel"]) {
       run(repositoryRoot, ["--filter", packageName, "pack", "--pack-destination", packDirectory]);
     }
 
-    const journalTarball = await packedTarball(packDirectory, "peye-journal-");
-    const kernelTarball = await packedTarball(packDirectory, "peye-kernel-");
-    const protocolTarball = await packedTarball(packDirectory, "peye-protocol-");
+    const journalTarball = await packedTarball(packDirectory, "pop-eye-journal-");
+    const kernelTarball = await packedTarball(packDirectory, "pop-eye-kernel-");
+    const protocolTarball = await packedTarball(packDirectory, "pop-eye-protocol-");
     await writeFile(
       join(consumerDirectory, "package.json"),
       `${JSON.stringify(
         {
-          name: "peye-clean-room",
+          name: "pop-eye-clean-room",
           private: true,
           type: "module",
         },
@@ -72,8 +72,8 @@ test("packed packages run both conformance suites in a clean consumer", async ()
       `${JSON.stringify(
         {
           overrides: {
-            "@peye/journal": `file:${journalTarball}`,
-            "@peye/protocol": `file:${protocolTarball}`,
+            "@pop-eye/journal": `file:${journalTarball}`,
+            "@pop-eye/protocol": `file:${protocolTarball}`,
           },
         },
         null,
@@ -102,10 +102,10 @@ test("packed packages run both conformance suites in a clean consumer", async ()
 import { access } from "node:fs/promises";
 
 await assert.rejects(access(new URL("./node_modules/vitest/package.json", import.meta.url)));
-const journal = await import("@peye/journal");
-const kernel = await import("@peye/kernel");
-assert.equal(journal.journalPackage, "@peye/journal");
-assert.equal(kernel.kernelPackage, "@peye/kernel");
+const journal = await import("@pop-eye/journal");
+const kernel = await import("@pop-eye/kernel");
+assert.equal(journal.journalPackage, "@pop-eye/journal");
+assert.equal(kernel.kernelPackage, "@pop-eye/kernel");
 `,
     );
     run(consumerDirectory, ["exec", "node", "check-main.mjs"]);
@@ -116,11 +116,11 @@ assert.equal(kernel.kernelPackage, "@peye/kernel");
       `import {
   createMemoryJournalContractHarness,
   describeJournalContract,
-} from "@peye/journal/conformance";
+} from "@pop-eye/journal/conformance";
 import {
   createPiAiSeamContractHarness,
   describeAiSeamContract,
-} from "@peye/kernel/ai-conformance";
+} from "@pop-eye/kernel/ai-conformance";
 
 await describeJournalContract(createMemoryJournalContractHarness);
 await describeAiSeamContract(createPiAiSeamContractHarness);
@@ -131,8 +131,8 @@ await describeAiSeamContract(createPiAiSeamContractHarness);
     expect(result.output).toContain("conformance.test.ts");
     expect(result.output).toContain("passed");
     const manifest = await readFile(join(consumerDirectory, "package.json"), "utf8");
-    expect(manifest).toContain('"@peye/journal"');
-    expect(manifest).toContain('"@peye/kernel"');
+    expect(manifest).toContain('"@pop-eye/journal"');
+    expect(manifest).toContain('"@pop-eye/kernel"');
     expect(manifest).toContain('"vitest"');
   } finally {
     await rm(root, { force: true, recursive: true });

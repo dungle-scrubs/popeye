@@ -1,5 +1,5 @@
 {
-  "name": "@peye/kernel",
+  "name": "@pop-eye/kernel",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -21,8 +21,8 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.84.1",
-    "@peye/journal": "workspace:*",
-    "@peye/protocol": "workspace:*"
+    "@pop-eye/journal": "workspace:*",
+    "@pop-eye/protocol": "workspace:*"
   },
   "peerDependencies": {
     "effect": "^3.22.1",

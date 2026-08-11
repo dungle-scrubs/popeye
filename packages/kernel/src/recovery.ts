@@ -17,7 +17,7 @@ import {
   type JournalService,
   type Record,
   type SessionId,
-} from "@peye/journal";
+} from "@pop-eye/journal";
 import { Effect, Schema } from "effect";
 
 import {

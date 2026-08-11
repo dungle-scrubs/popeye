@@ -4,7 +4,7 @@ status: accepted
 
 # The journal is the only durable session representation
 
-peye's session state is an append-only journal of entries (conversation
+pop-eye's session state is an append-only journal of entries (conversation
 tree) and records (operation journal); snapshots and model context are
 pure folds of a branch, and streamed progress is a hint that is never
 folded into state. We chose this after a full source analysis of pi

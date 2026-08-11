@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { Writable } from "node:stream";
 
-import { createMemoryJournalBacking, Journal, JournalError, JournalMemory } from "@peye/journal";
+import { createMemoryJournalBacking, Journal, JournalError, JournalMemory } from "@pop-eye/journal";
 import { Deferred, Effect, Fiber, Layer, Option, Schema, Stream } from "effect";
 import { expect, test } from "vitest";
 

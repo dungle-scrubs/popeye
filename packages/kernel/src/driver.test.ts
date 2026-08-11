@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { JournalError } from "@peye/journal";
+import type { JournalError } from "@pop-eye/journal";
 import {
   type ContextBudgetExceeded,
   createMemoryJournalBacking,
@@ -11,7 +11,7 @@ import {
   JournalJsonl,
   JournalMemory,
   type SessionId,
-} from "@peye/journal";
+} from "@pop-eye/journal";
 import { Chunk, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect";
 import { expect, test } from "vitest";
 

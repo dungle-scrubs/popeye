@@ -18,7 +18,7 @@ import {
   type Record,
   RecordDraftSchema,
   type SessionId,
-} from "@peye/journal";
+} from "@pop-eye/journal";
 import { Effect, type ParseResult, Schema } from "effect";
 
 import { ASSISTANT_STOP_REASONS, type AssistantStopReason } from "./provider.js";

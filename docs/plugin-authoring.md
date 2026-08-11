@@ -1,13 +1,13 @@
 # Plugin authoring
 
-A Plugin is the only unit of behavior addition in peye. It returns a Schema-validated manifest and
+A Plugin is the only unit of behavior addition in pop-eye. It returns a Schema-validated manifest and
 an array of Contributions. The shipped compact and Session-name features use this public interface.
 Read their source at
 [`packages/cli/src/features`](../packages/cli/src/features) beside this guide.
 
 ## Current host boundary
 
-`@peye/plugins` publishes the manifest, registry, Hook emitter, Trust, discovery, loading, and
+`@pop-eye/plugins` publishes the manifest, registry, Hook emitter, Trust, discovery, loading, and
 generation APIs. The v1 CLI package publishes Head functions rather than an executable. Its
 first-party host statically composes the compact and Session-name Plugins. An application that uses
 dynamic discovery must wire `makePluginRuntime` into its own host.
@@ -22,8 +22,8 @@ A module must export a factory as either `plugin` or `default`. The factory can 
 a Promise.
 
 ```typescript
-import { defineCommandContribution } from "@peye/plugins";
-import type { PluginManifest } from "@peye/plugins";
+import { defineCommandContribution } from "@pop-eye/plugins";
+import type { PluginManifest } from "@pop-eye/plugins";
 import { Effect, Schema } from "effect";
 
 const manifest = {
@@ -46,7 +46,7 @@ export const plugin = () => ({
 });
 ```
 
-Import from package roots. Do not import `@peye/plugins/src/*` or another package's source files.
+Import from package roots. Do not import `@pop-eye/plugins/src/*` or another package's source files.
 
 ## Manifest Schema
 
@@ -206,7 +206,7 @@ Node's ESM registry, so reload is for human-paced development, not a hot loop.
 
 ## First-party import boundary
 
-Files below a `features/` directory must import peye packages from package roots only. They must not
+Files below a `features/` directory must import pop-eye packages from package roots only. They must not
 use deep imports or relative imports that escape their feature package. A feature imports
-`@peye/plugins`. The CLI composition module alone imports `@peye/kernel` to supply public kernel
+`@pop-eye/plugins`. The CLI composition module alone imports `@pop-eye/kernel` to supply public kernel
 operations. Run `pnpm check-boundaries` to enforce this rule.

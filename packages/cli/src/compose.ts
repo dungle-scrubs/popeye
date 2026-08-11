@@ -24,7 +24,7 @@ import {
   type Tool,
   ToolRegistryLive,
   type TurnResult,
-} from "@peye/kernel";
+} from "@pop-eye/kernel";
 import {
   type CapabilityGrants,
   CommandContributionKind,
@@ -37,7 +37,7 @@ import {
   HookEmitterLive,
   type HookEmitterService,
   type PluginManifest,
-} from "@peye/plugins";
+} from "@pop-eye/plugins";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { compactPlugin } from "./features/compact.js";

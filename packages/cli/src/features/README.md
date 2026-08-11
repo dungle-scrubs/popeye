@@ -1,8 +1,8 @@
 # First-party Plugin author interface
 
 The first-party Plugins use the same public interface as an external Plugin. Feature modules import
-`@peye/plugins` from its package root. They use Effect v3 for execution and Schema values. The CLI
-composition module imports `@peye/kernel` from its package root and supplies the public kernel
+`@pop-eye/plugins` from its package root. They use Effect v3 for execution and Schema values. The CLI
+composition module imports `@pop-eye/kernel` from its package root and supplies the public kernel
 operations through the command context. Feature modules do not import kernel source files or
 journal adapters.
 
@@ -40,6 +40,6 @@ Compaction. The Turn settles with a budget diagnostic that tells the user to bra
 Session. The v1 Hook does not replace a Compaction summary or instruction.
 
 The import-boundary check scans every file under a `features/` directory. It rejects deep imports
-from `@peye/kernel`, `@peye/plugins`, `@peye/journal`, and `@peye/protocol`. It also rejects relative
-imports that escape the feature's package. Feature modules use `@peye/plugins` from its package
-root. The CLI composition module uses `@peye/kernel` from its package root.
+from `@pop-eye/kernel`, `@pop-eye/plugins`, `@pop-eye/journal`, and `@pop-eye/protocol`. It also rejects relative
+imports that escape the feature's package. Feature modules use `@pop-eye/plugins` from its package
+root. The CLI composition module uses `@pop-eye/kernel` from its package root.

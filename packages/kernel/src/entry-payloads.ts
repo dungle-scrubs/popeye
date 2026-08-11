@@ -3,7 +3,7 @@
  * It exists so both paths use one AssistantDiagnostic shape and one trust-boundary decoder.
  */
 
-import { EntryIdSchema } from "@peye/journal";
+import { EntryIdSchema } from "@pop-eye/journal";
 import { Schema } from "effect";
 
 import { ASSISTANT_STOP_REASONS, THINKING_LEVELS } from "./provider.js";

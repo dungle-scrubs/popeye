@@ -2,7 +2,7 @@ import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { SessionIdSchema } from "@peye/journal";
+import { SessionIdSchema } from "@pop-eye/journal";
 import { Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Tracer } from "effect";
 import { expect, test } from "vitest";
 

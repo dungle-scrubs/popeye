@@ -1,4 +1,4 @@
-# peye-coding-agent
+# pop-eye
 
 An Effect-based coding agent with an event-sourced core and a unified
 plugin system. This glossary is the ubiquitous language; every plan
@@ -82,7 +82,7 @@ next turn after the current one settles.
 _Avoid_: queued prompt, pending message
 
 **Provider**:
-An LLM endpoint reachable through pi-ai; peye consumes providers, it does
+An LLM endpoint reachable through pi-ai; pop-eye consumes providers, it does
 not implement them.
 _Avoid_: model (a model is what a provider serves), backend, API
 
@@ -90,7 +90,7 @@ _Avoid_: model (a model is what a provider serves), backend, API
 
 **Plugin**:
 The single unit of extension: a manifest plus contributions; the only way
-behavior is added, including peye's own built-in features.
+behavior is added, including pop-eye's own built-in features.
 _Avoid_: extension, skill, theme, template, package (each names a plugin
 whose contributions happen to be of one kind)
 
@@ -184,7 +184,7 @@ kernel ~~~~ Progress ~~~~> heads   (hints; rendered, never folded)
 >
 > **Dev:** "Is `/compact` a built-in?"
 > **Domain expert:** "It's a **command** contributed by a **plugin** that
-> ships with peye. There are no built-ins that bypass the plugin API -
+> ships with pop-eye. There are no built-ins that bypass the plugin API -
 > that's the dogfood rule."
 
 ## Flagged ambiguities
@@ -192,7 +192,7 @@ kernel ~~~~ Progress ~~~~> heads   (hints; rendered, never folded)
 - "event" was used for durable log items, kernel output, and UI hints -
   resolved: banned entirely; durable items are **Entries**, streamed
   hints are **Progress**. (pi-ai's `AssistantMessageEvent` keeps its
-  name inside the ai seam; it never crosses into peye vocabulary.)
+  name inside the ai seam; it never crosses into pop-eye vocabulary.)
 - "head" collided between protocol consumers and the current tree
   position - resolved: **Head** is the consumer; the tree position is
   the **Leaf**.
