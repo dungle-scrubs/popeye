@@ -95,10 +95,10 @@ Source: `implementation.md` (M7); D-005
 ### M8: rpc live proof
 Source: `implementation.md` (M8)
 
-- [ ] Live harness aborts a mid-turn prompt through the shipped bin; the snapshot shows stop reason `aborted`
-- [ ] Adversarial soak (3+ interleaved sessions, dropped subscriber, oversized frame) keeps existing contracts
-- [ ] `01-cli-entry` ledger finding 3 (rpc abort dispatch) resolved with harness evidence
-- [ ] README documents `--plugin`, `--no-project-plugins`, and concurrent dispatch semantics
+- [x] Live harness aborts a mid-turn prompt through the shipped bin; the snapshot shows stop reason `aborted`
+- [x] Adversarial soak (3+ interleaved sessions, dropped subscriber, oversized frame) keeps existing contracts
+- [x] `01-cli-entry` ledger finding 3 (rpc abort dispatch) resolved with harness evidence
+- [x] README documents `--plugin`, `--no-project-plugins`, and concurrent dispatch semantics
 
 ## Deferred follow-up
 
@@ -115,8 +115,8 @@ Source: `implementation.md` (Deferred follow-up); D-006, D-010
 
 ## Summary
 - Total features: 55
-- Completed: 51
-- Remaining: 4
-- Current cutoff blockers: 4
+- Completed: 55
+- Remaining: 0
+- Current cutoff blockers: 0
 - Accepted/deferred follow-up: 4
 - Superseded/obsolete checklist debt: 0
