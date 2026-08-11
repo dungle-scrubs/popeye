@@ -5,7 +5,7 @@
 > file as features are implemented - never mark a milestone complete
 > until every current-cutoff checkbox under it is checked.
 
-> Current focus: Phase 4 - Wire protocol and heads
+> Current focus: Phase 5 - Verification hardening
 
 ## Phase 1: Foundations
 
@@ -275,9 +275,9 @@ Source: `implementation.md` (M22); Normative Contracts (protocol rules)
 ### M23: Snapshot-size measurement
 Source: `implementation.md` (M23); D-017
 
-- [ ] Snapshot payload sizes measured across recorded long sessions
-- [ ] Report written to plan artifacts with thresholds comparison
-- [ ] Pagination go/no-go recorded as a plan decision
+- [x] Snapshot payload sizes measured across recorded long sessions
+- [x] Report written to plan artifacts with thresholds comparison
+- [x] Pagination go/no-go recorded as a plan decision
 
 ## Phase 5: Verification hardening
 
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 163
-- Remaining: 14
-- Current cutoff blockers: 14
+- Completed: 166
+- Remaining: 11
+- Current cutoff blockers: 11
 - Accepted/deferred follow-up: 5
 - Superseded/obsolete checklist debt: 0
