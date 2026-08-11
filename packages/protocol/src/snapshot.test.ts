@@ -33,7 +33,7 @@ test("Snapshot schema carries the full transcript and inspection fields", () => 
     phase: "STREAMING",
     revision: 20,
     sessionId: "session-20",
-    sessionName: "Protocol work",
+    name: "Protocol work",
     thinkingLevel: "high",
   } as const;
 
@@ -74,4 +74,39 @@ test("Entry-id addressing is present in the Snapshot schema", () => {
   })(snapshot);
 
   expect(Schema.encodeSync(SnapshotSchema)(decoded)).toEqual(snapshot);
+});
+
+test("every required Snapshot field maps from the Driver snapshot surface", () => {
+  const driverSnapshot = {
+    entries: [
+      {
+        id: "entry-root",
+        kind: "session_root",
+        parentId: null,
+        payload: {},
+      },
+    ],
+    leaf: {
+      id: "entry-root",
+      kind: "session_root",
+      parentId: null,
+      payload: {},
+    },
+    model: "",
+    name: "Driver session name",
+    phase: "IDLE",
+    revision: 0,
+    sessionId: "session-20",
+  } as const;
+  const snapshot = {
+    entries: driverSnapshot.entries,
+    leafEntryId: driverSnapshot.leaf.id,
+    model: driverSnapshot.model,
+    phase: driverSnapshot.phase,
+    revision: driverSnapshot.revision,
+    sessionId: driverSnapshot.sessionId,
+    name: driverSnapshot.name,
+  } as const;
+
+  expect(Schema.decodeUnknownSync(SnapshotSchema)(snapshot)).toEqual(snapshot);
 });

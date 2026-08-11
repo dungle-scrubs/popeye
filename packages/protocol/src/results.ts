@@ -49,29 +49,29 @@ export const SafeReplayCallSchema = Schema.Struct({
 export const RecoveryReportSchema = Schema.Struct({
   actions: Schema.Array(RecoveryActionSchema),
   entriesAppended: Schema.Array(EntryIdSchema),
-  operationIdFound: Schema.optional(OperationIdSchema),
+  operationIdFound: Schema.UndefinedOr(OperationIdSchema),
   safeReplay: Schema.Array(SafeReplayCallSchema),
 });
 
 export type RecoveryReport = Schema.Schema.Type<typeof RecoveryReportSchema>;
 
-export const TurnResultSchema = Schema.Struct({
+export const TurnResultSchema = Schema.TaggedStruct("turn", {
   stopReason: StopReasonSchema,
 });
 
 export type TurnResult = Schema.Schema.Type<typeof TurnResultSchema>;
 
 export const AbortTurnResultSchema = Schema.Union(
-  Schema.Struct({
+  Schema.TaggedStruct("abortTurnNotAborted", {
     aborted: Schema.Literal(false),
     reason: Schema.Literal("none", "settling"),
     turnOrdinal: Schema.UndefinedOr(PositiveIntegerSchema),
   }),
-  Schema.Struct({
+  Schema.TaggedStruct("abortTurnAborted", {
     aborted: Schema.Literal(true),
     turnOrdinal: PositiveIntegerSchema,
   }),
-  Schema.Struct({
+  Schema.TaggedStruct("abortTurnLoopPrevented", {
     aborted: Schema.Literal(true),
     note: Schema.Literal("loop-prevented"),
     turnOrdinal: PositiveIntegerSchema,
@@ -89,7 +89,7 @@ export const CompactionResultSchema = Schema.Struct({
 
 export type CompactionResult = Schema.Schema.Type<typeof CompactionResultSchema>;
 
-export const SessionInfoSchema = Schema.Struct({
+export const SessionInfoSchema = Schema.TaggedStruct("sessionCreated", {
   id: SessionIdSchema,
   leaf: EntrySchema,
   revision: NonNegativeIntegerSchema,
@@ -104,7 +104,13 @@ export const SessionSummarySchema = Schema.Struct({
 
 export type SessionSummary = Schema.Schema.Type<typeof SessionSummarySchema>;
 
-export const ResumedSessionInfoSchema = Schema.Struct({
+export const SessionListResultSchema = Schema.TaggedStruct("sessionList", {
+  sessions: Schema.Array(SessionSummarySchema),
+});
+
+export type SessionListResult = Schema.Schema.Type<typeof SessionListResultSchema>;
+
+export const ResumedSessionInfoSchema = Schema.TaggedStruct("sessionResumed", {
   id: SessionIdSchema,
   leaf: EntrySchema,
   recovery: RecoveryReportSchema,
@@ -113,26 +119,34 @@ export const ResumedSessionInfoSchema = Schema.Struct({
 
 export type ResumedSessionInfo = Schema.Schema.Type<typeof ResumedSessionInfoSchema>;
 
-export const InvokeCommandResultSchema = Schema.Struct({
+export const InvokeCommandResultSchema = Schema.TaggedStruct("commandInvoked", {
   commandName: Schema.NonEmptyString,
   value: Schema.Unknown,
 });
 
 export type InvokeCommandResult = Schema.Schema.Type<typeof InvokeCommandResultSchema>;
 
-export const ProgressSubscriptionResultSchema = Schema.Struct({
+export const ProgressSubscriptionResultSchema = Schema.TaggedStruct("progressSubscribed", {
   initial: Schema.optional(ProgressSchema),
   sessionId: SessionIdSchema,
   subscribed: Schema.Literal(true),
 });
 
+export const AckResultSchema = Schema.TaggedStruct("ack", {});
+
+export type AckResult = Schema.Schema.Type<typeof AckResultSchema>;
+
+export const SnapshotResultSchema = Schema.TaggedStruct("snapshot", SnapshotSchema.fields);
+
+export type SnapshotResult = Schema.Schema.Type<typeof SnapshotResultSchema>;
+
 export const ResponseResultSchema = Schema.Union(
-  SnapshotSchema,
+  AckResultSchema,
+  SnapshotResultSchema,
   TurnResultSchema,
   AbortTurnResultSchema,
-  CompactionResultSchema,
   SessionInfoSchema,
-  Schema.Array(SessionSummarySchema),
+  SessionListResultSchema,
   ResumedSessionInfoSchema,
   InvokeCommandResultSchema,
   ProgressSubscriptionResultSchema,

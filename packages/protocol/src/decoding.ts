@@ -1,6 +1,6 @@
 /**
- * Owns strict decoding at protocol trust boundaries.
- * It exists so malformed wire input always enters the Effect error channel as ProtocolError.
+ * Owns family-specific decoding at protocol trust boundaries.
+ * It exists so Commands stay strict while newer Snapshot and Progress frames remain readable.
  */
 import { Effect, Schema } from "effect";
 
@@ -14,7 +14,7 @@ import {
 } from "./interactions.js";
 import { type Progress, ProgressSchema } from "./progress.js";
 import { type Response, ResponseSchema } from "./results.js";
-import { StrictParseOptions } from "./schema-common.js";
+import { LenientParseOptions, StrictParseOptions } from "./schema-common.js";
 import { type Snapshot, SnapshotSchema } from "./snapshot.js";
 
 const commandTags: ReadonlySet<string> = new Set(COMMAND_TAGS);
@@ -52,13 +52,13 @@ export const decodeCommand = (input: unknown): Effect.Effect<Command, ProtocolEr
 export const decodeSnapshot = (input: unknown): Effect.Effect<Snapshot, ProtocolError> =>
   Schema.decodeUnknown(
     SnapshotSchema,
-    StrictParseOptions,
+    LenientParseOptions,
   )(input).pipe(Effect.mapError((cause) => malformed("Snapshot", cause)));
 
 export const decodeProgress = (input: unknown): Effect.Effect<Progress, ProtocolError> =>
   Schema.decodeUnknown(
     ProgressSchema,
-    StrictParseOptions,
+    LenientParseOptions,
   )(input).pipe(Effect.mapError((cause) => malformed("Progress", cause)));
 
 export const decodeInteractionRequest = (

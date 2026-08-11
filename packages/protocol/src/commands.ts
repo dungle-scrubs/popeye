@@ -37,14 +37,9 @@ const ExpectedRevisionFields = {
   expectedRevision: Schema.optional(NonNegativeIntegerSchema),
 };
 
-export const ThinkingLevelSchema = Schema.Literal(
-  "high",
-  "low",
-  "max",
-  "medium",
-  "minimal",
-  "xhigh",
-);
+export const THINKING_LEVELS = ["high", "low", "max", "medium", "minimal", "xhigh"] as const;
+
+export const ThinkingLevelSchema = Schema.Literal(...THINKING_LEVELS);
 
 export const CommandSchema = Schema.Union(
   Schema.TaggedStruct("create", CorrelationFields),

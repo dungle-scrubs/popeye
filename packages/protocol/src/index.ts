@@ -8,6 +8,7 @@ export {
   COMMAND_TAGS,
   type Command,
   CommandSchema,
+  THINKING_LEVELS,
   ThinkingLevelSchema,
 } from "./commands.js";
 export {
@@ -36,13 +37,18 @@ export {
   SelectOptionSchema,
 } from "./interactions.js";
 export {
+  PROGRESS_TAGS,
   type Progress,
   ProgressSchema,
   StopReasonSchema,
+  type UnknownProgress,
+  UnknownProgressSchema,
 } from "./progress.js";
 export {
   type AbortTurnResult,
   AbortTurnResultSchema,
+  type AckResult,
+  AckResultSchema,
   type CompactionResult,
   CompactionResultSchema,
   type InvokeCommandResult,
@@ -57,8 +63,12 @@ export {
   ResumedSessionInfoSchema,
   type SessionInfo,
   SessionInfoSchema,
+  type SessionListResult,
+  SessionListResultSchema,
   type SessionSummary,
   SessionSummarySchema,
+  type SnapshotResult,
+  SnapshotResultSchema,
   type TurnResult,
   TurnResultSchema,
   type WireError,
@@ -71,5 +81,6 @@ export {
   LoadedGenerationSchema,
   type Snapshot,
   SnapshotSchema,
+  SnapshotThinkingLevelSchema,
   TurnPhaseSchema,
 } from "./snapshot.js";
