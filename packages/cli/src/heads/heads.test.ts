@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
+import { Writable } from "node:stream";
 
-import { createMemoryJournalBacking, JournalMemory } from "@peye/journal";
+import { createMemoryJournalBacking, Journal, JournalError, JournalMemory } from "@peye/journal";
 import { Deferred, Effect, Fiber, Layer, Option, Schema, Stream } from "effect";
 import { expect, test } from "vitest";
 
@@ -14,21 +15,40 @@ import {
 } from "../compose.js";
 import { runJsonHead } from "./json.js";
 import { runPrintHead } from "./print.js";
-import { HEAD_EXIT_CODES, type HeadWriter } from "./shared.js";
+import { HEAD_EXIT_CODES, type HeadWriter, makeWritableHeadWriter } from "./shared.js";
 
 type ScriptCase = "abort" | "error" | "plain" | "tool";
+type ScriptPrompt = "defect" | ScriptCase;
 
 const prompts = {
   abort: "Run the aborted turn.",
+  defect: "Run the defective turn.",
   error: "Run the error turn.",
   plain: "Run the plain turn.",
   tool: "Run the tool turn.",
-} as const satisfies Readonly<Record<ScriptCase, string>>;
+} as const satisfies Readonly<Record<ScriptPrompt, string>>;
 
-const scriptedDriverLayer = () => {
+const normalizedIdentifierFields = new Set([
+  "id",
+  "leafEntryId",
+  "parentId",
+  "sessionId",
+  "toolCallId",
+]);
+
+interface ScriptedDriverOptions {
+  readonly journalLayer?: Layer.Layer<Journal, JournalError>;
+  readonly onProviderRequest?: (prompt: string | undefined) => void;
+}
+
+const scriptedDriverLayer = (options: ScriptedDriverOptions = {}) => {
   const provider: ProviderService = {
     streamAssistant: (context) => {
       const prompt = context.findLast((item) => item.role === "user")?.content;
+      options.onProviderRequest?.(prompt);
+      if (prompt === prompts.defect) {
+        return Stream.die(new Error("Injected provider defect."));
+      }
       if (prompt === prompts.tool) {
         const toolFinished = context.some((item) => item.role === "toolResult");
         return toolFinished
@@ -71,11 +91,35 @@ const scriptedDriverLayer = () => {
     parameters: Schema.Struct({ path: Schema.String }),
   };
   const dependencies = Layer.mergeAll(
-    JournalMemory(createMemoryJournalBacking()),
+    options.journalLayer ?? JournalMemory(createMemoryJournalBacking()),
     Layer.succeed(Provider, provider),
     ToolRegistryLive([defineTool(readFileTool)]),
   );
   return FirstPartyDriverDefault().pipe(Layer.provide(dependencies));
+};
+
+const failAssistantAppendLayer = (): Layer.Layer<Journal, JournalError> => {
+  const base = JournalMemory(createMemoryJournalBacking());
+  return Layer.effect(
+    Journal,
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      return {
+        ...journal,
+        appendEntry: (sessionId, entry) => {
+          const payload = entry.payload as { readonly role?: unknown };
+          return entry.kind === "message" && payload.role === "assistant"
+            ? Effect.fail(
+                new JournalError({
+                  corruptionClass: "io_failure",
+                  message: "Injected assistant append failure.",
+                }),
+              )
+            : journal.appendEntry(sessionId, entry);
+        },
+      };
+    }),
+  ).pipe(Layer.provide(base));
 };
 
 const captureWriter = (): {
@@ -115,8 +159,7 @@ const normalizeJsonLines = (text: string): string => {
 
   const normalize = (value: unknown, key = ""): unknown => {
     if (typeof value === "string") {
-      const normalizedKey = key.toLowerCase();
-      if (normalizedKey === "id" || normalizedKey.endsWith("id")) {
+      if (normalizedIdentifierFields.has(key)) {
         const replacement = replacements.get(value);
         if (replacement !== undefined) {
           return replacement;
@@ -126,10 +169,7 @@ const normalizeJsonLines = (text: string): string => {
         replacements.set(value, next);
         return next;
       }
-      return normalizedKey.includes("timestamp") ? "<timestamp>" : value;
-    }
-    if (typeof value === "number" && key.toLowerCase().includes("timestamp")) {
-      return "<timestamp>";
+      return value;
     }
     if (Array.isArray(value)) {
       return value.map((item) => normalize(item));
@@ -188,6 +228,109 @@ test("print head exits non-zero with distinct codes on error and aborted stop re
   expect(error.exitCode).not.toBe(aborted.exitCode);
 });
 
+test("print and json heads stop before later prompts after the first non-zero exit", async () => {
+  for (const head of ["print", "json"] as const) {
+    const capture = captureWriter();
+    const providerRequests: Array<string | undefined> = [];
+    const program =
+      head === "print"
+        ? runPrintHead({
+            errorWriter: capture.writer,
+            prompts: [prompts.error, prompts.plain],
+            writer: capture.writer,
+          })
+        : runJsonHead({
+            prompts: [prompts.error, prompts.plain],
+            writer: capture.writer,
+          });
+    const exitCode = await Effect.runPromise(
+      program.pipe(
+        Effect.provide(
+          scriptedDriverLayer({
+            onProviderRequest: (prompt) => providerRequests.push(prompt),
+          }),
+        ),
+      ),
+    );
+
+    expect(exitCode).toBe(HEAD_EXIT_CODES.error);
+    expect(providerRequests).toEqual([prompts.error]);
+    expect(capture.output()).not.toContain("Plain answer.");
+  }
+});
+
+test("turn JournalError terminates print stderr and json stdout with a non-zero exit", async () => {
+  const printOutput = captureWriter();
+  const printErrors = captureWriter();
+  const printExit = await Effect.runPromise(
+    runPrintHead({
+      errorWriter: printErrors.writer,
+      prompts: [prompts.plain],
+      writer: printOutput.writer,
+    }).pipe(Effect.provide(scriptedDriverLayer({ journalLayer: failAssistantAppendLayer() }))),
+  );
+
+  expect(printExit).toBe(HEAD_EXIT_CODES.turnFailure);
+  expect(printOutput.output()).toBe("");
+  expect(JSON.parse(printErrors.output())).toMatchObject({
+    _tag: "headError",
+    error: {
+      kind: "failure",
+      message: "Injected assistant append failure.",
+      tag: "JournalError",
+    },
+  });
+
+  const jsonOutput = captureWriter();
+  const jsonExit = await Effect.runPromise(
+    runJsonHead({ prompts: [prompts.plain], writer: jsonOutput.writer }).pipe(
+      Effect.provide(scriptedDriverLayer({ journalLayer: failAssistantAppendLayer() })),
+    ),
+  );
+  const jsonItems = jsonOutput
+    .output()
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+  expect(jsonExit).toBe(HEAD_EXIT_CODES.turnFailure);
+  expect(jsonItems.some((item) => item._tag === "turnSettled")).toBe(true);
+  expect(jsonItems.at(-1)).toMatchObject({
+    _tag: "headError",
+    error: {
+      kind: "failure",
+      message: "Injected assistant append failure.",
+      tag: "JournalError",
+    },
+  });
+});
+
+test("provider defects terminate both heads with a structured error", async () => {
+  for (const head of ["print", "json"] as const) {
+    const capture = captureWriter();
+    const program =
+      head === "print"
+        ? runPrintHead({
+            errorWriter: capture.writer,
+            prompts: [prompts.defect],
+            writer: capture.writer,
+          })
+        : runJsonHead({ prompts: [prompts.defect], writer: capture.writer });
+    const exitCode = await Effect.runPromise(program.pipe(Effect.provide(scriptedDriverLayer())));
+    const terminal = JSON.parse(capture.output().trimEnd().split("\n").at(-1) ?? "null");
+
+    expect(exitCode).toBe(HEAD_EXIT_CODES.turnFailure);
+    expect(terminal).toMatchObject({
+      _tag: "headError",
+      error: {
+        kind: "defect",
+        message: "Injected provider defect.",
+        tag: "Error",
+      },
+    });
+  }
+});
+
 test("json head emits one JSON item per line and honors stdout backpressure", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
@@ -226,6 +369,43 @@ test("json head emits one JSON item per line and honors stdout backpressure", as
       expect(items.at(-1)).not.toHaveProperty("_tag");
     }),
   );
+});
+
+test("writable Head writer waits for drain from a real asynchronous Node Writable", async () => {
+  const releaseWrite = Promise.withResolvers<void>();
+  const writeStarted = Promise.withResolvers<void>();
+  const chunks: Array<string> = [];
+
+  class SlowWritable extends Writable {
+    public constructor() {
+      super({ highWaterMark: 1 });
+    }
+
+    public override _write(
+      chunk: Buffer,
+      _encoding: BufferEncoding,
+      callback: (error?: Error | null) => void,
+    ): void {
+      chunks.push(chunk.toString());
+      writeStarted.resolve();
+      void releaseWrite.promise.then(() => callback());
+    }
+  }
+
+  const writer = makeWritableHeadWriter(new SlowWritable());
+  let completed = false;
+  const pending = Effect.runPromise(writer.write("x")).then(() => {
+    completed = true;
+  });
+
+  await writeStarted.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(completed).toBe(false);
+  releaseWrite.resolve();
+  await pending;
+
+  expect(completed).toBe(true);
+  expect(chunks).toEqual(["x"]);
 });
 
 test("golden transcripts stay stable across scripted plain, tool, error, and aborted turns", async () => {

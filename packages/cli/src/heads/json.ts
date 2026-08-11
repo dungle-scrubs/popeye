@@ -1,7 +1,9 @@
 /**
  * Owns the in-process Head that writes protocol Progress and Snapshot lines.
  * It exists for structured pipes; it trusts Snapshots, renders Progress, and never folds Progress
- * into state.
+ * into state. Prompts run sequentially and stop at the first non-zero exit code. A boundary failure
+ * ends the stream with a headError envelope. The v1 Head intentionally has no separate per-turn
+ * deadline because the Provider seam owns idle timeout enforcement.
  */
 import { ProgressSchema, SnapshotSchema } from "@peye/protocol";
 import { Deferred, Effect, Fiber, Schema, Stream } from "effect";
@@ -11,6 +13,7 @@ import {
   exitCodeForStopReason,
   type HeadExitCode,
   type HeadWriter,
+  runHeadBoundary,
   stdoutHeadWriter,
 } from "./shared.js";
 
@@ -50,39 +53,42 @@ const encodeSnapshotLine = (snapshot: {
   );
 
 export const runJsonHead = (options: JsonHeadOptions) =>
-  Effect.gen(function* () {
-    const driver = yield* Driver;
-    const session = yield* driver.createSession();
-    const writer = options.writer ?? stdoutHeadWriter;
+  runHeadBoundary(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const session = yield* driver.createSession();
+      const writer = options.writer ?? stdoutHeadWriter;
 
-    for (const prompt of options.prompts) {
-      const stopReason = yield* Effect.scoped(
-        Effect.gen(function* () {
-          const subscriptionReady = yield* Deferred.make<void>();
-          const progressFiber = yield* driver.subscribeProgress(session.id).pipe(
-            Stream.takeUntil((progress) => progress._tag === "turnSettled"),
-            Stream.runForEach((progress) =>
-              Deferred.succeed(subscriptionReady, undefined).pipe(
-                Effect.zipRight(encodeProgressLine(progress)),
-                Effect.flatMap(writer.write),
+      for (const prompt of options.prompts) {
+        const stopReason = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const subscriptionReady = yield* Deferred.make<void>();
+            const progressFiber = yield* driver.subscribeProgress(session.id).pipe(
+              Stream.takeUntil((progress) => progress._tag === "turnSettled"),
+              Stream.runForEach((progress) =>
+                Deferred.succeed(subscriptionReady, undefined).pipe(
+                  Effect.zipRight(encodeProgressLine(progress)),
+                  Effect.flatMap(writer.write),
+                ),
               ),
-            ),
-            Effect.forkScoped,
-          );
+              Effect.forkScoped,
+            );
 
-          yield* Deferred.await(subscriptionReady);
-          const result = yield* driver.prompt(session.id, prompt);
-          yield* Fiber.join(progressFiber);
-          const snapshot = yield* driver.getSnapshot(session.id);
-          yield* encodeSnapshotLine(snapshot).pipe(Effect.flatMap(writer.write));
-          return result.stopReason;
-        }),
-      );
-      const exitCode = exitCodeForStopReason(stopReason);
-      if (exitCode !== 0) {
-        return exitCode;
+            yield* Deferred.await(subscriptionReady);
+            const result = yield* driver.prompt(session.id, prompt);
+            yield* Fiber.join(progressFiber);
+            const snapshot = yield* driver.getSnapshot(session.id);
+            yield* encodeSnapshotLine(snapshot).pipe(Effect.flatMap(writer.write));
+            return result.stopReason;
+          }),
+        );
+        const exitCode = exitCodeForStopReason(stopReason);
+        if (exitCode !== 0) {
+          return exitCode;
+        }
       }
-    }
 
-    return 0 satisfies HeadExitCode;
-  });
+      return 0 satisfies HeadExitCode;
+    }),
+    options.writer ?? stdoutHeadWriter,
+  );

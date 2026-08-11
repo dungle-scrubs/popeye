@@ -4,17 +4,30 @@
  */
 import type { Writable } from "node:stream";
 
-import { Data, Effect } from "effect";
+import { Cause, Chunk, Data, Effect, Exit, Option } from "effect";
 
 import type { DriverSnapshot, TurnResult } from "../compose.js";
 
-/** 0: done or truncated; 1: error; 2: aborted; 3: unresolved tool calls. */
+/**
+ * 0: done or truncated; 1: provider-settled error; 2: aborted; 3: unresolved tool calls;
+ * 4: a typed turn failure, defect, interruption, or other Head boundary failure.
+ */
 export const HEAD_EXIT_CODES = {
   aborted: 2,
   done: 0,
   error: 1,
+  /** Defensive default: the kernel currently consumes tool calls and never settles a Head here. */
   toolCalls: 3,
   truncated: 0,
+  turnFailure: 4,
+} as const;
+
+const STOP_REASON_EXIT_CODES = {
+  aborted: HEAD_EXIT_CODES.aborted,
+  done: HEAD_EXIT_CODES.done,
+  error: HEAD_EXIT_CODES.error,
+  toolCalls: HEAD_EXIT_CODES.toolCalls,
+  truncated: HEAD_EXIT_CODES.truncated,
 } as const satisfies Readonly<Record<TurnResult["stopReason"], number>>;
 
 export type HeadExitCode = (typeof HEAD_EXIT_CODES)[keyof typeof HEAD_EXIT_CODES];
@@ -26,6 +39,15 @@ export class HeadWriteError extends Data.TaggedError("HeadWriteError")<{
 
 export interface HeadWriter {
   readonly write: (text: string) => Effect.Effect<void, HeadWriteError>;
+}
+
+export interface HeadErrorEnvelope {
+  readonly _tag: "headError";
+  readonly error: {
+    readonly kind: "defect" | "failure" | "interruption";
+    readonly message: string;
+    readonly tag: string;
+  };
 }
 
 const asError = (cause: unknown): Error =>
@@ -79,9 +101,83 @@ export const makeWritableHeadWriter = (output: Writable): HeadWriter => ({
 });
 
 export const stdoutHeadWriter = makeWritableHeadWriter(process.stdout);
+export const stderrHeadWriter = makeWritableHeadWriter(process.stderr);
 
 export const exitCodeForStopReason = (stopReason: TurnResult["stopReason"]): HeadExitCode =>
-  HEAD_EXIT_CODES[stopReason];
+  STOP_REASON_EXIT_CODES[stopReason];
+
+const errorMessage = (value: unknown): string => {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "message" in value &&
+    typeof value.message === "string"
+  ) {
+    return value.message;
+  }
+  return String(value);
+};
+
+const errorTag = (value: unknown, fallback: string): string => {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "_tag" in value &&
+    typeof value._tag === "string"
+  ) {
+    return value._tag;
+  }
+  return value instanceof Error ? value.name : fallback;
+};
+
+export const headErrorEnvelope = <TFailure>(cause: Cause.Cause<TFailure>): HeadErrorEnvelope => {
+  const failure = Option.getOrUndefined(Cause.failureOption(cause));
+  if (failure !== undefined) {
+    return {
+      _tag: "headError",
+      error: {
+        kind: "failure",
+        message: errorMessage(failure),
+        tag: errorTag(failure, "Failure"),
+      },
+    };
+  }
+
+  const defect = Option.getOrUndefined(Chunk.head(Cause.defects(cause)));
+  if (defect !== undefined) {
+    return {
+      _tag: "headError",
+      error: {
+        kind: "defect",
+        message: errorMessage(defect),
+        tag: errorTag(defect, "Defect"),
+      },
+    };
+  }
+
+  return {
+    _tag: "headError",
+    error: {
+      kind: "interruption",
+      message: "Head execution was interrupted.",
+      tag: "Interrupted",
+    },
+  };
+};
+
+export const runHeadBoundary = <TFailure, TRequirements>(
+  program: Effect.Effect<HeadExitCode, TFailure, TRequirements>,
+  terminalErrorWriter: HeadWriter,
+): Effect.Effect<HeadExitCode, HeadWriteError, TRequirements> =>
+  Effect.exit(program).pipe(
+    Effect.flatMap((exit) => {
+      if (Exit.isSuccess(exit)) {
+        return Effect.succeed(exit.value);
+      }
+      const line = `${JSON.stringify(headErrorEnvelope(exit.cause))}\n`;
+      return terminalErrorWriter.write(line).pipe(Effect.as(HEAD_EXIT_CODES.turnFailure));
+    }),
+  );
 
 export const finalAssistantText = (snapshot: DriverSnapshot): string => {
   for (let index = snapshot.entries.length - 1; index >= 0; index -= 1) {
