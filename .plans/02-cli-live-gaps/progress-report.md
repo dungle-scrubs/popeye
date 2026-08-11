@@ -5,7 +5,7 @@
 > file as features are implemented - never mark a milestone complete
 > until every current-cutoff checkbox under it is checked.
 
-> Current focus: Phase 2 - Tool adaptation and audit surface
+> Current focus: Phase 3 - rpc per-Session dispatch
 
 ## Phase 1: Plugin pipeline in the CLI
 
@@ -61,10 +61,11 @@ Source: `implementation.md` (M4); D-012
 ### M5: End-to-end tool proof
 Source: `implementation.md` (M5)
 
-- [ ] A fake-provider toolCall turn completes through the spawned bin (`--mode json`); the captured stream decodes through `@pop-eye/protocol`
-- [ ] The captured fixture is stable across two consecutive runs
-- [ ] Live harness: a real model turn calls the fixture tool through the shipped bin (env-gated)
-- [ ] `01-cli-entry` ledger finding 2 (tool loading) resolved with harness evidence
+- [x] A fake-provider toolCall turn completes through the spawned bin (`--mode json`); the captured stream decodes through `@pop-eye/protocol`
+- [x] The captured fixture is stable across two consecutive runs
+- [x] Live harness: a real model turn calls the fixture tool through the shipped bin (env-gated)
+- [x] `01-cli-entry` ledger finding 2 (tool loading) resolved with harness evidence
+- [x] No-argument tool schemas normalize to an object root providers accept (kernel seam defect found by the live proof; D-024, seam unit test)
 
 ## Phase 3: rpc per-Session dispatch
 
@@ -112,9 +113,9 @@ Source: `implementation.md` (Deferred follow-up); D-006, D-010
 (none)
 
 ## Summary
-- Total features: 53
-- Completed: 31
-- Remaining: 22
-- Current cutoff blockers: 22
+- Total features: 54
+- Completed: 36
+- Remaining: 18
+- Current cutoff blockers: 18
 - Accepted/deferred follow-up: 4
 - Superseded/obsolete checklist debt: 0
