@@ -800,13 +800,14 @@ export const runRpcHead = (options: RpcHeadOptions) => {
     Effect.scoped(
       Effect.gen(function* () {
         const writer = yield* serializedWriter(outputWriter);
-        const dispatcher = yield* makeRpcDispatcher();
+        const dispatcher = yield* makeRpcDispatcher(writer);
         const writeSnapshot = (
           id: string | undefined,
           snapshot: DriverSnapshot,
           attached: boolean,
         ): Effect.Effect<void, HeadWriteError> =>
           writeSnapshotResponse(writer, id, snapshot, attached, options.snapshotAudit);
+        // Invariant: mutated only in session-serialized handlers; it must become a Ref if attach/detach becomes non-session-serialized.
         const attached = new Set<string>();
         const driver = yield* Driver;
         const interactions = yield* RpcInteractions;

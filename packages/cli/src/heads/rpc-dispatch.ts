@@ -12,10 +12,15 @@ import { Cause, Data, Deferred, Effect, Fiber, FiberSet, Queue, Ref } from "effe
 import type { HeadWriteError, HeadWriter } from "./shared.js";
 
 export const RPC_CONTROL_FORK_CAPACITY = 64;
+export const RPC_SESSION_MAP_CAPACITY = 1_024;
 export const RPC_SESSION_QUEUE_CAPACITY = 64;
 export const RPC_SESSIONLESS_QUEUE_CAPACITY = 64;
 
-export type RpcDispatchBound = "control_forks" | "session_queue" | "sessionless_queue";
+export type RpcDispatchBound =
+  | "control_forks"
+  | "session_map"
+  | "session_queue"
+  | "sessionless_queue";
 
 export class RpcDispatchBoundExceeded extends Data.TaggedError("RpcDispatchBoundExceeded")<{
   readonly bound: RpcDispatchBound;
@@ -64,9 +69,12 @@ interface InFlightState {
   readonly idle: Deferred.Deferred<void>;
 }
 
-export const makeRpcDispatcher = (): Effect.Effect<RpcDispatcher, never, Scope.Scope> =>
+export const makeRpcDispatcher = (
+  writer: Pick<SerializedHeadWriter, "checkPoisoned">,
+): Effect.Effect<RpcDispatcher, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const fibers = yield* FiberSet.make<void, unknown>();
+    const queueWorkers = yield* FiberSet.make<void, unknown>();
+    const controlHandlers = yield* FiberSet.make<void, unknown>();
     const interruptibleHandlers = yield* FiberSet.make<void, unknown>();
     const sessionQueues = new Map<string, SessionQueue>();
     const sessionlessQueue = yield* Queue.dropping<QueuedFrame>(RPC_SESSIONLESS_QUEUE_CAPACITY);
@@ -131,14 +139,26 @@ export const makeRpcDispatcher = (): Effect.Effect<RpcDispatcher, never, Scope.S
       Effect.forever(
         Queue.take(queue).pipe(
           Effect.flatMap(({ context, frame }) =>
-            frame.eofBehavior === "interrupt"
+            (frame.eofBehavior === "interrupt"
               ? runInterruptibleFrame(frame, context)
-              : runFrame(frame, context),
+              : runFrame(frame, context)
+            ).pipe(
+              Effect.catchAllCause((cause) =>
+                Cause.isInterruptedOnly(cause)
+                  ? Effect.void
+                  : Effect.logWarning("RPC dispatch worker recovered from a frame failure.").pipe(
+                      Effect.annotateLogs({
+                        cause: Cause.pretty(cause),
+                        session: context.session,
+                      }),
+                    ),
+              ),
+            ),
           ),
         ),
       );
 
-    yield* FiberSet.run(fibers, runQueuedFrame(sessionlessQueue));
+    yield* FiberSet.run(queueWorkers, runQueuedFrame(sessionlessQueue));
 
     const sessionQueue = (sessionId: string): Effect.Effect<SessionQueue> =>
       Effect.gen(function* () {
@@ -149,7 +169,7 @@ export const makeRpcDispatcher = (): Effect.Effect<RpcDispatcher, never, Scope.S
         const queue = yield* Queue.dropping<QueuedFrame>(RPC_SESSION_QUEUE_CAPACITY);
         const created = { queue } satisfies SessionQueue;
         sessionQueues.set(sessionId, created);
-        yield* FiberSet.run(fibers, runQueuedFrame(queue));
+        yield* FiberSet.run(queueWorkers, runQueuedFrame(queue));
         return created;
       });
 
@@ -187,61 +207,101 @@ export const makeRpcDispatcher = (): Effect.Effect<RpcDispatcher, never, Scope.S
         yield* reject(frame, error, { ...context, queueDepth: limit });
       });
 
-    const awaitIdle = Ref.get(inFlight).pipe(
-      Effect.flatMap((current) => Deferred.await(current.idle)),
-    );
+    const awaitIdle = Effect.suspend(function waitForIdle(): Effect.Effect<void> {
+      return Ref.get(inFlight).pipe(
+        Effect.flatMap((current) => Deferred.await(current.idle)),
+        Effect.zipRight(Ref.get(inFlight)),
+        Effect.flatMap((current) =>
+          current.count === 0 ? Effect.void : Effect.suspend(waitForIdle),
+        ),
+      );
+    });
 
     return {
       awaitIdle,
-      dispatch: (frame) => {
-        if (frame.route._tag === "control") {
-          return Effect.gen(function* () {
-            const admitted = yield* Ref.modify(controlForks, (current) =>
-              current >= RPC_CONTROL_FORK_CAPACITY ? [false, current] : [true, current + 1],
-            );
-            const context = { bypass: true, queueDepth: 0, session: "control" };
-            if (!admitted) {
-              const error = new RpcDispatchBoundExceeded({
-                bound: "control_forks",
-                limit: RPC_CONTROL_FORK_CAPACITY,
-                message: `RPC control_forks bound exceeded its limit of ${RPC_CONTROL_FORK_CAPACITY}.`,
-              });
-              return yield* reject(frame, error, context);
-            }
-            yield* admit;
-            yield* FiberSet.run(
-              fibers,
-              runFrame(frame, context).pipe(
-                Effect.ensuring(Ref.update(controlForks, (current) => current - 1)),
-              ),
-            );
-          });
-        }
-        if (frame.route._tag === "sessionless") {
-          return offer(
-            sessionlessQueue,
-            frame,
-            "sessionless",
-            "sessionless_queue",
-            RPC_SESSIONLESS_QUEUE_CAPACITY,
-          );
-        }
-        const sessionId = frame.route.sessionId;
-        return sessionQueue(sessionId).pipe(
-          Effect.flatMap(({ queue }) =>
-            offer(queue, frame, sessionId, "session_queue", RPC_SESSION_QUEUE_CAPACITY),
+      dispatch: (frame) =>
+        writer.checkPoisoned.pipe(
+          Effect.zipRight(
+            Effect.suspend(() => {
+              if (frame.route._tag === "control") {
+                return Effect.gen(function* () {
+                  const admitted = yield* Ref.modify(controlForks, (current) =>
+                    current >= RPC_CONTROL_FORK_CAPACITY ? [false, current] : [true, current + 1],
+                  );
+                  const context = { bypass: true, queueDepth: 0, session: "control" };
+                  if (!admitted) {
+                    const error = new RpcDispatchBoundExceeded({
+                      bound: "control_forks",
+                      limit: RPC_CONTROL_FORK_CAPACITY,
+                      message: `RPC control_forks bound exceeded its limit of ${RPC_CONTROL_FORK_CAPACITY}.`,
+                    });
+                    return yield* reject(frame, error, context);
+                  }
+                  yield* admit;
+                  yield* FiberSet.run(
+                    controlHandlers,
+                    runFrame(frame, context).pipe(
+                      Effect.ensuring(Ref.update(controlForks, (current) => current - 1)),
+                    ),
+                  );
+                });
+              }
+              if (frame.route._tag === "sessionless") {
+                return offer(
+                  sessionlessQueue,
+                  frame,
+                  "sessionless",
+                  "sessionless_queue",
+                  RPC_SESSIONLESS_QUEUE_CAPACITY,
+                );
+              }
+              const sessionId = frame.route.sessionId;
+              const existing = sessionQueues.get(sessionId);
+              if (existing !== undefined) {
+                return offer(
+                  existing.queue,
+                  frame,
+                  sessionId,
+                  "session_queue",
+                  RPC_SESSION_QUEUE_CAPACITY,
+                );
+              }
+              if (sessionQueues.size >= RPC_SESSION_MAP_CAPACITY) {
+                const error = new RpcDispatchBoundExceeded({
+                  bound: "session_map",
+                  limit: RPC_SESSION_MAP_CAPACITY,
+                  message: `RPC session_map bound exceeded its limit of ${RPC_SESSION_MAP_CAPACITY}.`,
+                });
+                return reject(frame, error, {
+                  bypass: false,
+                  queueDepth: RPC_SESSION_MAP_CAPACITY,
+                  session: sessionId,
+                });
+              }
+              return sessionQueue(sessionId).pipe(
+                Effect.flatMap(({ queue }) =>
+                  offer(queue, frame, sessionId, "session_queue", RPC_SESSION_QUEUE_CAPACITY),
+                ),
+              );
+            }),
           ),
-        );
-      },
+        ),
       finish: lifecycle
         .withPermits(1)(
-          Ref.set(closing, true).pipe(Effect.zipRight(FiberSet.clear(interruptibleHandlers))),
+          Ref.set(closing, true).pipe(
+            Effect.zipRight(
+              Effect.all([FiberSet.clear(controlHandlers), FiberSet.clear(interruptibleHandlers)], {
+                discard: true,
+              }),
+            ),
+          ),
         )
         .pipe(Effect.zipRight(awaitIdle)),
     };
   });
 
 export interface SerializedHeadWriter extends HeadWriter {
+  readonly checkPoisoned: Effect.Effect<void, HeadWriteError>;
   readonly failure: Effect.Effect<never, HeadWriteError>;
   readonly poisoned: Effect.Effect<boolean>;
 }
@@ -253,6 +313,9 @@ export const serializedWriter = (writer: HeadWriter): Effect.Effect<SerializedHe
     const semaphore = yield* Effect.makeSemaphore(1);
 
     return {
+      checkPoisoned: Ref.get(poison).pipe(
+        Effect.flatMap((failure) => (failure === undefined ? Effect.void : Effect.fail(failure))),
+      ),
       failure: Deferred.await(fatal),
       poisoned: Ref.get(poison).pipe(Effect.map((error) => error !== undefined)),
       write: (text) =>
