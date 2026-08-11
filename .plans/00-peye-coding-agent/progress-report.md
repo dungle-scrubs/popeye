@@ -189,18 +189,18 @@ Source: `implementation.md` (M15); D-019; Normative Contracts (plugin rules)
 ### M16: Generic hook emitter
 Source: `implementation.md` (M16); D-020; Normative Contracts (hook points)
 
-- [ ] All twelve hook points execute through one generic emitter driven by declared semantics (no per-point emitter code)
-- [ ] Chain composes contributions in priority order, each seeing the previous output
-- [ ] FirstWins stops at the first decisive result
-- [ ] Accumulate merges field-wise across contributions
-- [ ] Tap contributions run on their own fibers
-- [ ] Gate (FirstWins) contribution failure rejects (fail closed) naming the plugin
-- [ ] Gate timeout (default 30s) is a rejection
-- [ ] Chain/Accumulate contribution failure skips that contribution with a diagnostic (fail open)
-- [ ] Tap failure is logged and dropped
-- [ ] Tap queues are bounded sliding (drop-oldest) with a dropped-count diagnostic
-- [ ] A deliberately slow tap does not extend turn latency (clocked test)
-- [ ] Hook spans name the point, plugin, and outcome
+- [x] All twelve hook points execute through one generic emitter driven by declared semantics (no per-point emitter code)
+- [x] Chain composes contributions in priority order, each seeing the previous output
+- [x] FirstWins stops at the first decisive result
+- [x] Accumulate merges field-wise across contributions
+- [x] Tap contributions run on their own fibers
+- [x] Gate (FirstWins) contribution failure rejects (fail closed) naming the plugin
+- [x] Gate timeout (default 30s) is a rejection
+- [x] Chain/Accumulate contribution failure skips that contribution with a diagnostic (fail open)
+- [x] Tap failure is logged and dropped
+- [x] Tap queues are bounded sliding (drop-oldest) with a dropped-count diagnostic
+- [x] A deliberately slow tap does not extend turn latency (clocked test)
+- [x] Hook spans name the point, plugin, and outcome
 
 ### M17: Trust with digest binding
 Source: `implementation.md` (M17); D-015
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 107
-- Remaining: 70
-- Current cutoff blockers: 70
+- Completed: 119
+- Remaining: 58
+- Current cutoff blockers: 58
 - Accepted/deferred follow-up: 5
 - Superseded/obsolete checklist debt: 0
