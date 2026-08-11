@@ -5,7 +5,7 @@
 > file as features are implemented - never mark a milestone complete
 > until every current-cutoff checkbox under it is checked.
 
-> Current focus: Phase 3 - Plugin system
+> Current focus: Phase 4 - Wire protocol and heads
 
 ## Phase 1: Foundations
 
@@ -231,12 +231,12 @@ Source: `implementation.md` (M18); D-027; spikes A-002/A-003
 ### M19: First-party plugins (dogfood proof)
 Source: `implementation.md` (M19); D-005, D-021
 
-- [ ] Compact command ships as a plugin using only the public plugin API
-- [ ] Session-naming command ships as a plugin using only the public plugin API
-- [ ] Both invoke through the driver head via invoke-command
-- [ ] Import-boundary CI proves neither touches kernel internals
-- [ ] Compact plugin's gate hook can veto or replace a compaction
-- [ ] Plugin-author API surface documented from these two implementations
+- [x] Compact command ships as a plugin using only the public plugin API
+- [x] Session-naming command ships as a plugin using only the public plugin API
+- [x] Both invoke through the driver head via invoke-command
+- [x] Import-boundary CI proves neither touches kernel internals
+- [x] Compact plugin's gate hook can veto a compaction (manual and overflow paths); replace deferred as unclaimed (M19 review chose veto-only)
+- [x] Plugin-author API surface documented from these two implementations
 
 ## Phase 4: Wire protocol and heads
 
@@ -316,8 +316,8 @@ Source: RFC-01 Scope (archived); D-006, D-007, D-018, D-019
 
 ## Summary
 - Total features: 177
-- Completed: 137
-- Remaining: 40
-- Current cutoff blockers: 40
+- Completed: 143
+- Remaining: 34
+- Current cutoff blockers: 34
 - Accepted/deferred follow-up: 5
 - Superseded/obsolete checklist debt: 0
