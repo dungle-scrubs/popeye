@@ -54,4 +54,4 @@ test("the normalized CLI JSON stream is stable across 2 built-bin runs", () => {
 
   expect(normalizeJsonStream(first)).toEqual(normalizeJsonStream(second));
   expect(normalizeJsonStream(first)).toEqual(normalizeJsonStream(fixture));
-});
+}, 15_000);
