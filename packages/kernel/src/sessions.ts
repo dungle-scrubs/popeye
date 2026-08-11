@@ -122,8 +122,9 @@ export const SessionsLive = (
                   const records = boundedRecoveryRecords(allRecords);
                   const entries = yield* journal.readBranch(sessionId);
                   const plan = yield* recoverSession(records, entries);
+                  const sessionView = yield* registry.view(sessionId);
                   const report = yield* applyRecoveryPlan(journal, sessionId, plan, {
-                    availableToolNames: new Set(registry.list().map((tool) => tool.name)),
+                    availableToolNames: new Set(sessionView.list().map((tool) => tool.name)),
                     snapshot: { entries, records: allRecords },
                   });
                   yield* Effect.annotateCurrentSpan({

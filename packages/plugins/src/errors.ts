@@ -23,7 +23,11 @@ export class HookInputInvalid extends Data.TaggedError("HookInputInvalid")<{
   readonly schemaCause: unknown;
 }> {}
 
-export type PluginLoadCause = "manifest_invalid" | "build_failed" | "unsupported_syntax";
+export type PluginLoadCause =
+  | "manifest_invalid"
+  | "build_failed"
+  | "unsupported_syntax"
+  | "import_timeout";
 
 export class PluginLoadError extends Data.TaggedError("PluginLoadError")<{
   readonly cause: PluginLoadCause;

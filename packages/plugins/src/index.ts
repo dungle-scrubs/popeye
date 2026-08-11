@@ -93,6 +93,7 @@ export type {
   TrustResolver,
 } from "./generation.js";
 export {
+  DEFAULT_IMPORT_TIMEOUT_MILLIS,
   DEFAULT_TRUST_RESOLVER_TIMEOUT_MILLIS,
   loadGeneration,
   makePluginRuntime,

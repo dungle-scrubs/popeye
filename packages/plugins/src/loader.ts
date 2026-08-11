@@ -5,6 +5,9 @@
  * the entry module: relative sibling imports keep their original URLs, so sibling edits require a
  * full process restart. Each distinct query also adds a permanent, non-evictable Node ESM registry
  * entry. D-027 accepts that v1 tradeoff because reloads are human-paced rather than a hot loop.
+ * Import timeout (RFC Design 4, 03/D-010) bounds composition latency only: native ESM imports are
+ * not cancellable, a timed-out import's side effects may still run later, and repeated reload
+ * attempts with cache-busted specifiers accumulate registry entries.
  */
 import { isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -21,8 +24,11 @@ export interface LoadedPlugin {
   readonly path: string;
 }
 
+export const DEFAULT_IMPORT_TIMEOUT_MILLIS = 30_000;
+
 export interface PluginModuleLoadOptions {
   readonly cacheKey?: string;
+  readonly importTimeoutMillis?: number;
 }
 
 type PluginFactory = () => unknown;
@@ -105,7 +111,13 @@ export const loadPluginModule = (
   if (options.cacheKey !== undefined) {
     url.searchParams.set("reload", options.cacheKey);
   }
-  return Effect.tryPromise({
+  const timeoutMillis = options.importTimeoutMillis ?? DEFAULT_IMPORT_TIMEOUT_MILLIS;
+  const timeoutError = new PluginLoadError({
+    cause: "import_timeout",
+    message: `Plugin ${path} import timed out after ${timeoutMillis}ms`,
+    plugin: path,
+  });
+  const importAndFactory = Effect.tryPromise({
     catch: (cause) => loadFailure(path, cause),
     try: () => nativeImport(url.href),
   }).pipe(
@@ -116,6 +128,10 @@ export const loadPluginModule = (
         try: () => Promise.resolve(factory()),
       }),
     ),
-    Effect.flatMap((definition) => pluginDefinition(definition, path)),
+    Effect.timeoutFail({
+      duration: timeoutMillis,
+      onTimeout: () => timeoutError,
+    }),
   );
+  return importAndFactory.pipe(Effect.flatMap((definition) => pluginDefinition(definition, path)));
 };

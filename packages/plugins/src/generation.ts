@@ -7,6 +7,9 @@
  * until the Turn settles. The generation's resources stay open while any lease Scope is open;
  * reload drains leases before closing the old generation. checkout is the primitive; use and
  * useSerialized are re-expressed over it.
+ * Import timeout (RFC Design 4, 03/D-010) bounds composition latency only: native ESM imports are
+ * not cancellable, a timed-out import's side effects may still run later, and repeated reload
+ * attempts with cache-busted specifiers accumulate registry entries.
  * Not responsible for Session-scoped Tool views (kernel owns that) or reload orchestration (CLI host owns that).
  */
 import { randomUUID } from "node:crypto";
@@ -20,7 +23,7 @@ import type { HookDiagnostic, HookEmitError, HookEmitterService } from "./emitte
 import { HookEmitter, HookEmitterLive } from "./emitter.js";
 import type { ContributionRegistryError, PluginLoadError } from "./errors.js";
 import { TrustResolverTimeoutError } from "./errors.js";
-import { loadPluginModule } from "./loader.js";
+import { DEFAULT_IMPORT_TIMEOUT_MILLIS, loadPluginModule } from "./loader.js";
 import type { PluginManifest } from "./manifest.js";
 import type { ContributionRegistryService, RegistryDiagnostic } from "./registry.js";
 import { ContributionRegistry, ContributionRegistryLive } from "./registry.js";
@@ -45,6 +48,8 @@ export type GenerationLoadError =
   | TrustStoreError;
 
 export const DEFAULT_TRUST_RESOLVER_TIMEOUT_MILLIS = 300_000;
+
+export { DEFAULT_IMPORT_TIMEOUT_MILLIS };
 
 export interface GenerationPlugin {
   readonly manifest: PluginManifest;
@@ -111,6 +116,7 @@ export interface LoadGenerationOptions {
   readonly generationFinalizerSink?: (generationId: string) => Effect.Effect<void>;
   readonly grants?: CapabilityGrants;
   readonly hookDiagnosticSink?: (diagnostic: HookDiagnostic) => Effect.Effect<void>;
+  readonly importTimeoutMillis?: number;
   readonly registryDiagnosticSink?: (diagnostic: RegistryDiagnostic) => Effect.Effect<void>;
   readonly trust: TrustDecision | TrustResolver;
   readonly trustDiagnosticSink?: (diagnostic: TrustDiagnostic) => Effect.Effect<void>;
@@ -176,9 +182,13 @@ const registerSources = (
   generationId: string,
   registry: ContributionRegistryService,
   sources: ReadonlyArray<PluginSource>,
+  importTimeoutMillis?: number,
 ): Effect.Effect<ReadonlyArray<GenerationPlugin>, ContributionRegistryError | PluginLoadError> =>
   Effect.forEach(sources, (source) =>
-    loadPluginModule(source.path, { cacheKey: generationId }).pipe(
+    loadPluginModule(source.path, {
+      cacheKey: generationId,
+      ...(importTimeoutMillis === undefined ? {} : { importTimeoutMillis }),
+    }).pipe(
       Effect.tap((plugin) =>
         registry.registerPlugin(plugin.manifest, plugin.contributions, source.scope),
       ),
@@ -225,7 +235,12 @@ const loadGenerationRuntime = (
     const emitter = Context.get(context, HookEmitter);
     return yield* Effect.gen(function* () {
       const externalSources = yield* phase1Sources(options.config);
-      const externalPlugins = yield* registerSources(generationId, registry, externalSources);
+      const externalPlugins = yield* registerSources(
+        generationId,
+        registry,
+        externalSources,
+        options.importTimeoutMillis,
+      );
       const trustOptions = {
         ...(options.grants === undefined ? {} : { grants: options.grants }),
         hookEmitter: emitter,
@@ -236,7 +251,12 @@ const loadGenerationRuntime = (
       const checked = yield* checkTrust(options.config, trustOptions);
       const decision = yield* resolvedTrust(options, checked);
       const projectSources = yield* phase2Sources(options.config, decision);
-      const projectPlugins = yield* registerSources(generationId, registry, projectSources);
+      const projectPlugins = yield* registerSources(
+        generationId,
+        registry,
+        projectSources,
+        options.importTimeoutMillis,
+      );
       return {
         close: Scope.close(scope, Exit.succeed(undefined)),
         closedResources: Ref.get(closedResources),

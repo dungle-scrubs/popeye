@@ -1,7 +1,12 @@
 /**
- * Owns execution-side Tool declarations and the minimal in-kernel registry used by M9.
- * It exists so a Tool's schema, capability requirements, and execution remain one declaration.
- * This is not the plugin contribution system - Phase 3 owns contribution and feeds this registry.
+ * Owns execution-side Tool declarations and the session-keyed registry views.
+ * It exists so a Tool's schema, capability requirements, and execution remain one declaration,
+ * and so every Session resolves its own Tool view via view(sessionId) (D-004). The degenerate
+ * ToolRegistryLive(tools) returns the same view for every Session, keeping simple hosts and
+ * existing kernel tests working. The CLI generation-aware registry replaces this in M3. Recovery
+ * identifies Tools by name only (documented caveat in docs/plugin-authoring.md).
+ * Not responsible for Provider transport (ai/seam owns that) or for Tool execution batching
+ * (tool-batch owns that); this module only owns declarations and lookup.
  */
 
 import type { SessionId } from "@pop-eye/journal";
@@ -70,8 +75,16 @@ export interface RegisteredTool {
   readonly requiredCapabilities: ReadonlyArray<string>;
 }
 
-export interface ToolRegistryService {
+export interface SessionToolView {
   readonly get: (name: string) => RegisteredTool | undefined;
+  readonly list: () => ReadonlyArray<RegisteredTool>;
+}
+
+export interface ToolRegistryService {
+  readonly view: (sessionId: SessionId) => Effect.Effect<SessionToolView>;
+  /** @deprecated Prefer view(sessionId). Kept for degenerate hosts and existing tests. */
+  readonly get: (name: string) => RegisteredTool | undefined;
+  /** @deprecated Prefer view(sessionId). Kept for degenerate hosts and existing tests. */
   readonly list: () => ReadonlyArray<RegisteredTool>;
 }
 
@@ -109,9 +122,14 @@ export const ToolRegistryLive = (
         registered.push(next);
         registry.set(next.name, next);
       }
-      return {
+      const view: SessionToolView = {
         get: (name) => registry.get(name),
         list: () => [...registered],
+      };
+      return {
+        list: view.list,
+        get: view.get,
+        view: () => Effect.succeed(view),
       } satisfies ToolRegistryService;
     }),
   );

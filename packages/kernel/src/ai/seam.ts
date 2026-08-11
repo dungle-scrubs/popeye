@@ -4,6 +4,9 @@
  * every request, stream item, and failure maps to the kernel's stable Provider interface.
  * This mapping is intentionally one-way: thinking signatures are not persisted or round-tripped.
  * Anthropic extended-thinking turns that also use tools will need that support in Phase 4 or later.
+ * Tool declarations are resolved per request from the caller's Session view (D-004/D-005);
+ * the seam never captures a global tool list at Layer build. Compaction requests carry no tools.
+ * Not responsible for Session view resolution (turn owns that) or for recovery.
  */
 
 import {
@@ -428,7 +431,7 @@ export const makePiAiProviderLayer = (
     Provider,
     Effect.gen(function* () {
       const toolRegistry = yield* ToolRegistry;
-      const declarations = yield* Effect.try({
+      const fallbackDeclarations = yield* Effect.try({
         catch: (cause) =>
           new ProviderError({
             message: cause instanceof Error ? cause.message : "Tool schema conversion failed.",
@@ -440,6 +443,36 @@ export const makePiAiProviderLayer = (
         streamAssistant: (context: ReadonlyArray<ContextItem>, options: ProviderStreamOptions) =>
           Stream.unwrapScoped(
             Effect.gen(function* () {
+              const perRequestTools = (options as { readonly tools?: unknown }).tools as
+                | ReadonlyArray<import("../tool.js").RegisteredTool>
+                | undefined;
+              const perRequestDeclarationsRaw =
+                (options as { readonly declarations?: unknown }).declarations ??
+                (options as { readonly toolDeclarations?: unknown }).toolDeclarations;
+              const perRequestDeclarationsList = Array.isArray(perRequestDeclarationsRaw)
+                ? (perRequestDeclarationsRaw as ReadonlyArray<import("../tool.js").RegisteredTool>)
+                : undefined;
+              const effectiveTools =
+                perRequestTools ??
+                perRequestDeclarationsList ??
+                (options.purpose === "compaction" ? [] : undefined);
+              const declarations = yield* Effect.try({
+                catch: (cause) =>
+                  new ProviderError({
+                    message:
+                      cause instanceof Error ? cause.message : "Tool schema conversion failed.",
+                    transient: false,
+                  }),
+                try: () => {
+                  if (options.purpose === "compaction") {
+                    return [] as Array<import("@earendil-works/pi-ai").Tool>;
+                  }
+                  if (effectiveTools !== undefined) {
+                    return effectiveTools.map(toPiAiTool);
+                  }
+                  return fallbackDeclarations;
+                },
+              });
               const controller = new AbortController();
               let responseStatus: number | undefined;
               const requestModel =

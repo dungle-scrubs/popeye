@@ -204,6 +204,17 @@ Cache busting re-imports the Plugin entry file with fresh module state. It does 
 sibling URLs. Restart the process after a sibling module changes. Each entry reload also remains in
 Node's ESM registry, so reload is for human-paced development, not a hot loop.
 
+Import timeout bounds composition latency only (RFC Design 4, 03/D-010): native ESM imports are not
+cancellable, a timed-out import's side effects may still run later, and repeated reload attempts with
+cache-busted specifiers accumulate registry entries. Startup maps the timeout fail-closed (exit 2);
+reload maps it contained (current generation serves).
+
+## Recovery name-identity caveat
+
+Tool identity in journal Records is by name. A crash recovered after a reload that redefined a
+same-named Tool replays against the new definition. Operators changing Tool semantics under a stable
+name across a crash boundary own that risk.
+
 ## First-party import boundary
 
 Files below a `features/` directory must import pop-eye packages from package roots only. They must not

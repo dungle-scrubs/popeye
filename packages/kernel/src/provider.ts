@@ -1,11 +1,14 @@
 /**
  * Owns the Provider seam consumed by turns and implemented by pi-ai in M12.
  * It exists so turn coordination is independent from a concrete LLM endpoint.
+ * Provider requests receive tool declarations per request (D-004/D-005) so each
+ * Turn can pin a Session view; compaction requests carry no tools.
  */
 
 import { Context, Schema, type Stream } from "effect";
 
 import type { ProviderError } from "./errors.js";
+import type { RegisteredTool } from "./tool.js";
 
 export const ASSISTANT_STOP_REASONS = [
   "aborted",
@@ -96,6 +99,7 @@ export interface ProviderStreamOptions {
   readonly purpose?: "compaction" | "turn";
   readonly sliceIndex?: number;
   readonly thinkingLevel?: ThinkingLevel;
+  readonly tools?: ReadonlyArray<RegisteredTool>;
   readonly turnOrdinal: number;
 }
 

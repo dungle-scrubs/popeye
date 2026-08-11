@@ -456,6 +456,13 @@ export const TurnsLive = (): Layer.Layer<
                 delayMs,
               }),
           });
+          // D-005: pin the Session view at Turn open; every provider request in this Turn uses it.
+          const sessionView = yield* toolRegistry.view(sessionId);
+          const sessionTools = sessionView.list();
+          yield* Effect.annotateCurrentSpan({
+            generationId: sessionId,
+            toolCount: sessionTools.length,
+          });
 
           const takeSteering = (
             closeWhenEmpty: boolean,
@@ -777,6 +784,7 @@ export const TurnsLive = (): Layer.Layer<
                       ...(options.thinkingLevel === undefined
                         ? {}
                         : { thinkingLevel: options.thinkingLevel }),
+                      tools: sessionTools,
                       turnOrdinal,
                     }),
                     (item) => {
@@ -990,7 +998,7 @@ export const TurnsLive = (): Layer.Layer<
                 const onToolStarted = (call: ToolCall): Effect.Effect<void, JournalFailure> =>
                   appendToolStarted(journal, sessionId, {
                     operationId,
-                    replay: toolRegistry.get(call.name)?.replay ?? "never",
+                    replay: sessionView.get(call.name)?.replay ?? "never",
                     toolCallId: call.id,
                     toolName: call.name,
                   }).pipe(
