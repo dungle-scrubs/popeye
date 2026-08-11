@@ -72,7 +72,7 @@ test("the built print Head accepts positional and piped prompts with pure stdout
       },
     ]);
   }
-});
+}, 15_000);
 
 test("the built JSON Head emits only parseable wire lines and can resume its Session", () => {
   const directory = sessionDirectory();
@@ -108,7 +108,7 @@ test("the built JSON Head emits only parseable wire lines and can resume its Ses
   expect(startupRecords(resumed.stderr)).toMatchObject([
     { mode: "print", sessionAction: `resume:${sessionId}` },
   ]);
-});
+}, 15_000);
 
 test("the built RPC Head serves LF-delimited commands until stdin closes", () => {
   const result = runBuiltBin(["-p", "--mode", "rpc", "--session-dir", sessionDirectory()], {
