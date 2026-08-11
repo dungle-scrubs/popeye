@@ -83,7 +83,9 @@ Use `--plugin <path>` to load an additional Plugin. The flag is repeatable. Use
 
 The CLI auto-trusts discovered Plugin code. It loads user-global Plugins from `~/.peye/plugins` and
 project Plugins from `.peye/plugins`. Tools contributed by loaded Plugins are available to the
-model.
+model. Running `peye` inside a repository executes that repository's Plugin code, the same trust
+you extend to its own scripts; use `--no-project-plugins` to opt out, or install a Trust-gate
+Plugin user-globally.
 
 ## Guides
 
