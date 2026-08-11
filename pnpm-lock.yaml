@@ -26,6 +26,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@peye/journal':
+        specifier: workspace:*
+        version: link:../journal
       '@peye/kernel':
         specifier: workspace:*
         version: link:../kernel
@@ -36,9 +39,6 @@ importers:
         specifier: workspace:*
         version: link:../protocol
     devDependencies:
-      '@peye/journal':
-        specifier: workspace:*
-        version: link:../journal
       effect:
         specifier: 3.22.1
         version: 3.22.1

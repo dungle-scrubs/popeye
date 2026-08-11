@@ -1,0 +1,7 @@
+{"_tag":"phaseChanged","phase":"IDLE"}
+{"_tag":"phaseChanged","phase":"ASSEMBLING"}
+{"_tag":"phaseChanged","phase":"STREAMING"}
+{"_tag":"assistantText","text":"Fake provider answer."}
+{"_tag":"phaseChanged","phase":"SETTLING"}
+{"_tag":"turnSettled","revision":5,"stopReason":"done"}
+{"entries":[{"id":"pmvpbp2o5geBZzrr","kind":"session_root","parentId":null,"payload":{}},{"id":"gO7d42xVGLqxViSE","kind":"message","parentId":"pmvpbp2o5geBZzrr","payload":{"content":"Capture the CLI JSON stream.","role":"user"}},{"id":"2iaFRwI7FFwvGlNA","kind":"message","parentId":"gO7d42xVGLqxViSE","payload":{"content":"Fake provider answer.","role":"assistant","stopReason":"done"}}],"leafEntryId":"2iaFRwI7FFwvGlNA","phase":"IDLE","revision":5,"sessionId":"fU2rwYvzYPMh4ONX"}

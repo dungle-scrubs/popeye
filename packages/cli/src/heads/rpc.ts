@@ -5,9 +5,10 @@
  * pi's framing lesson: https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/rpc.md
  */
 
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 
+import type { SessionId } from "@peye/journal";
 import {
   type Command,
   decodeCommand,
@@ -40,6 +41,7 @@ import {
   type HeadExitCode,
   HeadWriteError,
   type HeadWriter,
+  makeWritableLogfmtLogger,
   runHeadBoundary,
   stderrHeadWriter,
   stdoutHeadWriter,
@@ -53,7 +55,10 @@ export class RpcReadError extends Data.TaggedError("RpcReadError")<{
 }> {}
 
 export interface RpcHeadOptions {
+  readonly errorWriter?: HeadWriter;
   readonly input: Readable;
+  readonly loggerOutput?: Writable;
+  readonly resumeSessionId?: SessionId;
   readonly writer?: HeadWriter;
 }
 
@@ -702,10 +707,6 @@ const handleFrameCause = <TFailure>(
   );
 };
 
-const rpcStderrLogger = Logger.make((options) => {
-  process.stderr.write(`${Logger.logfmtLogger.log(options)}\n`);
-});
-
 const writeProgress = (
   writer: HeadWriter,
   sessionId: string,
@@ -751,6 +752,10 @@ export const runRpcHead = (options: RpcHeadOptions) => {
       const interactions = yield* RpcInteractions;
       const interactiveHeads = new Map<string, RpcInteractiveHead>();
       const progressSubscriptions = new Map<string, Fiber.RuntimeFiber<void, HeadWriteError>>();
+
+      if (options.resumeSessionId !== undefined) {
+        yield* driver.resumeSession(options.resumeSessionId);
+      }
 
       const run = strictLfFrames(options.input).pipe(
         Stream.runForEach((frame) => {
@@ -1036,6 +1041,13 @@ export const runRpcHead = (options: RpcHeadOptions) => {
 
       return HEAD_EXIT_CODES.done satisfies HeadExitCode;
     }),
-    stderrHeadWriter,
-  ).pipe(Effect.provide(Logger.replace(Logger.defaultLogger, rpcStderrLogger)));
+    options.errorWriter ?? stderrHeadWriter,
+  ).pipe(
+    Effect.provide(
+      Logger.replace(
+        Logger.defaultLogger,
+        makeWritableLogfmtLogger(options.loggerOutput ?? process.stderr),
+      ),
+    ),
+  );
 };

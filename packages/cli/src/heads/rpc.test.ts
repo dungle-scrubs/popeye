@@ -724,6 +724,7 @@ test("an external process completes a full tool-using Session through rpc pipes"
   let buffered = "";
   let stderr = "";
   const frames: Array<Record<string, unknown>> = [];
+  const unreadFrames: Array<Record<string, unknown>> = [];
   const stdoutParseErrors: Array<unknown> = [];
   const waiters: Array<(frame: Record<string, unknown>) => void> = [];
   child.stdout.setEncoding("utf8");
@@ -737,7 +738,12 @@ test("an external process completes a full tool-using Session through rpc pipes"
         try {
           const frame = JSON.parse(line) as Record<string, unknown>;
           frames.push(frame);
-          waiters.shift()?.(frame);
+          const waiter = waiters.shift();
+          if (waiter === undefined) {
+            unreadFrames.push(frame);
+          } else {
+            waiter(frame);
+          }
         } catch (cause) {
           stdoutParseErrors.push(cause);
         }
@@ -749,8 +755,12 @@ test("an external process completes a full tool-using Session through rpc pipes"
   child.stderr.on("data", (chunk: string) => {
     stderr += chunk;
   });
-  const nextFrame = (): Promise<Record<string, unknown>> =>
-    new Promise((resolve) => waiters.push(resolve));
+  const nextFrame = (): Promise<Record<string, unknown>> => {
+    const unread = unreadFrames.shift();
+    return unread === undefined
+      ? new Promise((resolve) => waiters.push(resolve))
+      : Promise.resolve(unread);
+  };
   const send = (frame: Record<string, unknown>): void => {
     child.stdin.write(`${JSON.stringify(frame)}\n`);
   };

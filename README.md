@@ -44,8 +44,9 @@ kernel ai seam. Feature modules import public package roots only.
 
 ## Install
 
-For a repository quickstart, use Node 24 or later and pnpm 11.5.2. The workspace packages are
-private at version `0.0.0`; no npm release exists yet.
+For a repository quickstart, use Node 24 or later and pnpm 11.5.2. The workspace packages remain
+private. `@peye/cli` is version `0.1.0` and is linked as the `peye` executable in this workspace.
+No npm release exists yet.
 
 ```sh
 corepack enable
@@ -55,16 +56,26 @@ pnpm build
 
 ## Use it
 
-Run a complete Head fixture after the build:
+Set an OpenAI-compatible endpoint and model. Loopback endpoints such as LM Studio do not need an
+API key. Hosted endpoints also need `PEYE_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`.
 
 ```sh
-pnpm exec vitest run packages/cli/src/heads/heads.test.ts
+export PEYE_MODEL="your-model"
+export PEYE_BASE_URL="http://127.0.0.1:1234/v1"
+
+peye --version
+peye -p "Explain this repository."
+peye -p --mode json "Explain this repository."
+peye -p --mode rpc
+peye "Explain this repository."
+echo "Explain this repository." | peye -p
 ```
 
-The last command runs the print and JSON Heads through complete fake-Provider Sessions. It covers
-plain output, Tool use, provider errors, aborts, Progress, and final Snapshots without network
-access. Application hosts compose `DriverDefault` with one Journal Layer, one Provider Layer, and a
-Tool registry. The in-process Driver is also the SDK and test Head.
+Inside this repository, replace `peye` with `pnpm --filter @peye/cli peye` when the installed bin
+is not on `PATH`. Use `--resume <sessionId>` to continue a Session. Use `--session-dir <dir>` to
+replace the default `.peye/sessions` Journal directory. Print mode writes settled assistant text.
+JSON mode writes only Progress and Snapshot JSON lines. RPC mode stays open and accepts LF-delimited
+protocol commands on stdin.
 
 ## Guides
 

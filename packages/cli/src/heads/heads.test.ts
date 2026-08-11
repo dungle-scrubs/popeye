@@ -13,6 +13,7 @@ import {
   type Tool,
   ToolRegistryLive,
 } from "../compose.js";
+import { normalizeJsonLines } from "../test-support/json.js";
 import { runJsonHead } from "./json.js";
 import { runPrintHead } from "./print.js";
 import { HEAD_EXIT_CODES, type HeadWriter, makeWritableHeadWriter } from "./shared.js";
@@ -27,14 +28,6 @@ const prompts = {
   plain: "Run the plain turn.",
   tool: "Run the tool turn.",
 } as const satisfies Readonly<Record<ScriptPrompt, string>>;
-
-const normalizedIdentifierFields = new Set([
-  "id",
-  "leafEntryId",
-  "parentId",
-  "sessionId",
-  "toolCallId",
-]);
 
 interface ScriptedDriverOptions {
   readonly journalLayer?: Layer.Layer<Journal, JournalError>;
@@ -151,42 +144,6 @@ const runJsonCase = async (scriptCase: ScriptCase) => {
     ),
   );
   return { exitCode, output: capture.output() };
-};
-
-const normalizeJsonLines = (text: string): string => {
-  const replacements = new Map<string, string>();
-  let identifierNumber = 0;
-
-  const normalize = (value: unknown, key = ""): unknown => {
-    if (typeof value === "string") {
-      if (normalizedIdentifierFields.has(key)) {
-        const replacement = replacements.get(value);
-        if (replacement !== undefined) {
-          return replacement;
-        }
-        identifierNumber += 1;
-        const next = `<id-${identifierNumber}>`;
-        replacements.set(value, next);
-        return next;
-      }
-      return value;
-    }
-    if (Array.isArray(value)) {
-      return value.map((item) => normalize(item));
-    }
-    if (typeof value === "object" && value !== null) {
-      return Object.fromEntries(
-        Object.entries(value).map(([entryKey, item]) => [entryKey, normalize(item, entryKey)]),
-      );
-    }
-    return value;
-  };
-
-  return `${text
-    .trimEnd()
-    .split("\n")
-    .map((line) => JSON.stringify(normalize(JSON.parse(line))))
-    .join("\n")}\n`;
 };
 
 const runGoldenTranscript = async (): Promise<string> => {

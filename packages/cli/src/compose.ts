@@ -3,6 +3,8 @@
  * It exists so wire heads remain protocol-only while local hosting has one explicit exception.
  */
 import {
+  type AssistantItem,
+  AssistantStopReasonSchema,
   Driver,
   DriverDefault,
   type DriverDefaultOptions,
@@ -10,12 +12,14 @@ import {
   defineTool,
   InvokeCommandError,
   kernelPackage,
+  PiAiProviderLive,
   type PluginCommandContext,
   type PluginCompactionGateRequest,
   type PluginCompactionGateResult,
   PluginHost,
   type PluginHostService,
   Provider,
+  ProviderError,
   type ProviderService,
   type Tool,
   ToolRegistryLive,
@@ -39,8 +43,16 @@ import { Context, Effect, Layer, Schema } from "effect";
 import { compactPlugin } from "./features/compact.js";
 import { sessionNamePlugin } from "./features/session-name.js";
 
-export type { DriverSnapshot, ProviderService, Tool, TurnResult };
-export { Driver, defineTool, Provider, ToolRegistryLive };
+export type { AssistantItem, DriverSnapshot, ProviderService, Tool, TurnResult };
+export {
+  AssistantStopReasonSchema,
+  Driver,
+  defineTool,
+  PiAiProviderLive,
+  Provider,
+  ProviderError,
+  ToolRegistryLive,
+};
 
 export const inProcessKernelPackage = kernelPackage;
 

@@ -4,7 +4,7 @@
  */
 import type { Writable } from "node:stream";
 
-import { Cause, Chunk, Data, Effect, Exit, Option } from "effect";
+import { Cause, Chunk, Data, Effect, Exit, Logger, Option } from "effect";
 
 import type { DriverSnapshot, TurnResult } from "../compose.js";
 
@@ -103,10 +103,15 @@ export const makeWritableHeadWriter = (output: Writable): HeadWriter => ({
 export const stdoutHeadWriter = makeWritableHeadWriter(process.stdout);
 export const stderrHeadWriter = makeWritableHeadWriter(process.stderr);
 
+export const makeWritableLogfmtLogger = (output: Writable) =>
+  Logger.make((options) => {
+    output.write(`${Logger.logfmtLogger.log(options)}\n`);
+  });
+
 export const exitCodeForStopReason = (stopReason: TurnResult["stopReason"]): HeadExitCode =>
   STOP_REASON_EXIT_CODES[stopReason];
 
-const errorMessage = (value: unknown): string => {
+export const errorMessage = (value: unknown): string => {
   if (
     typeof value === "object" &&
     value !== null &&
@@ -118,7 +123,7 @@ const errorMessage = (value: unknown): string => {
   return String(value);
 };
 
-const errorTag = (value: unknown, fallback: string): string => {
+export const errorTag = (value: unknown, fallback: string): string => {
   if (
     typeof value === "object" &&
     value !== null &&

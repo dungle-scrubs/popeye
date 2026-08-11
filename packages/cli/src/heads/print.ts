@@ -5,6 +5,8 @@
  * Head intentionally has no separate per-turn deadline because the Provider seam owns idle timeout
  * enforcement.
  */
+
+import type { SessionId } from "@peye/journal";
 import { Effect } from "effect";
 
 import { Driver } from "../compose.js";
@@ -21,6 +23,7 @@ import {
 export interface PrintHeadOptions {
   readonly errorWriter?: HeadWriter;
   readonly prompts: ReadonlyArray<string>;
+  readonly sessionId?: SessionId;
   readonly writer?: HeadWriter;
 }
 
@@ -28,7 +31,9 @@ export const runPrintHead = (options: PrintHeadOptions) =>
   runHeadBoundary(
     Effect.gen(function* () {
       const driver = yield* Driver;
-      const session = yield* driver.createSession();
+      const session = yield* options.sessionId === undefined
+        ? driver.createSession()
+        : driver.resumeSession(options.sessionId);
       const writer = options.writer ?? stdoutHeadWriter;
 
       for (const prompt of options.prompts) {

@@ -5,6 +5,8 @@
  * ends the stream with a headError envelope. The v1 Head intentionally has no separate per-turn
  * deadline because the Provider seam owns idle timeout enforcement.
  */
+
+import type { SessionId } from "@peye/journal";
 import { ProgressSchema, SnapshotSchema } from "@peye/protocol";
 import { Deferred, Effect, Fiber, Schema, Stream } from "effect";
 
@@ -19,6 +21,7 @@ import {
 
 export interface JsonHeadOptions {
   readonly prompts: ReadonlyArray<string>;
+  readonly sessionId?: SessionId;
   readonly writer?: HeadWriter;
 }
 
@@ -56,7 +59,9 @@ export const runJsonHead = (options: JsonHeadOptions) =>
   runHeadBoundary(
     Effect.gen(function* () {
       const driver = yield* Driver;
-      const session = yield* driver.createSession();
+      const session = yield* options.sessionId === undefined
+        ? driver.createSession()
+        : driver.resumeSession(options.sessionId);
       const writer = options.writer ?? stdoutHeadWriter;
 
       for (const prompt of options.prompts) {

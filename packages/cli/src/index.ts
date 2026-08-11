@@ -4,6 +4,31 @@
  */
 export const cliPackage = "@peye/cli";
 
+export {
+  CliArgsError,
+  type CliMode,
+  type ParsedArgs,
+  type ParsedRunArgs,
+  parseArgs,
+  withStdinPrompt,
+} from "./entry/args.js";
+export {
+  type CliConfig,
+  CliConfigError,
+  type CliConfigErrorReason,
+  type CliEnvironment,
+  type CliRunConfig,
+  resolveConfig,
+} from "./entry/config.js";
+export {
+  CliEntryError,
+  type CliIo,
+  executeCli,
+} from "./entry/execute.js";
+export {
+  CliRunError,
+  run,
+} from "./entry/run.js";
 export { type JsonHeadOptions, runJsonHead } from "./heads/json.js";
 export { type PrintHeadOptions, runPrintHead } from "./heads/print.js";
 export {

@@ -1,0 +1,11 @@
+{
+  "responses": [
+    {
+      "items": [
+        { "_tag": "textDelta", "text": "Fake provider answer." },
+        { "_tag": "done", "stopReason": "done" }
+      ],
+      "prompt": "Capture the CLI JSON stream."
+    }
+  ]
+}
