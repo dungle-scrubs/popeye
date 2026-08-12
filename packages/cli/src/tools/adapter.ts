@@ -1,9 +1,12 @@
 /**
  * Owns unqualified Tool-name collision resolution while adapting Plugin Contributions to kernel
- * Tools. Thin adapter over ToolGateService for vetting; capability filtering remains owned by the grant-aware Plugin registry.
- * Not responsible for gate branching or diagnostics (ToolGateService + ToolSessionMemory own that) or for Tool execution (Tool owns that).
- * The adapter creates ONE ToolGateService per generation+grants and shares it across all adapted Tools,
- * so session memory is generation-scoped and not per-Tool.
+ * Tools. Thin adapter over ToolInvocationPipeline (deep module, formerly ToolGateService) for vetting;
+ * capability filtering remains owned by the grant-aware Plugin registry.
+ * Not responsible for gate branching or diagnostics (ToolInvocationPipeline + ToolSessionMemory own that) or for Tool execution (Tool owns that).
+ * The adapter creates ONE ToolInvocationPipeline per generation+grants and shares it across all adapted Tools,
+ * so session memory is generation-scoped and not per-Tool. The ToolGateService alias in
+ * tool-invocation-pipeline.ts remains for one more commit for backward compat; new code should
+ * import ToolInvocationPipeline directly.
  */
 
 import {
