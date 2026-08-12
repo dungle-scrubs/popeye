@@ -68,3 +68,8 @@ export {
   type SessionRootEntry,
   SessionRootEntrySchema,
 } from "./shapes.js";
+export {
+  createSqliteJournalHarness,
+  JournalSqlite,
+  type SqliteJournalOptions,
+} from "./sqlite.js";
