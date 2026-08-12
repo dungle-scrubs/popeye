@@ -19,10 +19,11 @@
  * mapping and decode routing (RpcHead owns those).
  */
 
-import type { SessionId } from "@pop-eye/journal";
+import type { EntryId, SessionId } from "@pop-eye/journal";
+import { JournalError, JournalNotFound } from "@pop-eye/journal";
 import type { InteractionRequest, InteractionResponse } from "@pop-eye/protocol";
+import { sliceSnapshotByRange } from "@pop-eye/protocol";
 import { Effect, Fiber, Stream } from "effect";
-
 import type { Driver } from "../compose.js";
 import type { RpcInteractionsService } from "./rpc.js";
 import type { HeadWriteError } from "./shared.js";
@@ -258,6 +259,57 @@ export const makeRpcSessionBridge = (options: {
           .pipe(Effect.flatMap((snapshot) => writeSnapshot(command.id, snapshot, false)));
       }
       if (command._tag === "get-snapshot") {
+        const afterId = (command as { afterEntryId?: string }).afterEntryId as EntryId | undefined;
+        const beforeId = (command as { beforeEntryId?: string }).beforeEntryId as
+          | EntryId
+          | undefined;
+        const hasRange = afterId !== undefined || beforeId !== undefined;
+        if (hasRange) {
+          return Effect.gen(function* () {
+            const snapshot = yield* driver.getSnapshot(command.sessionId as unknown as SessionId);
+            const protocolInput = {
+              entries: snapshot.entries,
+              leafEntryId: snapshot.leaf.id,
+              phase: snapshot.phase,
+              revision: snapshot.revision,
+              sessionId: snapshot.sessionId,
+              ...(snapshot.model === undefined ? {} : { model: snapshot.model }),
+              ...(snapshot.name === undefined ? {} : { name: snapshot.name }),
+              ...(snapshot.thinkingLevel === undefined
+                ? {}
+                : { thinkingLevel: snapshot.thinkingLevel }),
+            };
+            const sliced = sliceSnapshotByRange(
+              protocolInput,
+              (afterId ?? null) as EntryId | null,
+              (beforeId ?? null) as EntryId | null,
+            );
+            if (!sliced.isValid) {
+              const msg = sliced.error ?? "invalid range";
+              if (msg.includes("not on branch") || msg.includes("not found")) {
+                return yield* Effect.fail(
+                  new JournalNotFound({
+                    id: (afterId ?? beforeId ?? (command.sessionId as string)) as string,
+                    what: "entry",
+                  }),
+                );
+              }
+              return yield* Effect.fail(
+                new JournalError({ corruptionClass: "invalid_record_sequence", message: msg }),
+              );
+            }
+            const isAttached = attached.has(command.sessionId as string);
+            const payload = {
+              _tag: "snapshot" as const,
+              attached: isAttached,
+              ...sliced.snapshot,
+            };
+            yield* transport.send({
+              ...(command.id === undefined ? {} : { id: command.id }),
+              result: payload,
+            });
+          });
+        }
         return driver
           .getSnapshot(command.sessionId as unknown as SessionId)
           .pipe(

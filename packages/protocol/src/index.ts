@@ -37,6 +37,16 @@ export {
   SelectOptionSchema,
 } from "./interactions.js";
 export {
+  DEFAULT_PAGE_BYTES,
+  type PaginationInput,
+  type PaginationResult,
+  paginateSnapshot,
+  resolvePageBytes,
+  sliceSnapshotByRange,
+  snapshotEncodedBytes,
+  WARNING_BYTES,
+} from "./pagination.js";
+export {
   PROGRESS_TAGS,
   type Progress,
   ProgressSchema,
@@ -44,6 +54,7 @@ export {
   type UnknownProgress,
   UnknownProgressSchema,
 } from "./progress.js";
+export { isFullBranch, reassembleSnapshots } from "./reassembly.js";
 export {
   type AbortTurnResult,
   AbortTurnResultSchema,

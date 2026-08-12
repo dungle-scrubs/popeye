@@ -5,7 +5,7 @@
 > file as features are implemented - never mark a milestone complete
 > until every current-cutoff checkbox under it is checked.
 
-> Current focus: Phase 2 - Bounded Snapshot Pagination
+> Current focus: Phase 2 - Bounded Snapshot Pagination (M4/M5/M6 complete - ready for review)
 
 ## Phase 1: SQLite Journal Layer
 
@@ -48,32 +48,32 @@ Source: `implementation.md` (M3); D-006
 
 Source: `implementation.md` (M4); D-002, D-003, D-004, D-005, D-007
 
-- [ ] `SessionStore.getSnapshot` (or driver snapshot fold) enforces encoded byte bound - default `1,048,576` bytes <!-- D-002 --> configurable via `PEYE_SNAPSHOT_PAGE_BYTES` <!-- D-003 --> with validation as positive integer
-- [ ] Size strategy is estimate-then-verify <!-- D-007 --> - `entryCount * ~511` picks leaf-anchored suffix candidate, then `JSON.stringify(SnapshotSchema.encode(snapshot))` UTF-8 size verifies under bound
-- [ ] When bound exceeded, emitted Snapshot is leaf-anchored suffix window under bound with `entryRange { afterEntryId, hasMoreBefore:true, ... }`, true `leafEntryId` and `revision` preserved
-- [ ] Configurable threshold harness - `PEYE_SNAPSHOT_PAGE_BYTES=10240` makes 10-turn workload paginate early; invalid env value fails typed
-- [ ] Single large Entry over bound delivered as one-entry Snapshot exceeding bound, with diagnostic naming the oversized entry <!-- D-004 -->
-- [ ] 256 KiB warning path - at ~563 KiB (500 turns fixture) Snapshot emits span attribute `snapshot.bytes` and structured diagnostic `snapshotWarning` but does not paginate <!-- D-005 -->
-- [ ] Pagination and warning logic lives in `snapshot/pagination.ts` or co-located module with owns/why/not-responsible comment; spans carry `revision`, `leafEntryId`, `entryCount`, `encodedBytes`, `isPaginated`, `entryRange`
+- [x] `SessionStore.getSnapshot` (or driver snapshot fold) enforces encoded byte bound - default `1,048,576` bytes <!-- D-002 --> configurable via `PEYE_SNAPSHOT_PAGE_BYTES` <!-- D-003 --> with validation as positive integer
+- [x] Size strategy is estimate-then-verify <!-- D-007 --> - `entryCount * ~511` picks leaf-anchored suffix candidate, then `JSON.stringify(SnapshotSchema.encode(snapshot))` UTF-8 size verifies under bound
+- [x] When bound exceeded, emitted Snapshot is leaf-anchored suffix window under bound with `entryRange { afterEntryId, hasMoreBefore:true, ... }`, true `leafEntryId` and `revision` preserved
+- [x] Configurable threshold harness - `PEYE_SNAPSHOT_PAGE_BYTES=10240` makes 10-turn workload paginate early; invalid env value fails typed
+- [x] Single large Entry over bound delivered as one-entry Snapshot exceeding bound, with diagnostic naming the oversized entry <!-- D-004 -->
+- [x] 256 KiB warning path - at ~563 KiB (500 turns fixture) Snapshot emits span attribute `snapshot.bytes` and structured diagnostic `snapshotWarning` but does not paginate <!-- D-005 -->
+- [x] Pagination and warning logic lives in `snapshot/pagination.ts` or co-located module with owns/why/not-responsible comment; spans carry `revision`, `leafEntryId`, `entryCount`, `encodedBytes`, `isPaginated`, `entryRange`
 
 ### M5: get-snapshot range addressing and validation
 
 Source: `implementation.md` (M5)
 
-- [ ] `get-snapshot { afterEntryId: A }` returns suffix `A+1 .. leaf` with correct `hasMoreBefore/After`; `{ beforeEntryId: B }` returns prefix; `{ afterEntryId: A, beforeEntryId: B }` returns slice `A+1 .. B-1`
-- [ ] Unknown `afterEntryId`/`beforeEntryId` rejects `JournalNotFound`; entry not on current branch rejects typed branch-membership error - never empty window
-- [ ] Reversed range (`firstIndex >= lastIndex`) rejects typed
-- [ ] Compaction-aware slicing - window that would require entries older than newest compaction on branch respects summarization; branch without that compaction unaffected
-- [ ] `EntryRange` round-trips through `SnapshotSchema` and `CommandSchema`; older decoder fixture ignoring `entryRange` stays green
-- [ ] `Progress` hints not paginated - `get-snapshot` pagination does not affect `subscribe-progress`
+- [x] `get-snapshot { afterEntryId: A }` returns suffix `A+1 .. leaf` with correct `hasMoreBefore/After`; `{ beforeEntryId: B }` returns prefix; `{ afterEntryId: A, beforeEntryId: B }` returns slice `A+1 .. B-1`
+- [x] Unknown `afterEntryId`/`beforeEntryId` rejects `JournalNotFound`; entry not on current branch rejects typed branch-membership error - never empty window
+- [x] Reversed range (`firstIndex >= lastIndex`) rejects typed
+- [x] Compaction-aware slicing - window that would require entries older than newest compaction on branch respects summarization; branch without that compaction unaffected
+- [x] `EntryRange` round-trips through `SnapshotSchema` and `CommandSchema`; older decoder fixture ignoring `entryRange` stays green
+- [x] `Progress` hints not paginated - `get-snapshot` pagination does not affect `subscribe-progress`
 
 ### M6: Heads reassembly and harness
 
 Source: `implementation.md` (M6)
 
-- [ ] Heads (`rpc`, `print`, `json`) concatenate fetched windows in branch order when full transcript needed, but treat each Snapshot as authoritative per window and never merge `Progress` into stored state
-- [ ] Harness mirroring `snapshot-size-report.md` - fixed and variable content workloads assert 1) 500-turn stays below warning vs 1,000-turn paginates, 2) `leafEntryId`/`revision` preservation, 3) `get-snapshot` range round-trip, 4) older decoder ignores `entryRange`, 5) reassembly to full branch - stable across two runs
-- [ ] Soak: 3 interleaved sessions with bounded Snapshots, dropped subscriber, oversized frame keeps existing contracts
+- [x] Heads (`rpc`, `print`, `json`) concatenate fetched windows in branch order when full transcript needed, but treat each Snapshot as authoritative per window and never merge `Progress` into stored state
+- [x] Harness mirroring `snapshot-size-report.md` - fixed and variable content workloads assert 1) 500-turn stays below warning vs 1,000-turn paginates, 2) `leafEntryId`/`revision` preservation, 3) `get-snapshot` range round-trip, 4) older decoder ignores `entryRange`, 5) reassembly to full branch - stable across two runs
+- [x] Soak: 3 interleaved sessions with bounded Snapshots, dropped subscriber, oversized frame keeps existing contracts
 
 ## Deferred follow-up
 
@@ -87,8 +87,8 @@ Source: `implementation.md` (Deferred)
 ## Summary
 
 - Total features: 35
-- Completed: 19
-- Remaining: 16
-- Current cutoff blockers: 16
+- Completed: 35
+- Remaining: 0
+- Current cutoff blockers: 0
 - Accepted/deferred follow-up: 4
 - Superseded/obsolete checklist debt: 0

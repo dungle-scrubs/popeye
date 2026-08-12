@@ -1,10 +1,13 @@
 /**
  * Owns output pacing and exit status shared by the in-process Heads.
  * It exists so every Head waits for stdout and assigns the same code to each terminal stop reason.
+ * Also owns Snapshot window reassembly for Heads that need full transcript:
+ * Heads concatenate fetched windows in branch order via get-snapshot range (afterEntryId/beforeEntryId)
+ * when full-transcript rendering or export is needed, but treat each Snapshot as authoritative per window
+ * and never merge Progress into stored state. See @pop-eye/protocol reassembleSnapshots.
  */
 import type { Writable } from "node:stream";
-
-import type { Snapshot } from "@pop-eye/protocol";
+import { paginateSnapshot, reassembleSnapshots, type Snapshot } from "@pop-eye/protocol";
 import { Cause, Chunk, Data, Effect, Exit, Logger, Option } from "effect";
 
 import type { DriverSnapshot, TurnResult } from "../compose.js";
@@ -14,17 +17,38 @@ export type SnapshotAuditFields = Required<Pick<Snapshot, "capabilityGrants" | "
 export const protocolSnapshot = (
   snapshot: DriverSnapshot,
   snapshotAudit: SnapshotAuditFields | undefined,
-) => ({
-  ...(snapshotAudit === undefined ? {} : snapshotAudit),
-  entries: snapshot.entries,
-  leafEntryId: snapshot.leaf.id,
-  ...(snapshot.model === undefined ? {} : { model: snapshot.model }),
-  ...(snapshot.name === undefined ? {} : { name: snapshot.name }),
-  phase: snapshot.phase,
-  revision: snapshot.revision,
-  sessionId: snapshot.sessionId,
-  ...(snapshot.thinkingLevel === undefined ? {} : { thinkingLevel: snapshot.thinkingLevel }),
-});
+) => {
+  const paginated = paginateSnapshot({
+    ...(snapshotAudit?.capabilityGrants === undefined
+      ? {}
+      : { capabilityGrants: snapshotAudit.capabilityGrants }),
+    entries: snapshot.entries,
+    leafEntryId: snapshot.leaf.id,
+    ...(snapshotAudit?.loadedGeneration === undefined
+      ? {}
+      : { loadedGeneration: snapshotAudit.loadedGeneration }),
+    ...(snapshot.model === undefined ? {} : { model: snapshot.model }),
+    ...(snapshot.name === undefined ? {} : { name: snapshot.name }),
+    phase: snapshot.phase as Snapshot["phase"],
+    revision: snapshot.revision,
+    sessionId: snapshot.sessionId,
+    ...(snapshot.thinkingLevel === undefined
+      ? {}
+      : { thinkingLevel: snapshot.thinkingLevel as Snapshot["thinkingLevel"] }),
+  });
+  // Emit warning diagnostic via log when over 256 KiB but not paginated - visible in spans
+  if (paginated.warning && !paginated.isPaginated) {
+    Effect.runSync(Effect.logInfo(`snapshot warning - ${paginated.encodedBytes} bytes > 262144`));
+  }
+  if (paginated.isPaginated) {
+    Effect.runSync(
+      Effect.logInfo(
+        `snapshot paginated - ${paginated.encodedBytes} bytes, ${paginated.snapshot.entries.length}/${snapshot.entries.length} entries, range ${JSON.stringify(paginated.snapshot.entryRange)}`,
+      ),
+    );
+  }
+  return paginated.snapshot;
+};
 
 /**
  * 0: done or truncated; 1: provider-settled error; 2: aborted; 3: unresolved tool calls;
@@ -203,6 +227,9 @@ export const runHeadBoundary = <TFailure, TRequirements>(
       return terminalErrorWriter.write(line).pipe(Effect.as(HEAD_EXIT_CODES.turnFailure));
     }),
   );
+
+export const reassembleFullSnapshot = (windows: ReadonlyArray<Snapshot>): Snapshot =>
+  reassembleSnapshots(windows);
 
 export const finalAssistantText = (snapshot: DriverSnapshot): string => {
   for (let index = snapshot.entries.length - 1; index >= 0; index -= 1) {
