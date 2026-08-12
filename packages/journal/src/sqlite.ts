@@ -3,7 +3,8 @@
  * It exists so a large durable journal can live in `journal.sqlite` per directory <!-- D-001 -->
  * behind the same `Journal` tag that memory and JSONL use.
  *
- * What it owns: `JournalPersistence` over `node:sqlite` <!-- D-008 -->, WAL durability,
+ * What it owns: `JournalPersistence` over `node:sqlite` <!-- D-008 -->, WAL durability
+ * (`journal_mode=WAL`, `synchronous=NORMAL`, `PRAGMA wal_checkpoint(TRUNCATE)`), // M2 WAL policy
  * per-directory `journal.sqlite`, and translation between `JournalLine` and rows.
  * Why it exists: SQLite gives transactional appends and indexed reads without
  * JSONL's torn-tail truncation, and is the M1 step before fencing (M2) and
@@ -52,7 +53,12 @@ const fileEffect = <T>(
   run: () => T,
 ): Effect.Effect<T, JournalError> =>
   Effect.try({
-    catch: (cause) => fileFailure(file, operation, cause),
+    catch: (cause) => {
+      if (cause instanceof JournalError) {
+        return cause;
+      }
+      return fileFailure(file, operation, cause);
+    },
     try: run,
   });
 
@@ -68,6 +74,7 @@ interface SqliteJournalBacking {
   readonly db: DatabaseSync;
   readonly diagnosticSink: (diagnostic: unknown) => Effect.Effect<void>;
   readonly directory: string;
+  readonly fences: Map<SessionId, number>;
   readonly file: string;
   readonly ownerId: string;
 }
@@ -93,17 +100,6 @@ const acquireBacking = (
 
     const file = join(directory, "journal.sqlite");
 
-    // In-process single opener guard mirrors Jsonl's openDirectories check
-    if (openDirectories.has(file)) {
-      return yield* Effect.fail(
-        new JournalError({
-          corruptionClass: "io_failure",
-          file,
-          message: `Journal file is already open in this process: ${file}`,
-        }),
-      );
-    }
-
     const db = yield* fileEffect(file, "open database", () => new DatabaseSync(file));
     try {
       ensureSchema(db);
@@ -117,12 +113,14 @@ const acquireBacking = (
     }
 
     const { journalMode, synchronous } = checkSchema(db);
+    // Allow multiple in-process openers for fence takeover tests; track for diagnostics only
     openDirectories.add(file);
 
     const backing: SqliteJournalBacking = {
       db,
       diagnosticSink: options.diagnosticSink ?? defaultDiagnosticSink,
       directory,
+      fences: new Map(),
       file,
       ownerId: createOwnerId(),
     };
@@ -170,12 +168,25 @@ const sqlitePersistence = (backing: SqliteJournalBacking): JournalPersistence =>
         try {
           // Insert session row if not exists
           const existing = backing.db
-            .prepare("SELECT id FROM sessions WHERE id = ?")
-            .get(sessionId) as { id: string } | undefined;
+            .prepare("SELECT id, fence, owner_id FROM sessions WHERE id = ?")
+            .get(sessionId) as { id: string; fence: number; owner_id: string } | undefined;
           if (existing === undefined) {
             backing.db
               .prepare("INSERT INTO sessions (id, fence, owner_id, created_at) VALUES (?, ?, ?, ?)")
               .run(sessionId, 1, backing.ownerId, Date.now());
+            backing.fences.set(sessionId, 1);
+          } else {
+            // Session already exists - verify fence ownership before proceeding
+            if (
+              existing.owner_id !== backing.ownerId ||
+              existing.fence !== backing.fences.get(sessionId)
+            ) {
+              throw new JournalError({
+                corruptionClass: "io_failure",
+                file: backing.file,
+                message: `Fence mismatch for session ${sessionId}: expected fence ${backing.fences.get(sessionId)} owner ${backing.ownerId}, found fence ${existing.fence} owner ${existing.owner_id}`,
+              });
+            }
           }
           backing.db
             .prepare(
@@ -230,11 +241,22 @@ const sqlitePersistence = (backing: SqliteJournalBacking): JournalPersistence =>
         // Merge by global_seq
         const merged: Array<{ globalSeq: number; line: JournalLine }> = [];
         for (const row of entryRows) {
+          let payload: unknown;
+          try {
+            payload = JSON.parse(row.payloadJson) as unknown;
+          } catch (cause) {
+            throw new JournalError({
+              cause,
+              corruptionClass: "malformed_json",
+              file: backing.file,
+              message: `Malformed JSON for entry ${row.id} in session ${sessionId}: ${String(cause)}`,
+            });
+          }
           const entry: Entry = EntrySchema.make({
             id: EntryIdSchema.make(row.id),
             kind: row.kind,
             parentId: row.parentId === null ? null : EntryIdSchema.make(row.parentId),
-            payload: JSON.parse(row.payloadJson) as unknown,
+            payload,
           });
           merged.push({
             globalSeq: row.globalSeq,
@@ -242,10 +264,21 @@ const sqlitePersistence = (backing: SqliteJournalBacking): JournalPersistence =>
           });
         }
         for (const row of recordRows) {
+          let payload: unknown;
+          try {
+            payload = JSON.parse(row.payloadJson) as unknown;
+          } catch (cause) {
+            throw new JournalError({
+              cause,
+              corruptionClass: "malformed_json",
+              file: backing.file,
+              message: `Malformed JSON for record ${row.id} in session ${sessionId}: ${String(cause)}`,
+            });
+          }
           const record: JournalRecord = RecordSchema.make({
             id: RecordIdSchema.make(row.id),
             kind: row.kind,
-            payload: JSON.parse(row.payloadJson) as unknown,
+            payload,
           });
           merged.push({
             globalSeq: row.globalSeq,
@@ -296,6 +329,30 @@ const sqlitePersistence = (backing: SqliteJournalBacking): JournalPersistence =>
       yield* fileEffect(backing.file, "persist line", () => {
         backing.db.exec("BEGIN IMMEDIATE");
         try {
+          // Fence guard - stale writer fails typed
+          const fenceRow = backing.db
+            .prepare("SELECT fence, owner_id FROM sessions WHERE id = ?")
+            .get(sessionId) as { fence: number; owner_id: string } | undefined;
+          if (fenceRow === undefined) {
+            throw new JournalError({
+              corruptionClass: "invalid_record_sequence",
+              file: backing.file,
+              message: `Session ${sessionId} not found for persist`,
+            });
+          }
+          const expectedFence = backing.fences.get(sessionId);
+          if (
+            expectedFence === undefined ||
+            fenceRow.fence !== expectedFence ||
+            fenceRow.owner_id !== backing.ownerId
+          ) {
+            throw new JournalError({
+              corruptionClass: "io_failure",
+              file: backing.file,
+              message: `Fence mismatch for session ${sessionId}: expected fence ${expectedFence} owner ${backing.ownerId}, found fence ${fenceRow.fence} owner ${fenceRow.owner_id}`,
+            });
+          }
+
           const globalSeq = nextGlobalSeq(backing, sessionId);
           if (line.type === "entry") {
             const entry = line.item as Entry;
@@ -336,17 +393,43 @@ const openJournalState = (
   backing: SqliteJournalBacking,
 ): Effect.Effect<JournalAdapterState, JournalError> =>
   Effect.gen(function* () {
-    const sessionIds = yield* fileEffect(
+    const sessionRows = yield* fileEffect(
       backing.file,
       "list sessions",
-      () => backing.db.prepare("SELECT id FROM sessions").all() as Array<{ id: string }>,
+      () =>
+        backing.db.prepare("SELECT id, fence FROM sessions").all() as Array<{
+          id: string;
+          fence: number;
+        }>,
     );
+
+    // Acquire fence for each existing session - bump fence and claim ownership
+    for (const row of sessionRows) {
+      yield* fileEffect(backing.file, "acquire fence", () => {
+        backing.db
+          .prepare("UPDATE sessions SET fence = fence + 1, owner_id = ? WHERE id = ?")
+          .run(backing.ownerId, row.id);
+        const updated = backing.db.prepare("SELECT fence FROM sessions WHERE id = ?").get(row.id) as
+          | { fence: number }
+          | undefined;
+        if (updated !== undefined) {
+          backing.fences.set(SessionIdSchema.make(row.id), updated.fence);
+        }
+      });
+      yield* emitDiagnostic(backing, {
+        action: "fence_acquired",
+        file: backing.file,
+        sessionId: row.id,
+        fence: backing.fences.get(SessionIdSchema.make(row.id)),
+        ownerId: backing.ownerId,
+      });
+    }
 
     const sessions = new Map<
       SessionId,
       ReturnType<typeof availableSession> | ReturnType<typeof rejectedSession>
     >();
-    for (const { id } of sessionIds) {
+    for (const { id } of sessionRows) {
       const sessionId = SessionIdSchema.make(id);
       const result = yield* sqlitePersistence(backing).loadSession(sessionId).pipe(Effect.either);
       if (result._tag === "Right") {

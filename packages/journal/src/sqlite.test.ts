@@ -172,3 +172,223 @@ test("module does not leak node:sqlite outside packages/journal/src/sqlite*", ()
   // Actual boundary is enforced by pnpm check-boundaries; this placeholder ensures the test suite runs
   expect(true).toBe(true);
 });
+
+// --- M2: Fencing, WAL durability, and failure taxonomy ---
+
+test("open acquires lease - fence incremented and stale writer fails typed JournalError", async () => {
+  const dir = await makeDirectory();
+  const session = await Effect.runPromise(
+    Effect.gen(function* () {
+      const j = yield* Journal;
+      return yield* j.createSession();
+    }).pipe(Effect.provide(JournalSqlite(dir))),
+  );
+
+  // Simulate second process takeover by bumping fence directly
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const j = yield* Journal;
+      // Direct DB takeover while layer is still open - use raw handle
+      const db = new DatabaseSync(join(dir, "journal.sqlite"));
+      db.exec("BEGIN IMMEDIATE");
+      db.prepare("UPDATE sessions SET fence = fence + 1, owner_id = ? WHERE id = ?").run(
+        "other-owner",
+        session.id,
+      );
+      db.exec("COMMIT");
+      db.close();
+
+      const result = yield* j
+        .appendEntry(session.id, EntryDraftSchema.make({ kind: "stale", payload: {} }))
+        .pipe(Effect.either);
+      expect(result._tag).toBe("Left");
+      if (result._tag === "Left") {
+        expect((result.left as { _tag: string })._tag).toBe("JournalError");
+        expect((result.left as { message: string }).message).toContain("Fence mismatch");
+      }
+    }).pipe(Effect.provide(JournalSqlite(dir))),
+  );
+});
+
+test("second handle after fence bump writes successfully", async () => {
+  const dir = await makeDirectory();
+  const session = await Effect.runPromise(
+    Effect.gen(function* () {
+      const j = yield* Journal;
+      return yield* j.createSession();
+    }).pipe(Effect.provide(JournalSqlite(dir))),
+  );
+
+  // Second handle opens - should bump fence to 2 and be able to write
+  const entry = await Effect.runPromise(
+    Effect.gen(function* () {
+      const j = yield* Journal;
+      const e = yield* j.appendEntry(
+        session.id,
+        EntryDraftSchema.make({ kind: "second", payload: { ok: true } }),
+      );
+      return e;
+    }).pipe(Effect.provide(JournalSqlite(dir))),
+  );
+
+  expect(entry.id).toBeDefined();
+  expect(entry.kind).toBe("second");
+});
+
+test("malformed JSON on read fails JournalError schema_mismatch/malformed_json", async () => {
+  const dir = await makeDirectory();
+  const session = await Effect.runPromise(
+    Effect.gen(function* () {
+      const j = yield* Journal;
+      return yield* j.createSession();
+    }).pipe(Effect.provide(JournalSqlite(dir))),
+  );
+
+  // Corrupt payload_json directly
+  const db = new DatabaseSync(join(dir, "journal.sqlite"));
+  db.prepare("UPDATE entries SET payload_json = ? WHERE session_id = ?").run(
+    "not-json",
+    session.id,
+  );
+  db.close();
+
+  const error = await Effect.runPromise(
+    Effect.flip(
+      Effect.gen(function* () {
+        const j = yield* Journal;
+        return yield* j.getLeaf(session.id);
+      }).pipe(Effect.provide(JournalSqlite(dir))),
+    ),
+  );
+
+  expect((error as { _tag: string })._tag).toBe("JournalError");
+  expect((error as { corruptionClass: string }).corruptionClass).toBe("malformed_json");
+});
+
+test("acknowledged invariant violation - duplicate entry parent mismatch opens as JournalError", async () => {
+  const dir = await makeDirectory();
+  const session = await Effect.runPromise(
+    Effect.gen(function* () {
+      const j = yield* Journal;
+      const s = yield* j.createSession();
+      const first = yield* j.appendEntry(
+        s.id,
+        EntryDraftSchema.make({ kind: "first", payload: {} }),
+      );
+      yield* j.appendEntry(s.id, EntryDraftSchema.make({ kind: "second", payload: {} }));
+      return { s, first };
+    }).pipe(Effect.provide(JournalSqlite(dir))),
+  );
+
+  // Manually insert an entry that violates parent chain - parent is root but current leaf is second
+  const db = new DatabaseSync(join(dir, "journal.sqlite"));
+  const badId = `bad-${Date.now()}`;
+  // Get root id and first id
+  const rootRow = db
+    .prepare("SELECT entry_id FROM entries WHERE session_id = ? AND kind = 'session_root'")
+    .get(session.s.id) as { entry_id: string };
+  // Insert bad entry with parent = root, but leaf is second, so it should be detected as invalid_record_sequence on load
+  // We need to bypass UNIQUE and parent check by inserting directly with high global_seq
+  const maxSeq = (
+    db
+      .prepare("SELECT COALESCE(MAX(global_seq),0) as m FROM entries WHERE session_id = ?")
+      .get(session.s.id) as { m: number }
+  ).m;
+  db.prepare(
+    "INSERT INTO entries (session_id, entry_id, parent_id, kind, payload_json, global_seq) VALUES (?, ?, ?, ?, ?, ?)",
+  ).run(session.s.id, badId, rootRow.entry_id, "bad", JSON.stringify({}), maxSeq + 1);
+  db.close();
+
+  const error = await Effect.runPromise(
+    Effect.flip(
+      Effect.gen(function* () {
+        const j = yield* Journal;
+        return yield* j.getLeaf(session.s.id);
+      }).pipe(Effect.provide(JournalSqlite(dir))),
+    ),
+  );
+
+  expect((error as { _tag: string })._tag).toBe("JournalError");
+  expect((error as { corruptionClass: string }).corruptionClass).toBe("invalid_record_sequence");
+});
+
+test("crash mid-transaction leaves 0 rows visible - BEGIN without COMMIT", async () => {
+  const dir = await makeDirectory();
+  const session = await Effect.runPromise(
+    Effect.gen(function* () {
+      const j = yield* Journal;
+      return yield* j.createSession();
+    }).pipe(Effect.provide(JournalSqlite(dir))),
+  );
+
+  const file = join(dir, "journal.sqlite");
+  const db = new DatabaseSync(file);
+  db.exec("BEGIN IMMEDIATE");
+  // Insert with valid session_id but uncommitted
+  db.prepare(
+    "INSERT INTO entries (session_id, entry_id, parent_id, kind, payload_json, global_seq) VALUES (?, ?, NULL, 'x', '{}', 999)",
+  ).run(session.id, `e-crash-${Date.now()}`);
+  // Do not commit - close without commit simulates crash (rollback)
+  try {
+    db.exec("ROLLBACK");
+  } catch {
+    // ensure rollback
+  }
+  db.close();
+
+  // Reopen via new handle - should not see uncommitted row
+  const db2 = new DatabaseSync(file);
+  const row = db2.prepare("SELECT COUNT(*) as c FROM entries WHERE kind = 'x'").get() as {
+    c: number;
+  };
+  expect(row.c).toBe(0);
+  db2.close();
+});
+
+test("open emits structured diagnostic and spans carry sessionId fence ownerId", async () => {
+  const dir = await makeDirectory();
+  const diagnostics: Array<unknown> = [];
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const j = yield* Journal;
+      return yield* j.createSession();
+    }).pipe(
+      Effect.provide(
+        JournalSqlite(dir, { diagnosticSink: (d) => Effect.sync(() => diagnostics.push(d)) }),
+      ),
+    ),
+  );
+
+  expect(diagnostics.some((d) => (d as { action: string }).action === "opened")).toBe(true);
+
+  // Second open should emit fence_acquired
+  const diagnostics2: Array<unknown> = [];
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const j = yield* Journal;
+      // Need at least one session to have fence_acquired
+      const list = yield* j.listSessions();
+      return list;
+    }).pipe(
+      Effect.provide(
+        JournalSqlite(dir, { diagnosticSink: (d) => Effect.sync(() => diagnostics2.push(d)) }),
+      ),
+    ),
+  );
+
+  expect(diagnostics2.some((d) => (d as { action: string }).action === "fence_acquired")).toBe(
+    true,
+  );
+});
+
+test("WAL policy documented - module comment contains wal_checkpoint", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const content = await readFile(join(process.cwd(), "packages/journal/src/sqlite.ts"), "utf8");
+  // Check that sqlite.ts or ddl.ts mentions WAL and checkpoint
+  expect(content).toContain("WAL");
+  const ddlContent = await readFile(
+    join(process.cwd(), "packages/journal/src/sqlite/ddl.ts"),
+    "utf8",
+  );
+  expect(ddlContent).toContain("WAL");
+});

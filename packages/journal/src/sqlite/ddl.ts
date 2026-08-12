@@ -9,7 +9,8 @@
 import type { DatabaseSync } from "node:sqlite";
 
 export const ensureSchema = (db: DatabaseSync): void => {
-  // WAL + NORMAL matches the spike-verified durability without torn-tail truncation <!-- D-008 -->
+  // WAL + NORMAL matches the spike-verified durability without torn-tail truncation <!-- D-008 -->.
+  // Checkpoint policy is TRUNCATE via PRAGMA wal_checkpoint(TRUNCATE) when needed; no torn-tail file truncation.
   db.exec("PRAGMA journal_mode=WAL");
   db.exec("PRAGMA synchronous=NORMAL");
   db.exec("PRAGMA foreign_keys=ON");
