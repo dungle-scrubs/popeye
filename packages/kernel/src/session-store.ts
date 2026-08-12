@@ -2,8 +2,9 @@
  * Owns session lifecycle against the Journal seam.
  * It exists so create/list/resume/branch/compact/leaf/revision operate through
  * one Journal caller instead of drifting between sessions.ts and driver.ts.
- * Recovery planning (boundedRecoveryRecords/recoverSession/applyRecoveryPlan)
- * lives here as the single JournalRecovery consumer placement per D-001.
+ * Deep module over RecoveryEngine (C1 architecture review): resume delegates to
+ * RecoveryEngine, the single owner of the readRecords→bounded→readBranch→recover→apply→getLeaf
+ * sequence, so D-033 second-crash safety is inspected once.
  *
  * Why this module: kernel recovery and session creation were duplicated
  * between sessions.ts and driver.ts (each called Journal directly). This
@@ -24,12 +25,8 @@ import {
 } from "@pop-eye/journal";
 import { Context, Effect, Layer, Schema } from "effect";
 import { SessionNamePayloadSchema } from "./entry-payloads.js";
-import {
-  applyRecoveryPlan,
-  boundedRecoveryRecords,
-  type RecoveryReport,
-  recoverSession,
-} from "./recovery.js";
+import type { RecoveryReport } from "./recovery.js";
+import { makeRecoveryEngineForTest } from "./recovery-engine.js";
 
 export interface SessionStoreOptions {
   readonly recoveryDiagnosticSink?: (report: RecoveryReport) => Effect.Effect<void>;
@@ -93,6 +90,7 @@ const makeSessionStoreService = (
   options: SessionStoreOptions = {},
 ): SessionStoreService => {
   const recoveryDiagnosticSink = options.recoveryDiagnosticSink ?? defaultRecoveryDiagnosticSink;
+  const recoveryEngine = makeRecoveryEngineForTest(journal, { recoveryDiagnosticSink });
 
   return {
     appendCompaction: (sessionId, payload) => journal.appendCompaction(sessionId, payload),
@@ -135,26 +133,7 @@ const makeSessionStoreService = (
         .moveLeaf(sessionId, toEntryId as unknown as import("@pop-eye/journal").EntryId)
         .pipe(Effect.asVoid),
     readRecords: (sessionId) => journal.readRecords(sessionId),
-    resume: (sessionId, availableToolNames) =>
-      Effect.gen(function* () {
-        const allRecords = yield* journal.readRecords(sessionId);
-        const records = boundedRecoveryRecords(allRecords);
-        const entries = yield* journal.readBranch(sessionId);
-        const plan = yield* recoverSession(records, entries);
-        const report = yield* applyRecoveryPlan(journal, sessionId, plan, {
-          availableToolNames,
-          snapshot: { entries, records: allRecords },
-        });
-        yield* Effect.annotateCurrentSpan({
-          actionCount: report.actions.length,
-          entriesAppendedCount: report.entriesAppended.length,
-          operationIdFound: report.operationIdFound ?? "none",
-          safeReplayCount: report.safeReplay.length,
-        });
-        yield* recoveryDiagnosticSink(report);
-        const leaf = yield* journal.getLeaf(sessionId);
-        return { leaf, report };
-      }).pipe(Effect.withSpan("kernel.recovery", { attributes: { sessionId } })),
+    resume: (sessionId, availableToolNames) => recoveryEngine.resume(sessionId, availableToolNames),
   } satisfies SessionStoreService;
 };
 

@@ -120,6 +120,13 @@ export {
   ToolRecoveryActionSchema,
 } from "./recovery.js";
 export {
+  makeRecoveryEngineForTest,
+  RecoveryEngine,
+  RecoveryEngineLive,
+  type RecoveryEngineOptions,
+  type RecoveryEngineService,
+} from "./recovery-engine.js";
+export {
   branchContains,
   deriveSettings,
   makeSessionViewForTest,
