@@ -2,6 +2,7 @@
  * M1: SQLite DDL and persistence core - RED/GREEN
  */
 
+import { mkdtempSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,9 +11,10 @@ import { DatabaseSync } from "node:sqlite";
 import { Effect } from "effect";
 import { afterEach, expect, test } from "vitest";
 
+import { describeJournalContract } from "./conformance/index.js";
 import { Journal } from "./journal.js";
 import { EntryDraftSchema } from "./shapes.js";
-import { JournalSqlite } from "./sqlite.js";
+import { createSqliteJournalHarness, JournalSqlite } from "./sqlite.js";
 
 const directories: Array<string> = [];
 
@@ -22,9 +24,17 @@ const makeDirectory = async (): Promise<string> => {
   return dir;
 };
 
+const makeDirectorySync = (): string => {
+  const dir = mkdtempSync(join(tmpdir(), "peye-sqlite-"));
+  directories.push(dir);
+  return dir;
+};
+
 afterEach(async () => {
   await Promise.all(directories.splice(0).map((d) => rm(d, { force: true, recursive: true })));
 });
+
+await describeJournalContract(() => createSqliteJournalHarness(makeDirectorySync()));
 
 test("DDL creates journal.sqlite with sessions, entries, records tables, WAL and NORMAL", async () => {
   const dir = await makeDirectory();

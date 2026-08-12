@@ -20,10 +20,11 @@
  * in bin.test.ts and rpc.test.ts.
  */
 
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import type { Readable, Writable } from "node:stream";
 
-import { JournalJsonl, SessionIdSchema } from "@pop-eye/journal";
+import { JournalJsonl, JournalSqlite, SessionIdSchema } from "@pop-eye/journal";
 import { type PluginInteractions, PluginInteractionsNullLive } from "@pop-eye/plugins";
 import { Cause, Data, Effect, Exit, Layer, Logger, Schema, Stream } from "effect";
 
@@ -140,6 +141,25 @@ Exit status:
 
 Read stderr to distinguish exit 2 causes.
 `;
+
+// ---------------------------------------------------------------------------
+// Journal layer selection per D-006 <!-- D-006 -->
+// ---------------------------------------------------------------------------
+
+export const selectJournalLayer = (sessionDir: string, env: CliEnvironment) => {
+  const explicit = env.PEYE_JOURNAL_LAYER;
+  if (explicit === "sqlite") return JournalSqlite(sessionDir);
+  if (explicit === "jsonl") return JournalJsonl(sessionDir);
+  if (explicit !== undefined && explicit.length > 0) {
+    // Unknown value falls back to jsonl with diagnostic; explicit sqlite/jsonl are the only supported values
+    Effect.runSync(
+      Effect.logWarning(`PEYE_JOURNAL_LAYER=${explicit} unknown, using file-detection`),
+    );
+  }
+  // File-detection: journal.sqlite present means sqlite, otherwise jsonl
+  const sqliteFile = `${sessionDir}/journal.sqlite`;
+  return existsSync(sqliteFile) ? JournalSqlite(sessionDir) : JournalJsonl(sessionDir);
+};
 
 // ---------------------------------------------------------------------------
 // Internal seams: args/config remain independent; helpers below are
@@ -320,6 +340,7 @@ const runWithConfig = (
   io: CliIo,
   errorWriter: HeadWriter,
   writer: HeadWriter,
+  env: CliEnvironment,
 ): Effect.Effect<HeadExitCode, CliRunError> =>
   Effect.gen(function* () {
     const resumeSessionId =
@@ -373,7 +394,11 @@ const runWithConfig = (
               provider: "openai",
             }).pipe(Layer.provide(tools))
           : Layer.succeed(Provider, provider);
-      const dependencies = Layer.mergeAll(JournalJsonl(config.sessionDir), providerLayer, tools);
+      const dependencies = Layer.mergeAll(
+        selectJournalLayer(config.sessionDir, env),
+        providerLayer,
+        tools,
+      );
       const currentGen = yield* cliRuntime.currentGeneration;
       const driver = GenerationDriverDefault(currentGen).pipe(Layer.provide(dependencies));
       const pluginLive =
@@ -435,10 +460,14 @@ const runWithConfig = (
  * Not responsible for Head rendering or Plugin discovery — those
  * live behind compose and heads.
  */
-export const run = (config: CliRunConfig, io: CliIo): Effect.Effect<HeadExitCode, CliRunError> => {
+export const run = (
+  config: CliRunConfig,
+  io: CliIo,
+  env: CliEnvironment = {},
+): Effect.Effect<HeadExitCode, CliRunError> => {
   const writer = makeWritableHeadWriter(io.stdout);
   const errorWriter = makeWritableHeadWriter(io.stderr);
-  return runWithConfig(config, io, errorWriter, writer).pipe(
+  return runWithConfig(config, io, errorWriter, writer, env).pipe(
     Effect.provide(Logger.replace(Logger.defaultLogger, makeWritableLogfmtLogger(io.stderr))),
   );
 };
@@ -451,6 +480,7 @@ const dispatch = (
   config: CliConfig,
   io: CliIo,
   writer: HeadWriter,
+  env: CliEnvironment,
 ): Effect.Effect<number, CliEntryError | HeadWriteError | unknown> => {
   if (config.action === "help") {
     return writer.write(CLI_USAGE).pipe(Effect.as(HEAD_EXIT_CODES.done));
@@ -461,7 +491,7 @@ const dispatch = (
       Effect.as(HEAD_EXIT_CODES.done),
     );
   }
-  return run(config, io);
+  return run(config, io, env);
 };
 
 const isCliRunError = (error: unknown): boolean =>
@@ -489,7 +519,7 @@ export const executeCli = async (
     const initial = yield* parseArgs(argv);
     const parsed = initial.action === "run" ? yield* completePrompt(initial, io.input) : initial;
     const config = yield* resolveConfig(parsed, env);
-    return yield* dispatch(config, io, stdoutWriter);
+    return yield* dispatch(config, io, stdoutWriter, env);
   }).pipe(Effect.catchAll((error) => reportCliFailure(error, errorWriter)));
 
   const exit = await Effect.runPromiseExit(program);

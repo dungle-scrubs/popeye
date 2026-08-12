@@ -39,6 +39,7 @@ export {
   JournalMemory,
   type MemoryJournalBacking,
 } from "./memory.js";
+export { type MigrateResult, migrateJsonlToSqlite } from "./migrate.js";
 export {
   type CompactionEntry,
   CompactionEntrySchema,
