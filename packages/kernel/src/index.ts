@@ -167,3 +167,9 @@ export {
   TurnsLive,
   type TurnsService,
 } from "./turn.js";
+export {
+  TurnOrchestrator,
+  TurnOrchestratorLive,
+  type TurnOrchestratorService,
+  validateTurnOptionsSync,
+} from "./turn-orchestrator.js";
