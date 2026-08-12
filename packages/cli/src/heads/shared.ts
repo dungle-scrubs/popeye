@@ -1,13 +1,13 @@
 /**
  * Owns output pacing and exit status shared by the in-process Heads.
  * It exists so every Head waits for stdout and assigns the same code to each terminal stop reason.
- * Also owns Snapshot window reassembly for Heads that need full transcript:
- * Heads concatenate fetched windows in branch order via get-snapshot range (afterEntryId/beforeEntryId)
- * when full-transcript rendering or export is needed, but treat each Snapshot as authoritative per window
- * and never merge Progress into stored state. See @pop-eye/protocol reassembleSnapshots.
+ * Deep module over SnapshotView (C2 architecture review): Snapshot bounded emission, range addressing,
+ * and window reassembly hide behind SnapshotView; Heads concatenate fetched windows in branch order
+ * via get-snapshot range when full-transcript rendering is needed, but treat each Snapshot as
+ * authoritative per window and never merge Progress into stored state. See @pop-eye/protocol snapshotView.
  */
 import type { Writable } from "node:stream";
-import { paginateSnapshot, reassembleSnapshots, type Snapshot } from "@pop-eye/protocol";
+import { reassembleSnapshots, type Snapshot, snapshotView } from "@pop-eye/protocol";
 import { Cause, Chunk, Data, Effect, Exit, Logger, Option } from "effect";
 
 import type { DriverSnapshot, TurnResult } from "../compose.js";
@@ -18,7 +18,7 @@ export const protocolSnapshot = (
   snapshot: DriverSnapshot,
   snapshotAudit: SnapshotAuditFields | undefined,
 ) => {
-  const paginated = paginateSnapshot({
+  const paginated = snapshotView.paginateSnapshot({
     ...(snapshotAudit?.capabilityGrants === undefined
       ? {}
       : { capabilityGrants: snapshotAudit.capabilityGrants }),

@@ -22,7 +22,7 @@
 import type { EntryId, SessionId } from "@pop-eye/journal";
 import { JournalError, JournalNotFound } from "@pop-eye/journal";
 import type { InteractionRequest, InteractionResponse } from "@pop-eye/protocol";
-import { sliceSnapshotByRange } from "@pop-eye/protocol";
+import { snapshotView } from "@pop-eye/protocol";
 import { Effect, Fiber, Stream } from "effect";
 import type { Driver } from "../compose.js";
 import type { RpcInteractionsService } from "./rpc.js";
@@ -279,7 +279,7 @@ export const makeRpcSessionBridge = (options: {
                 ? {}
                 : { thinkingLevel: snapshot.thinkingLevel }),
             };
-            const sliced = sliceSnapshotByRange(
+            const sliced = snapshotView.sliceSnapshotByRange(
               protocolInput,
               (afterId ?? null) as EntryId | null,
               (beforeId ?? null) as EntryId | null,

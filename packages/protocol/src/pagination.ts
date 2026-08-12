@@ -1,5 +1,5 @@
 /**
- * Owns bounded Snapshot pagination.
+ * Owns bounded Snapshot pagination as private seam of SnapshotView (C2 architecture review).
  * It exists so a 1 MiB wire bound can be enforced without losing snapshot authority.
  *
  * What it owns: leaf-anchored windowing, entryRange flags, byte measurement via SnapshotSchema,
@@ -7,6 +7,7 @@
  * Why: every paginated Snapshot must carry true leafEntryId + revision for its window,
  * with hasMoreBefore/After signaling the branch extends beyond the window. Estimate-then-verify
  * keeps emission under bound without full-branch encode when below threshold. <!-- D-007 -->
+ * Private seam of SnapshotView: callers should depend on snapshotView.paginateSnapshot / sliceSnapshotByRange, not on this file directly.
  * What it does not own: Journal persistence or compaction - those live in @pop-eye/journal.
  */
 

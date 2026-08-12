@@ -1,11 +1,12 @@
 /**
- * Owns Snapshot window reassembly.
+ * Owns Snapshot window reassembly as private seam of SnapshotView (C2 architecture review).
  * It exists so Heads that receive leaf-anchored paginated windows can reconstruct the full branch when needed.
  *
  * What it owns: concatenating windows in branch order, verifying leafEntryId/revision/sessionId identity,
  * sorting by entryRange.afterEntryId chain, and producing a full branch Snapshot with hasMoreBefore:false/hasMoreAfter:false.
  * Why: every paginated Snapshot is authoritative per window (leafEntryId + revision preserved); full-transcript export
  * must not merge Progress and must not invent entries. Heads call get-snapshot range windows and reassemble here.
+ * Private seam of SnapshotView: callers should depend on snapshotView.reassembleSnapshots, not on this file directly.
  * What it does not own: byte measurement or window selection (pagination.ts) or persistence (journal).
  */
 

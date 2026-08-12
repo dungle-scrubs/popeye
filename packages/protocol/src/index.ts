@@ -95,3 +95,9 @@ export {
   SnapshotThinkingLevelSchema,
   TurnPhaseSchema,
 } from "./snapshot.js";
+export {
+  makeSnapshotViewForTest,
+  type SnapshotPaginationInput,
+  type SnapshotViewService,
+  snapshotView,
+} from "./snapshot-view.js";
