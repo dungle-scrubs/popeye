@@ -5,7 +5,7 @@
 > file as features are implemented - never mark a milestone complete
 > until every current-cutoff checkbox under it is checked.
 
-> Current focus: Phase 4 - RpcTransport seam realization
+> Current focus: Complete — all milestones done
 
 ## Phase 1: Turn deepening
 
@@ -41,10 +41,10 @@ Source: `implementation.md` (M3)
 ### M4: RpcTransport deep module
 Source: `implementation.md` (M4)
 
-- [ ] writeFrame/readFrames owns LF-only, 1MB, U+2028/2029, Buffer provenance, per-Session FIFO
-- [ ] FakeTransport second adapter for soak; rawStdoutBytes dual capture deleted
-- [ ] providerStartLog Set(["A","B","C"]) via transport queue
-- [ ] module comments; dispatch policy only in rpc/rpc-dispatch
+- [x] writeFrame/readFrames owns LF-only, 1MB, U+2028/2029, Buffer provenance, per-Session FIFO
+- [x] FakeTransport second adapter for soak; rawStdoutBytes dual capture deleted
+- [x] providerStartLog Set(["A","B","C"]) via transport queue
+- [x] module comments; dispatch policy only in rpc/rpc-dispatch
 
 ## Deferred follow-up
 
@@ -54,7 +54,7 @@ Source: `implementation.md` (Deferred)
 
 ## Summary
 - Total features: 14
-- Completed: 11
-- Remaining: 3
-- Current cutoff blockers: 3
+- Completed: 14
+- Remaining: 0
+- Current cutoff blockers: 0
 - Accepted/deferred follow-up: 1

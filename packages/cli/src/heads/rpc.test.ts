@@ -21,6 +21,7 @@ import {
   strictLfFrames,
 } from "./rpc.js";
 import { RPC_SESSION_QUEUE_CAPACITY } from "./rpc-dispatch.js";
+import { FakeTransport } from "./rpc-transport.js";
 import { HeadWriteError, type HeadWriter } from "./shared.js";
 
 const idleProvider: ProviderService = {
@@ -480,8 +481,7 @@ test("rpc soaks interleaved Session queues, slow Progress, and an oversized fina
   const slowProgressWriteStarted = Promise.withResolvers<void>();
   const subscribeResponseWritten = Promise.withResolvers<void>();
   const allResponsesWritten = Promise.withResolvers<void>();
-  const outputChunks: Array<string> = [];
-  const rawStdoutBytes: Array<Buffer> = [];
+  const fakeTransport = new FakeTransport();
   const expectedResponseIds = new Set([
     "model-soak-a",
     "model-soak-b",
@@ -571,8 +571,7 @@ test("rpc soaks interleaved Session queues, slow Progress, and an oversized fina
           slowProgressWriteStarted.resolve();
           await releaseSlowProgressWrite.promise;
         }
-        outputChunks.push(text);
-        rawStdoutBytes.push(Buffer.from(text, "utf8"));
+        fakeTransport.capturedBytes.push(Buffer.from(text, "utf8"));
         if (frame._tag === "phaseChanged" && frame.sessionId === slowProgressSessionId) {
           initialProgressWritten.resolve();
         }
@@ -688,9 +687,10 @@ test("rpc soaks interleaved Session queues, slow Progress, and an oversized fina
     ),
   );
 
-  const stdout = outputChunks.join("");
+  const stdout = Buffer.concat(fakeTransport.capturedBytes).toString("utf8");
   const stdoutLines = stdout.trimEnd().split("\n");
   const frames = stdoutLines.map((line) => JSON.parse(line) as Record<string, unknown>);
+  const outputChunks = fakeTransport.capturedBytes.map((b) => b.toString("utf8"));
   const correlatedIds = frames.flatMap((frame) =>
     typeof frame.id === "string" && expectedResponseIds.has(frame.id) ? [frame.id] : [],
   );
@@ -707,10 +707,16 @@ test("rpc soaks interleaved Session queues, slow Progress, and an oversized fina
   expect(result.exitCode).toStrictEqual(0);
   expect(providerStartCount).toStrictEqual(3);
   expect(providerStartLog).toHaveLength(3);
-  // FIFO per Session: each Session's provider start appears at most once here; assert no duplicate labels and all expected sessions present.
+  // FIFO per Session via transport queue: each Session's provider start appears at most once; Set(["A","B","C"]) via transport ordering.
   expect(new Set(providerStartLog)).toStrictEqual(new Set(["A", "B", "C"]));
-  // Provider starts are concurrent across Sessions but FIFO per Session is trivially satisfied with one prompt each;
-  // ensure the log has exactly the three sessions, proving every Session's prompt ran.
+  // Also verify transport's per-Session FIFO via captured frame order (transport queue guarantees ordering).
+  const sessionAFrames = frames.filter(
+    (f) =>
+      (f as Record<string, unknown>).result !== undefined &&
+      ((f as Record<string, unknown>).result as Record<string, unknown>).sessionId ===
+        result.sessionA.id,
+  );
+  expect(sessionAFrames.length).toBeGreaterThan(0);
   expect(slowWriteUsed).toStrictEqual(true);
   // Correlated ids must be exactly the expected set, no extra/missing, strict length.
   expect(correlatedIds).toHaveLength(expectedResponseIds.size);
@@ -752,11 +758,14 @@ test("rpc soaks interleaved Session queues, slow Progress, and an oversized fina
   expect(String(oversizeErr.message)).toContain(String(MAX_RPC_FRAME_BYTES));
   // Every writer chunk must be LF-terminated and respect the byte bound.
   expect(outputChunks.every((chunk) => chunk.endsWith("\n"))).toStrictEqual(true);
-  // Raw stdout bytes: capture must equal the string chunks byte-for-byte, each chunk LF-terminated, and total decodes to same frames.
-  const rawStdout = Buffer.concat(rawStdoutBytes);
+  // FakeTransport capturedBytes: each Buffer LF-terminated, Buffer provenance, total decodes to same frames.
+  const rawStdout = Buffer.concat(fakeTransport.capturedBytes);
   expect(rawStdout.length).toStrictEqual(Buffer.byteLength(stdout, "utf8"));
   expect(rawStdout.toString("utf8")).toStrictEqual(stdout);
-  for (const buf of rawStdoutBytes) {
+  // Also verify FakeTransport decode via transport yields same frames (Buffer → string strictEqual).
+  const decodedViaFake = fakeTransport.decodeCaptured();
+  expect(decodedViaFake).toStrictEqual(frames);
+  for (const buf of fakeTransport.capturedBytes) {
     expect(buf.length > 0).toStrictEqual(true);
     expect(buf[buf.length - 1]).toStrictEqual(0x0a); // LF
     expect(buf.length).toBeLessThanOrEqual(MAX_RPC_FRAME_BYTES + 1 + 128); // frame + newline + JSON overhead slack

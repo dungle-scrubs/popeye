@@ -4,6 +4,8 @@
  * control handlers bypass both. Interrupting an interruptible write releases its permit after
  * interruption finalizers run. An explicitly uninterruptible write keeps its permit until it
  * completes or reaches an interruptible region.
+ * Why this split: dispatch policy (routing, queue bounds, FIFO per Session) stays here; framing (LF, 1MB, U+2028/2029, Buffer) lives in rpc-transport.
+ * Not responsible for byte framing or JSON serialization (rpc-transport owns that).
  */
 
 import type { Scope } from "effect";

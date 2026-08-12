@@ -1,13 +1,13 @@
 /**
- * Owns RPC framing, decoding, command routing, and protocol effects for one long-lived stdio Head.
+ * Owns RPC command routing and protocol effects for one long-lived stdio Head.
  * Dispatch workers run handlers outside the read loop: FIFO per Session, FIFO for sessionless
- * commands, concurrent across Sessions, and immediate for control frames. Framing splits on LF
- * only. Do not use Node readline: literal U+2028 and U+2029 are JSON content. See pi's framing
- * lesson: https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/rpc.md
+ * commands, concurrent across Sessions, and immediate for control frames.
+ * Why this split: routing and Driver effects stay here; framing (LF-only, 1MB, U+2028/2029, Buffer provenance, per-Session FIFO) lives in rpc-transport.
+ * Not responsible for byte framing or JSON serialization (rpc-transport owns that).
+ * See pi's framing lesson: https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/rpc.md
  */
 
 import type { Readable, Writable } from "node:stream";
-import { StringDecoder } from "node:string_decoder";
 
 import type { SessionId } from "@pop-eye/journal";
 import {
@@ -29,7 +29,6 @@ import {
   Cause,
   Chunk,
   Context,
-  Data,
   Deferred,
   Effect,
   Fiber,
@@ -46,8 +45,13 @@ import {
   makeRpcDispatcher,
   type RpcDispatchBoundExceeded,
   type RpcDispatchRoute,
-  serializedWriter,
 } from "./rpc-dispatch.js";
+import {
+  makeSerializedRpcTransport,
+  MAX_RPC_FRAME_BYTES as TRANSPORT_MAX_BYTES,
+  RpcReadError as TransportRpcReadError,
+  strictLfFrames as transportStrictLfFrames,
+} from "./rpc-transport.js";
 import {
   HEAD_EXIT_CODES,
   type HeadExitCode,
@@ -61,12 +65,9 @@ import {
   stdoutHeadWriter,
 } from "./shared.js";
 
-export const MAX_RPC_FRAME_BYTES = 1024 * 1024;
+export const MAX_RPC_FRAME_BYTES = TRANSPORT_MAX_BYTES;
 
-export class RpcReadError extends Data.TaggedError("RpcReadError")<{
-  readonly cause: unknown;
-  readonly message: string;
-}> {}
+export class RpcReadError extends TransportRpcReadError {}
 
 export interface RpcHeadOptions {
   readonly errorWriter?: HeadWriter;
@@ -398,59 +399,7 @@ export const PluginInteractionsRpcLive: Layer.Layer<PluginInteractions, never, R
     }),
   );
 
-const decodeChunk = (decoder: StringDecoder, chunk: unknown): string => {
-  if (typeof chunk === "string") {
-    return chunk;
-  }
-  if (chunk instanceof Uint8Array) {
-    return decoder.write(chunk);
-  }
-  throw new TypeError("RPC input produced a non-byte chunk.");
-};
-
-const readStrictLfFrames = async function* (input: Readable): AsyncGenerator<string> {
-  const decoder = new StringDecoder("utf8");
-  let pending = "";
-
-  for await (const chunk of input as AsyncIterable<unknown>) {
-    pending += decodeChunk(decoder, chunk);
-    let separator = pending.indexOf("\n");
-    while (separator >= 0) {
-      const raw = pending.slice(0, separator);
-      pending = pending.slice(separator + 1);
-      const frameBytes = Buffer.byteLength(raw);
-      if (frameBytes > MAX_RPC_FRAME_BYTES) {
-        throw new ProtocolError({
-          message: `RPC frame exceeded the ${MAX_RPC_FRAME_BYTES}-byte limit.`,
-          reason: "malformed_frame",
-        });
-      }
-      const frame = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
-      if (frame.length > 0) {
-        yield frame;
-      }
-      separator = pending.indexOf("\n");
-    }
-    if (Buffer.byteLength(pending) > MAX_RPC_FRAME_BYTES) {
-      throw new ProtocolError({
-        message: `RPC frame exceeded the ${MAX_RPC_FRAME_BYTES}-byte limit before LF.`,
-        reason: "malformed_frame",
-      });
-    }
-  }
-
-  decoder.end();
-  // A partial trailing line at EOF is not a frame.
-};
-
-export const strictLfFrames = (
-  input: Readable,
-): Stream.Stream<string, ProtocolError | RpcReadError> =>
-  Stream.fromAsyncIterable(readStrictLfFrames(input), (cause) =>
-    cause instanceof ProtocolError
-      ? cause
-      : new RpcReadError({ cause, message: `RPC input failed: ${String(cause)}` }),
-  );
+export const strictLfFrames = transportStrictLfFrames;
 
 const parseJsonFrame = (frame: string): Effect.Effect<unknown, ProtocolError> =>
   Effect.try({
@@ -519,36 +468,34 @@ const connectionSnapshot = (
 });
 
 const writeResponse = (
-  writer: HeadWriter,
+  transport: { readonly send: (payload: unknown) => Effect.Effect<void, HeadWriteError> },
   id: string | undefined,
   result: unknown,
 ): Effect.Effect<void, HeadWriteError> =>
-  writer.write(`${JSON.stringify({ ...(id === undefined ? {} : { id }), result })}\n`);
+  transport.send({ ...(id === undefined ? {} : { id }), result });
 
 const writeSnapshotResponse = (
-  writer: HeadWriter,
+  transport: { readonly send: (payload: unknown) => Effect.Effect<void, HeadWriteError> },
   id: string | undefined,
   snapshot: DriverSnapshot,
   attached: boolean,
   snapshotAudit: SnapshotAuditFields | undefined,
 ): Effect.Effect<void, HeadWriteError> =>
-  writeResponse(writer, id, connectionSnapshot(snapshot, attached, snapshotAudit));
+  writeResponse(transport, id, connectionSnapshot(snapshot, attached, snapshotAudit));
 
 const writeProtocolError = (
-  writer: HeadWriter,
+  transport: { readonly send: (payload: unknown) => Effect.Effect<void, HeadWriteError> },
   id: string | undefined,
   error: ProtocolError,
 ): Effect.Effect<void, HeadWriteError> =>
-  writer.write(
-    `${JSON.stringify({
-      error: {
-        code: "protocol_error",
-        details: { reason: error.reason, tag: error._tag },
-        message: error.message,
-      },
-      ...(id === undefined ? {} : { id }),
-    })}\n`,
-  );
+  transport.send({
+    error: {
+      code: "protocol_error",
+      details: { reason: error.reason, tag: error._tag },
+      message: error.message,
+    },
+    ...(id === undefined ? {} : { id }),
+  });
 
 const unknownRecord = (value: unknown): Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null ? (value as Readonly<Record<string, unknown>>) : {};
@@ -755,11 +702,11 @@ const wireErrorFromFailure = (
 };
 
 const writeWireError = (
-  writer: HeadWriter,
+  transport: { readonly send: (payload: unknown) => Effect.Effect<void, HeadWriteError> },
   id: string | undefined,
   error: WireError,
 ): Effect.Effect<void, HeadWriteError> =>
-  writer.write(`${JSON.stringify({ error, ...(id === undefined ? {} : { id }) })}\n`);
+  transport.send({ error, ...(id === undefined ? {} : { id }) });
 
 const firstCauseError = <TFailure>(
   cause: Cause.Cause<TFailure>,
@@ -773,7 +720,7 @@ const firstCauseError = <TFailure>(
 };
 
 const handleFrameCause = <TFailure>(
-  writer: HeadWriter,
+  transport: { readonly send: (payload: unknown) => Effect.Effect<void, HeadWriteError> },
   id: string | undefined,
   commandName: string,
   cause: Cause.Cause<TFailure>,
@@ -810,27 +757,26 @@ const handleFrameCause = <TFailure>(
 
   return Effect.annotateCurrentSpan({ outcome: error.code }).pipe(
     Effect.zipRight(report),
-    Effect.zipRight(writeWireError(writer, id, error)),
+    Effect.zipRight(writeWireError(transport, id, error)),
   );
 };
 
 const handleDispatchBoundExceeded = (
-  writer: HeadWriter,
+  transport: { readonly send: (payload: unknown) => Effect.Effect<void, HeadWriteError> },
   id: string | undefined,
   error: RpcDispatchBoundExceeded,
 ): Effect.Effect<void, HeadWriteError> => {
   const wireError = wireErrorFromFailure(error);
   return Effect.annotateCurrentSpan({ outcome: wireError.code }).pipe(
-    Effect.zipRight(writeWireError(writer, id, wireError)),
+    Effect.zipRight(writeWireError(transport, id, wireError)),
   );
 };
 
 const writeProgress = (
-  writer: HeadWriter,
+  transport: { readonly send: (payload: unknown) => Effect.Effect<void, HeadWriteError> },
   sessionId: string,
   progress: object,
-): Effect.Effect<void, HeadWriteError> =>
-  writer.write(`${JSON.stringify({ ...progress, sessionId })}\n`);
+): Effect.Effect<void, HeadWriteError> => transport.send({ ...progress, sessionId });
 
 const abortResult = (result: {
   readonly aborted: boolean;
@@ -876,14 +822,14 @@ export const runRpcHead = (options: RpcHeadOptions) => {
   return runHeadBoundary(
     Effect.scoped(
       Effect.gen(function* () {
-        const writer = yield* serializedWriter(outputWriter);
-        const dispatcher = yield* makeRpcDispatcher(writer);
+        const transport = yield* makeSerializedRpcTransport(outputWriter);
+        const dispatcher = yield* makeRpcDispatcher(transport);
         const writeSnapshot = (
           id: string | undefined,
           snapshot: DriverSnapshot,
           attached: boolean,
         ): Effect.Effect<void, HeadWriteError> =>
-          writeSnapshotResponse(writer, id, snapshot, attached, options.snapshotAudit);
+          writeSnapshotResponse(transport, id, snapshot, attached, options.snapshotAudit);
         // Invariant: mutated only in session-serialized handlers; it must become a Ref if attach/detach becomes non-session-serialized.
         const attached = new Set<string>();
         const driver = yield* Driver;
@@ -895,7 +841,7 @@ export const runRpcHead = (options: RpcHeadOptions) => {
           yield* driver.resumeSession(options.resumeSessionId);
         }
 
-        const run = strictLfFrames(options.input).pipe(
+        const run = transport.frames(options.input).pipe(
           Stream.runForEach((frame) => {
             const commandName = frameStringField(frame, "_tag") ?? "malformed";
             let correlationId = frameStringField(frame, "id");
@@ -909,7 +855,7 @@ export const runRpcHead = (options: RpcHeadOptions) => {
                 dispatcher.dispatch({
                   eofBehavior: command._tag === "prompt" ? "interrupt" : "drain",
                   onBoundExceeded: (error, dispatchContext) =>
-                    handleDispatchBoundExceeded(writer, correlationId, error).pipe(
+                    handleDispatchBoundExceeded(transport, correlationId, error).pipe(
                       Effect.withSpan("rpc.frame", {
                         attributes: {
                           bypass: dispatchContext.bypass,
@@ -930,7 +876,7 @@ export const runRpcHead = (options: RpcHeadOptions) => {
                               return writeSnapshot(command.id, snapshot, true);
                             }
                             const head: RpcInteractiveHead = {
-                              send: (request) => writer.write(`${JSON.stringify(request)}\n`),
+                              send: (request) => transport.send(request),
                             };
                             return Effect.sync(() =>
                               interactiveHeads.set(command.sessionId, head),
@@ -981,7 +927,7 @@ export const runRpcHead = (options: RpcHeadOptions) => {
                           .abortTurn(command.sessionId)
                           .pipe(
                             Effect.flatMap((result) =>
-                              writeResponse(writer, command.id, abortResult(result)),
+                              writeResponse(transport, command.id, abortResult(result)),
                             ),
                           );
                       }
@@ -1028,7 +974,7 @@ export const runRpcHead = (options: RpcHeadOptions) => {
                           )
                           .pipe(
                             Effect.flatMap((value) =>
-                              writeResponse(writer, command.id, {
+                              writeResponse(transport, command.id, {
                                 _tag: "commandInvoked",
                                 commandName: command.name,
                                 value: value ?? null,
@@ -1037,13 +983,14 @@ export const runRpcHead = (options: RpcHeadOptions) => {
                           );
                       }
                       if (command._tag === "list") {
-                        return driver
-                          .listSessions()
-                          .pipe(
-                            Effect.flatMap((sessions) =>
-                              writeResponse(writer, command.id, { _tag: "sessionList", sessions }),
-                            ),
-                          );
+                        return driver.listSessions().pipe(
+                          Effect.flatMap((sessions) =>
+                            writeResponse(transport, command.id, {
+                              _tag: "sessionList",
+                              sessions,
+                            }),
+                          ),
+                        );
                       }
                       if (command._tag === "prompt") {
                         return driver
@@ -1098,7 +1045,7 @@ export const runRpcHead = (options: RpcHeadOptions) => {
                         return driver
                           .steer(command.sessionId, command.content)
                           .pipe(
-                            Effect.zipRight(writeResponse(writer, command.id, { _tag: "ack" })),
+                            Effect.zipRight(writeResponse(transport, command.id, { _tag: "ack" })),
                           );
                       }
                       if (command._tag === "subscribe-progress") {
@@ -1111,12 +1058,12 @@ export const runRpcHead = (options: RpcHeadOptions) => {
                             .subscribeProgress(command.sessionId)
                             .pipe(
                               Stream.runForEach((progress) =>
-                                writeProgress(writer, command.sessionId, progress),
+                                writeProgress(transport, command.sessionId, progress),
                               ),
                               Effect.fork,
                             );
                           progressSubscriptions.set(command.sessionId, subscription);
-                          yield* writeResponse(writer, command.id, {
+                          yield* writeResponse(transport, command.id, {
                             _tag: "progressSubscribed",
                             sessionId: command.sessionId,
                             subscribed: true,
@@ -1127,7 +1074,7 @@ export const runRpcHead = (options: RpcHeadOptions) => {
                     }).pipe(
                       Effect.tap(() => Effect.annotateCurrentSpan({ outcome: "ok" })),
                       Effect.catchAllCause((cause) =>
-                        handleFrameCause(writer, correlationId, commandName, cause),
+                        handleFrameCause(transport, correlationId, commandName, cause),
                       ),
                       Effect.withSpan("rpc.frame", {
                         attributes: {
@@ -1144,7 +1091,7 @@ export const runRpcHead = (options: RpcHeadOptions) => {
                 dispatcher.dispatch({
                   eofBehavior: "drain",
                   onBoundExceeded: (error, dispatchContext) =>
-                    handleDispatchBoundExceeded(writer, correlationId, error).pipe(
+                    handleDispatchBoundExceeded(transport, correlationId, error).pipe(
                       Effect.withSpan("rpc.frame", {
                         attributes: {
                           bypass: dispatchContext.bypass,
@@ -1156,7 +1103,7 @@ export const runRpcHead = (options: RpcHeadOptions) => {
                     ),
                   route: { _tag: "sessionless" },
                   run: (dispatchContext) =>
-                    handleFrameCause(writer, correlationId, commandName, cause).pipe(
+                    handleFrameCause(transport, correlationId, commandName, cause).pipe(
                       Effect.withSpan("rpc.frame", {
                         attributes: {
                           bypass: dispatchContext.bypass,
@@ -1181,12 +1128,12 @@ export const runRpcHead = (options: RpcHeadOptions) => {
                   diagnostic: "protocol_error",
                   reason: error.reason,
                 }),
-                Effect.zipRight(writeProtocolError(writer, undefined, error)),
+                Effect.zipRight(writeProtocolError(transport, undefined, error)),
               ),
           ),
           Effect.zipRight(dispatcher.finish),
         );
-        const writerFailure = writer.failure.pipe(
+        const writerFailure = transport.failure.pipe(
           Effect.tapError(() => Effect.sync(() => options.input.destroy())),
         );
 
