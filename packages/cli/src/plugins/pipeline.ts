@@ -1,35 +1,46 @@
 /**
- * Owns CLI Plugin discovery-config as DiscoveryAdapter -> config only (D-003).
- * It exists so GenerationRuntime's ONE recomposition loader can be tested without a process and so run.ts stays an I/O boundary.
- * The composition root is runtime.ts as thin DiscoveryAdapter over GenerationRuntime; this module is its discovery/guard helper, not the runtime.
- * Not responsible for generation lifetime (GenerationRuntime owns that) or Tool adaptation (adapter owns that).
+ * Owns CLI Plugin discovery-config as thin DiscoveryAdapter over GenerationRuntime (D-003).
+ * It exists so GenerationRuntime's ONE recomposition loader can be tested without a process and so
+ * run.ts stays an I/O boundary. It builds PluginDiscoveryConfig (cliPaths, projectPath,
+ * userGlobalDirectories plus the --no-project-plugins decoy) and delegates file→Generation work
+ * to GenerationRuntime via loadGeneration; first-party catalog, path mapping, and
+ * name-collision invariants live behind FirstPartySuite (02 architecture review).
+ * Why this adapter remains shallow: it adds exactly one Branch (decoy directory when
+ * --no-project-plugins) and delegates the catalog guard to FirstPartySuite; deleting it
+ * would merely move that Branch into GenerationRuntime or its tests, not concentrate
+ * complexity. Its seam is plugin discovery config: two adapters justify it — real
+ * readdir/mkdtemp on the host vs fake config in pipeline.test.ts that proves the same
+ * generation path without first-party duplication.
+ * Not responsible for source enumeration or digest binding (PluginDiscovery owns those via
+ * sources/trust-digest private seams) or for first-party catalog invariants
+ * (FirstPartySuite owns that) or for module import or manifest validation (loader owns
+ * that) or for registry priority (registry owns that) or for generation lifetime/
+ * checkout/drain counting (GenerationRuntime owns that) or for Tool adaptation
+ * (adapter owns that).
  */
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import {
-  type Contribution,
   type GenerationLoadError,
   type GenerationPlugin,
   loadGeneration,
   type PluginDiscoveryConfig,
   type PluginGeneration,
-  type PluginManifest,
   phase1Sources,
   TrustStoreMemory,
 } from "@pop-eye/plugins";
 import { Data, Effect } from "effect";
 
-import { compactPlugin } from "../features/compact.js";
-import { reloadPlugin } from "../features/reload.js";
-import { sessionNamePlugin } from "../features/session-name.js";
+import {
+  defaultFirstPartyPlugins,
+  type FirstPartyPlugin,
+  firstPartyGenerationPlugins,
+  pluginNameCollision,
+} from "../features/first-party-suite.js";
 
-export interface FirstPartyPlugin {
-  readonly contributions: ReadonlyArray<Contribution>;
-  readonly manifest: PluginManifest;
-}
+export type { FirstPartyPlugin } from "../features/first-party-suite.js";
 
 export interface ComposePluginRuntimeOptions {
   readonly firstPartyPlugins?: ReadonlyArray<FirstPartyPlugin>;
@@ -53,41 +64,6 @@ export class PluginPipelineConfigError extends Data.TaggedError("PluginPipelineC
   readonly path: string;
   readonly reason: "decoy_directory_unavailable" | "user_plugin_directory_unavailable";
 }> {}
-
-const firstPartyPath = (plugin: FirstPartyPlugin): string =>
-  plugin === compactPlugin
-    ? fileURLToPath(new URL("../features/compact.js", import.meta.url))
-    : plugin === sessionNamePlugin
-      ? fileURLToPath(new URL("../features/session-name.js", import.meta.url))
-      : plugin === reloadPlugin
-        ? fileURLToPath(new URL("../features/reload.js", import.meta.url))
-        : `first-party:${plugin.manifest.name}`;
-
-const firstPartyGenerationPlugins = (
-  plugins: ReadonlyArray<FirstPartyPlugin>,
-): ReadonlyArray<GenerationPlugin> =>
-  plugins.map((plugin) => ({
-    manifest: plugin.manifest,
-    name: plugin.manifest.name,
-    origin: "first-party" as const,
-    path: firstPartyPath(plugin),
-    scope: "external" as const,
-    version: plugin.manifest.version,
-  }));
-
-const pluginNameCollision = (
-  plugins: ReadonlyArray<GenerationPlugin>,
-): readonly [GenerationPlugin, GenerationPlugin] | undefined => {
-  const pluginByName = new Map<string, GenerationPlugin>();
-  for (const plugin of plugins) {
-    const existing = pluginByName.get(plugin.name);
-    if (existing !== undefined && existing.path !== plugin.path) {
-      return [existing, plugin];
-    }
-    pluginByName.set(plugin.name, plugin);
-  }
-  return undefined;
-};
 
 const pluginNameCollisionError = (
   collision: readonly [GenerationPlugin, GenerationPlugin],
@@ -208,11 +184,7 @@ export const composePluginRuntime = (
           trust: "trusted",
           trustDiagnosticSink: diagnosticSink("trust"),
         });
-        const firstPartyPlugins = options.firstPartyPlugins ?? [
-          compactPlugin,
-          reloadPlugin,
-          sessionNamePlugin,
-        ];
+        const firstPartyPlugins = options.firstPartyPlugins ?? defaultFirstPartyPlugins;
         const firstPartyGeneration = firstPartyGenerationPlugins(firstPartyPlugins);
         return yield* Effect.gen(function* () {
           const collision = pluginNameCollision([...firstPartyGeneration, ...generation.plugins]);
