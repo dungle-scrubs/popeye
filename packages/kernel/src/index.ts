@@ -120,6 +120,18 @@ export {
   ToolRecoveryActionSchema,
 } from "./recovery.js";
 export {
+  branchContains,
+  deriveSettings,
+  makeSessionViewForTest,
+  requireRevision,
+  type SessionSettings,
+  SessionView,
+  type SessionView as SessionViewData,
+  SessionViewLive,
+  type SessionViewService,
+  SessionViewTag,
+} from "./session-view.js";
+export {
   type ResumedSessionInfo,
   ResumedSessionInfoSchema,
   type SessionInfo,

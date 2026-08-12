@@ -3,9 +3,12 @@
  * It exists because D-021 makes the Driver the seam used by tests and the SDK, and the surface
  * plugin Commands are exercised on before wire Heads exist. The interface is deliberately shaped
  * like the Protocol so M20 wire frames map to it one-to-one. It is not a wire transport.
- * Thin adapter over SessionStore (05/D-001): all session lifecycle durability
- * goes through SessionStore (getBranch/appendEntry/appendCompaction/moveLeaf/
- * countDurableLines); compaction still provides Journal to compactBranch as
+ * Deep module over SessionView (01 architecture review): all Branch-derived Session
+ * settings (model/name/thinkingLevel), revision gating, and branch-contains checks
+ * hide behind SessionView.getView — Driver trusts the View instead of re-folding
+ * the Branch. Thin adapter over SessionStore (05/D-001): all session lifecycle
+ * durability goes through SessionStore (getBranch/appendEntry/appendCompaction/
+ * moveLeaf/countDurableLines); compaction still provides Journal to compactBranch as
  * a policy seam, not a direct driver→journal drift. Provider transport stays
  * behind Provider seam.
  *
@@ -14,10 +17,10 @@
  * and subscriptions disagree. Fork copies entries after it creates the target Session. A later copy
  * failure leaves that target Session in the Journal because the Journal has no compensation API.
  *
- * Settings are Branch-derived. The newest model_change, session_name, and thinking_change on the
- * current Branch win independently. Branching to an Entry before a change restores the older
- * value. A Branch command waits behind a running Turn, but expectedRevision can reject a stale
- * queued command.
+ * Settings are Branch-derived via SessionView. The newest model_change, session_name,
+ * and thinking_change on the current Branch win independently. Branching to an Entry
+ * before a change restores the older value. A Branch command waits behind a running
+ * Turn, but expectedRevision can reject a stale queued command via SessionView.
  */
 
 import {
@@ -34,8 +37,8 @@ import {
   type SessionId,
   SessionIdSchema,
 } from "@pop-eye/journal";
-import { type ProtocolError, StaleRevision } from "@pop-eye/protocol";
-import { Context, Effect, Layer, Ref, Schema, type Stream } from "effect";
+import type { ProtocolError } from "@pop-eye/protocol";
+import { Context, Effect, Layer, Schema, type Stream } from "effect";
 
 import {
   Compaction,
@@ -59,6 +62,7 @@ import { type InvokeCommandError, PluginHost, PluginHostNone } from "./plugin-ho
 import { type Progress, ProgressHub, ProgressHubLive, TurnPhaseSchema } from "./progress.js";
 import { Provider, type ThinkingLevel, ThinkingLevelSchema } from "./provider.js";
 import { makeSessionStoreForTest } from "./session-store.js";
+import { deriveSettings as deriveViewSettings, requireRevision } from "./session-view.js";
 import {
   type ResumedSessionInfo,
   type SessionInfo,
@@ -98,12 +102,6 @@ interface DriverSnapshotCore {
   readonly name?: string;
   readonly phase: DriverSnapshot["phase"];
   readonly sessionId: SessionId;
-  readonly thinkingLevel?: ThinkingLevel;
-}
-
-interface SessionSettings {
-  readonly model?: string;
-  readonly name?: string;
   readonly thinkingLevel?: ThinkingLevel;
 }
 
@@ -185,40 +183,6 @@ const entrySchemaMismatch = (entry: Entry, cause: unknown): JournalError =>
 
 const invalidEntryPayload = (kind: string, cause: unknown): JournalDraftRejected =>
   new JournalDraftRejected({ cause, kind, reason: "invalid_payload" });
-
-const deriveSettings = (
-  entries: ReadonlyArray<Entry>,
-): Effect.Effect<SessionSettings, JournalError> =>
-  Effect.gen(function* () {
-    let model: string | undefined;
-    let name: string | undefined;
-    let thinkingLevel: ThinkingLevel | undefined;
-    for (const entry of entries) {
-      if (entry.kind === "model_change") {
-        const payload = yield* decodeModelChange(entry.payload).pipe(
-          Effect.mapError((cause) => entrySchemaMismatch(entry, cause)),
-        );
-        model = payload.model;
-      }
-      if (entry.kind === "session_name") {
-        const payload = yield* decodeSessionName(entry.payload).pipe(
-          Effect.mapError((cause) => entrySchemaMismatch(entry, cause)),
-        );
-        name = payload.name;
-      }
-      if (entry.kind === "thinking_change") {
-        const payload = yield* decodeThinkingChange(entry.payload).pipe(
-          Effect.mapError((cause) => entrySchemaMismatch(entry, cause)),
-        );
-        thinkingLevel = payload.thinkingLevel;
-      }
-    }
-    return {
-      ...(model === undefined ? {} : { model }),
-      ...(name === undefined ? {} : { name }),
-      ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
-    };
-  });
 
 const remapEntryId = (
   ids: ReadonlyMap<EntryId, EntryId>,
@@ -315,10 +279,6 @@ export const DriverLive: Layer.Layer<
     const provider = yield* Provider;
     const sessions = yield* Sessions;
     const turns = yield* Turns;
-    const sessionSettings = yield* Ref.make<ReadonlyMap<SessionId, SessionSettings>>(new Map());
-
-    const cacheSettings = (sessionId: SessionId, settings: SessionSettings): Effect.Effect<void> =>
-      Ref.update(sessionSettings, (current) => new Map(current).set(sessionId, settings));
 
     const readSnapshotCore = (
       sessionId: SessionId,
@@ -333,8 +293,7 @@ export const DriverLive: Layer.Layer<
           });
         }
         const phase = yield* progress.currentPhase(sessionId);
-        const settings = yield* deriveSettings(entries);
-        yield* cacheSettings(sessionId, settings);
+        const settings = yield* deriveViewSettings(entries);
         return {
           entries,
           leaf,
@@ -429,13 +388,6 @@ export const DriverLive: Layer.Layer<
                   EntryDraftSchema.make({ kind: "model_change", payload }),
                 ),
               ),
-              Effect.flatMap(() =>
-                Ref.update(sessionSettings, (current) => {
-                  const next = new Map(current);
-                  next.set(sessionId, { ...(current.get(sessionId) ?? {}), model });
-                  return next;
-                }),
-              ),
             ),
         })
         .pipe(Effect.asVoid);
@@ -458,24 +410,9 @@ export const DriverLive: Layer.Layer<
                   EntryDraftSchema.make({ kind: "thinking_change", payload }),
                 ),
               ),
-              Effect.flatMap(() =>
-                Ref.update(sessionSettings, (current) => {
-                  const next = new Map(current);
-                  next.set(sessionId, { ...(current.get(sessionId) ?? {}), thinkingLevel });
-                  return next;
-                }),
-              ),
             ),
         })
         .pipe(Effect.asVoid);
-
-    const requireCommandRevision = (
-      expectedRevision: number | undefined,
-      revision: number,
-    ): Effect.Effect<void, StaleRevision> =>
-      expectedRevision === undefined || expectedRevision === revision
-        ? Effect.void
-        : Effect.fail(new StaleRevision({ actual: revision, expected: expectedRevision }));
 
     const appendSessionName = (
       sessionId: SessionId,
@@ -486,13 +423,7 @@ export const DriverLive: Layer.Layer<
         Effect.flatMap((payload) =>
           store.appendEntry(sessionId, EntryDraftSchema.make({ kind: "session_name", payload })),
         ),
-        Effect.flatMap(() =>
-          Ref.update(sessionSettings, (current) => {
-            const next = new Map(current);
-            next.set(sessionId, { ...(current.get(sessionId) ?? {}), name });
-            return next;
-          }),
-        ),
+        Effect.asVoid,
       );
 
     return {
@@ -528,7 +459,7 @@ export const DriverLive: Layer.Layer<
             run: (revision) =>
               pluginHost.invokeCommand(name, args, {
                 compactNow: (commandExpectedRevision) =>
-                  requireCommandRevision(commandExpectedRevision, revision).pipe(
+                  requireRevision(commandExpectedRevision, revision).pipe(
                     Effect.zipRight(
                       compactBranch({
                         journal,
@@ -542,7 +473,7 @@ export const DriverLive: Layer.Layer<
                   ),
                 sessionId,
                 setSessionName: (sessionName, commandExpectedRevision) =>
-                  requireCommandRevision(commandExpectedRevision, revision).pipe(
+                  requireRevision(commandExpectedRevision, revision).pipe(
                     Effect.zipRight(appendSessionName(sessionId, sessionName)),
                   ),
               }),
@@ -551,16 +482,23 @@ export const DriverLive: Layer.Layer<
       listSessions: () => sessions.list(),
       prompt: (sessionId, content, options = {}) =>
         turns.runTurn(sessionId, content, options, (turnOptions) =>
-          Ref.get(sessionSettings).pipe(
-            Effect.map((current) => current.get(sessionId)),
-            Effect.map((settings) => ({
+          Effect.gen(function* () {
+            const entries = yield* store
+              .getBranch(sessionId)
+              .pipe(Effect.catchAll(() => Effect.succeed([] as ReadonlyArray<Entry>)));
+            const settings = yield* deriveViewSettings(entries).pipe(
+              Effect.catchAll(() =>
+                Effect.succeed({} as import("./session-view.js").SessionSettings),
+              ),
+            );
+            return {
               ...turnOptions,
-              ...(settings?.model === undefined ? {} : { model: settings.model }),
-              ...(settings?.thinkingLevel === undefined
+              ...(settings.model === undefined ? {} : { model: settings.model }),
+              ...(settings.thinkingLevel === undefined
                 ? {}
                 : { thinkingLevel: settings.thinkingLevel }),
-            })),
-          ),
+            };
+          }),
         ),
       resumeSession: (sessionId) =>
         sessions.resume(sessionId).pipe(Effect.tap(() => readSnapshot(sessionId))),
