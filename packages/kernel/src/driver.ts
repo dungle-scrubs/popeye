@@ -3,6 +3,11 @@
  * It exists because D-021 makes the Driver the seam used by tests and the SDK, and the surface
  * plugin Commands are exercised on before wire Heads exist. The interface is deliberately shaped
  * like the Protocol so M20 wire frames map to it one-to-one. It is not a wire transport.
+ * Thin adapter over SessionStore (05/D-001): all session lifecycle durability
+ * goes through SessionStore (getBranch/appendEntry/appendCompaction/moveLeaf/
+ * countDurableLines); compaction still provides Journal to compactBranch as
+ * a policy seam, not a direct driver→journal drift. Provider transport stays
+ * behind Provider seam.
  *
  * DriverDefault is the supported composition. It shares one ProgressHub instance between Turns,
  * Compaction, and Driver. Composing those layers with separate ProgressHub instances makes phases
@@ -53,6 +58,7 @@ import { Mailbox, type MailboxFailure, MailboxLive, type MailboxOptions } from "
 import { type InvokeCommandError, PluginHost, PluginHostNone } from "./plugin-host.js";
 import { type Progress, ProgressHub, ProgressHubLive, TurnPhaseSchema } from "./progress.js";
 import { Provider, type ThinkingLevel, ThinkingLevelSchema } from "./provider.js";
+import { makeSessionStoreForTest } from "./session-store.js";
 import {
   type ResumedSessionInfo,
   type SessionInfo,
@@ -302,6 +308,7 @@ export const DriverLive: Layer.Layer<
   Effect.gen(function* () {
     const compaction = yield* Compaction;
     const journal = yield* Journal;
+    const store = makeSessionStoreForTest(journal);
     const mailbox = yield* Mailbox;
     const pluginHost = yield* PluginHost;
     const progress = yield* ProgressHub;
@@ -317,7 +324,7 @@ export const DriverLive: Layer.Layer<
       sessionId: SessionId,
     ): Effect.Effect<DriverSnapshotCore, JournalFailure> =>
       Effect.gen(function* () {
-        const entries = yield* journal.readBranch(sessionId);
+        const entries = yield* store.getBranch(sessionId);
         const leaf = entries.at(-1);
         if (leaf === undefined) {
           return yield* new JournalError({
@@ -356,7 +363,7 @@ export const DriverLive: Layer.Layer<
       fromEntryId: EntryId,
     ): Effect.Effect<DriverSnapshot, JournalFailure | MailboxFailure> =>
       Effect.gen(function* () {
-        const source = yield* journal.readBranch(sessionId);
+        const source = yield* store.getBranch(sessionId);
         const branchPoint = source.findIndex((entry) => entry.id === fromEntryId);
         if (branchPoint < 0) {
           return yield* new JournalError({
@@ -379,15 +386,15 @@ export const DriverLive: Layer.Layer<
               ? yield* decodeCompaction(entry.payload).pipe(
                   Effect.mapError((cause) => entrySchemaMismatch(entry, cause)),
                   Effect.flatMap((payload) => remapCompaction(ids, payload)),
-                  Effect.flatMap((payload) => journal.appendCompaction(created.id, payload)),
+                  Effect.flatMap((payload) => store.appendCompaction(created.id, payload)),
                 )
-              : yield* journal.appendEntry(
+              : yield* store.appendEntry(
                   created.id,
                   EntryDraftSchema.make({ kind: entry.kind, payload: entry.payload }),
                 );
           ids.set(entry.id, appended.id);
         }
-        const copied = yield* journal.readBranch(created.id);
+        const copied = yield* store.getBranch(created.id);
         const unanswered = yield* unansweredToolCalls(copied);
         for (const call of unanswered) {
           const payload = yield* decodeToolResult({
@@ -397,13 +404,10 @@ export const DriverLive: Layer.Layer<
             toolCallId: call.id,
             toolName: call.name,
           }).pipe(Effect.mapError((cause) => invalidEntryPayload("message", cause)));
-          yield* journal.appendEntry(
-            created.id,
-            EntryDraftSchema.make({ kind: "message", payload }),
-          );
+          yield* store.appendEntry(created.id, EntryDraftSchema.make({ kind: "message", payload }));
         }
         const core = yield* readSnapshotCore(created.id);
-        const revision = yield* journal.countDurableLines(created.id);
+        const revision = yield* store.countDurableLines(created.id);
         return makeSnapshot(core, revision);
       });
 
@@ -420,7 +424,7 @@ export const DriverLive: Layer.Layer<
             decodeModelChange({ model }).pipe(
               Effect.mapError((cause) => invalidEntryPayload("model_change", cause)),
               Effect.flatMap((payload) =>
-                journal.appendEntry(
+                store.appendEntry(
                   sessionId,
                   EntryDraftSchema.make({ kind: "model_change", payload }),
                 ),
@@ -449,7 +453,7 @@ export const DriverLive: Layer.Layer<
             decodeThinkingChange({ thinkingLevel }).pipe(
               Effect.mapError((cause) => invalidEntryPayload("thinking_change", cause)),
               Effect.flatMap((payload) =>
-                journal.appendEntry(
+                store.appendEntry(
                   sessionId,
                   EntryDraftSchema.make({ kind: "thinking_change", payload }),
                 ),
@@ -480,7 +484,7 @@ export const DriverLive: Layer.Layer<
       decodeSessionName({ name }).pipe(
         Effect.mapError((cause) => invalidEntryPayload("session_name", cause)),
         Effect.flatMap((payload) =>
-          journal.appendEntry(sessionId, EntryDraftSchema.make({ kind: "session_name", payload })),
+          store.appendEntry(sessionId, EntryDraftSchema.make({ kind: "session_name", payload })),
         ),
         Effect.flatMap(() =>
           Ref.update(sessionSettings, (current) => {
@@ -499,8 +503,8 @@ export const DriverLive: Layer.Layer<
             ...(expectedRevision === undefined ? {} : { expectedRevision }),
             name: "branch",
             run: () =>
-              journal
-                .moveLeaf(sessionId, toEntryId)
+              store
+                .moveLeaf(sessionId, toEntryId as unknown as string)
                 .pipe(Effect.zipRight(readSnapshotCore(sessionId))),
           })
           .pipe(Effect.map((result) => makeSnapshot(result.value, result.revision))),

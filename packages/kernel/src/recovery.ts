@@ -4,6 +4,10 @@
  * well-formedness and ensures that a second crash cannot make the next resume fail.
  * Recovery remains a pure function of a bounded Record slice, so every durable action is
  * inspectable and repeatable without hidden Journal reads.
+ * Thin-adapter note (05/D-001): pure helpers (boundedRecoveryRecords/recoverSession/
+ * applyRecoveryPlan) remain here; SessionStore is the single Journal-calling
+ * orchestrator that owns the readRecords→bounded→readBranch→recover→apply→getLeaf
+ * sequence. This file stays one commit as re-export before callers migrate.
  */
 
 import {

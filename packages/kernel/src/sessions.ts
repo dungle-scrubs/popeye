@@ -1,27 +1,22 @@
 /**
  * Owns Kernel-facing session creation and later lifecycle restoration from the Journal.
  * It exists so Session identity, Leaf position, and revision remain journal-derived at one seam.
+ * Thin adapter over SessionStore (D-001): all Journal calls go through SessionStore,
+ * the single JournalRecovery consumer placement. History-preserving restructure;
+ * recovery.ts stays one commit as re-export.
  */
 
 import {
-  EntryDraftSchema,
   EntrySchema,
   Journal,
-  JournalDraftRejected,
   type JournalFailure,
   type SessionId,
   SessionIdSchema,
 } from "@pop-eye/journal";
 import { Context, Effect, Layer, Schema } from "effect";
-import { SessionNamePayloadSchema } from "./entry-payloads.js";
 import { Mailbox, type MailboxFailure } from "./mailbox.js";
-import {
-  applyRecoveryPlan,
-  boundedRecoveryRecords,
-  type RecoveryReport,
-  RecoveryReportSchema,
-  recoverSession,
-} from "./recovery.js";
+import { type RecoveryReport, RecoveryReportSchema } from "./recovery.js";
+import { makeSessionStoreForTest } from "./session-store.js";
 import { ToolRegistry } from "./tool.js";
 
 export const SessionInfoSchema = Schema.Struct({
@@ -92,25 +87,17 @@ export const SessionsLive = (
       const registry = yield* ToolRegistry;
       const recoveryDiagnosticSink =
         options.recoveryDiagnosticSink ?? defaultRecoveryDiagnosticSink;
+      const store = makeSessionStoreForTest(journal, { recoveryDiagnosticSink });
 
       return {
         create: () =>
           Effect.gen(function* () {
-            const created = yield* journal.createSession();
-            const revision = yield* journal.countDurableLines(created.id);
-            yield* mailbox.activate(created.id);
-            return { id: created.id, leaf: created.rootEntry, revision };
+            const { id, leaf } = yield* store.createSession();
+            const revision = yield* store.countDurableLines(id);
+            yield* mailbox.activate(id);
+            return { id, leaf, revision };
           }),
-        list: () =>
-          journal
-            .listSessions()
-            .pipe(
-              Effect.flatMap((sessions) =>
-                Effect.forEach(sessions, ({ id }) =>
-                  journal.countDurableLines(id).pipe(Effect.map((revision) => ({ id, revision }))),
-                ),
-              ),
-            ),
+        list: () => store.listSessions(),
         resume: (sessionId: SessionId) =>
           Effect.gen(function* () {
             yield* mailbox.activate(sessionId);
@@ -118,25 +105,10 @@ export const SessionsLive = (
               name: "recovery",
               run: () =>
                 Effect.gen(function* () {
-                  const allRecords = yield* journal.readRecords(sessionId);
-                  const records = boundedRecoveryRecords(allRecords);
-                  const entries = yield* journal.readBranch(sessionId);
-                  const plan = yield* recoverSession(records, entries);
-                  const sessionView = yield* registry.view(sessionId);
-                  const report = yield* applyRecoveryPlan(journal, sessionId, plan, {
-                    availableToolNames: new Set(sessionView.list().map((tool) => tool.name)),
-                    snapshot: { entries, records: allRecords },
-                  });
-                  yield* Effect.annotateCurrentSpan({
-                    actionCount: report.actions.length,
-                    entriesAppendedCount: report.entriesAppended.length,
-                    operationIdFound: report.operationIdFound ?? "none",
-                    safeReplayCount: report.safeReplay.length,
-                  });
-                  yield* recoveryDiagnosticSink(report);
-                  const leaf = yield* journal.getLeaf(sessionId);
-                  return { leaf, report };
-                }).pipe(Effect.withSpan("kernel.recovery", { attributes: { sessionId } })),
+                  const view = yield* registry.view(sessionId);
+                  const available = new Set(view.list().map((tool) => tool.name));
+                  return yield* store.resume(sessionId, available);
+                }),
             });
             return {
               id: sessionId,
@@ -150,23 +122,7 @@ export const SessionsLive = (
             .enqueue(sessionId, {
               ...(expectedRevision === undefined ? {} : { expectedRevision }),
               name: "set-session-name",
-              run: () =>
-                Schema.decodeUnknown(SessionNamePayloadSchema)({ name }).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new JournalDraftRejected({
-                        cause,
-                        kind: "session_name",
-                        reason: "invalid_payload",
-                      }),
-                  ),
-                  Effect.flatMap((payload) =>
-                    journal.appendEntry(
-                      sessionId,
-                      EntryDraftSchema.make({ kind: "session_name", payload }),
-                    ),
-                  ),
-                ),
+              run: () => store.appendSessionName(sessionId, name),
             })
             .pipe(Effect.asVoid),
       };
