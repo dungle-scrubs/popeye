@@ -209,6 +209,13 @@ export {
   PluginNameSchema,
 } from "./manifest.js";
 export {
+  makePluginPipelineForTest,
+  PluginPipeline,
+  PluginPipelineLive,
+  type PluginPipelineService,
+  registerPluginSources,
+} from "./plugin-pipeline.js";
+export {
   CommandContributionKind,
   type ContributionConflictDiagnostic,
   type ContributionKind,

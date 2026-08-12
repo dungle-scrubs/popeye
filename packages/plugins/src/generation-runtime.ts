@@ -24,11 +24,12 @@ import type { HookDiagnostic, HookEmitError, HookEmitterService } from "./emitte
 import { HookEmitter, HookEmitterLive } from "./emitter.js";
 import type { ContributionRegistryError, PluginLoadError } from "./errors.js";
 import { TrustResolverTimeoutError } from "./errors.js";
-import { DEFAULT_IMPORT_TIMEOUT_MILLIS, loadPluginModule } from "./loader.js";
+import { DEFAULT_IMPORT_TIMEOUT_MILLIS } from "./loader.js";
 import type { PluginManifest } from "./manifest.js";
+import { registerPluginSources } from "./plugin-pipeline.js";
 import type { ContributionRegistryService, RegistryDiagnostic } from "./registry.js";
 import { ContributionRegistry, ContributionRegistryLive } from "./registry.js";
-import type { PluginDiscoveryError, PluginSource, PluginSourceScope } from "./sources.js";
+import type { PluginDiscoveryError, PluginSourceScope } from "./sources.js";
 import type {
   TrustCheckResult,
   TrustDecision,
@@ -199,29 +200,14 @@ const resolvedTrust = (
   );
 };
 
-const registerSources = (
-  generationId: string,
-  registry: ContributionRegistryService,
-  sources: ReadonlyArray<PluginSource>,
-  importTimeoutMillis?: number,
-): Effect.Effect<ReadonlyArray<GenerationPlugin>, ContributionRegistryError | PluginLoadError> =>
-  Effect.forEach(sources, (source) =>
-    loadPluginModule(source.path, {
-      cacheKey: generationId,
-      ...(importTimeoutMillis === undefined ? {} : { importTimeoutMillis }),
-    }).pipe(
-      Effect.tap((plugin) =>
-        registry.registerPlugin(plugin.manifest, plugin.contributions, source.scope),
-      ),
-      Effect.map((plugin) => ({
-        manifest: plugin.manifest,
-        name: plugin.manifest.name,
-        path: source.path,
-        scope: source.scope,
-        version: plugin.manifest.version,
-      })),
-    ),
-  );
+/**
+ * Private seam of PluginPipeline (C3 architecture review): GenerationRuntime no longer owns
+ * ESM import + manifest validation + registry priority directly; it delegates to
+ * PluginPipeline.register which hides cacheKey and loader caveats behind one seam.
+ * Not responsible for source enumeration (discovery owns that) or for generation
+ * lifetime (this module owns checkout/drain).
+ */
+const registerSources = registerPluginSources;
 
 const loadGenerationRuntimeInternal = (
   options: LoadGenerationOptions,
