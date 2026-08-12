@@ -5,7 +5,7 @@
 > file as features are implemented - never mark a milestone complete
 > until every current-cutoff checkbox under it is checked.
 
-> Current focus: Phase 2 - Generation unification
+> Current focus: Phase 3 - ToolGate deepening
 
 ## Phase 1: Turn deepening
 
@@ -21,10 +21,10 @@ Source: `implementation.md` (M1)
 ### M2: GenerationRuntime single owner
 Source: `implementation.md` (M2)
 
-- [ ] checkout/drain/busy/view via one Ref<{inFlight,drain}>; isReloading single flag; no pendingOlds duplication
-- [ ] makeCliRuntime thin adapter over GenerationRuntime
-- [ ] FakeClock drain + stalled fake provider in-flight as single GenerationRuntime spec
-- [ ] module comments; remove duplicated routing
+- [x] checkout/drain/busy/view via one Ref<{inFlight,drain}>; isReloading single flag; no pendingOlds duplication
+- [x] makeCliRuntime thin adapter over GenerationRuntime
+- [x] FakeClock drain + stalled fake provider in-flight as single GenerationRuntime spec
+- [x] module comments; remove duplicated routing
 
 ## Phase 3: ToolGate deepening
 
@@ -54,7 +54,7 @@ Source: `implementation.md` (Deferred)
 
 ## Summary
 - Total features: 14
-- Completed: 3
-- Remaining: 11
-- Current cutoff blockers: 11
+- Completed: 7
+- Remaining: 7
+- Current cutoff blockers: 7
 - Accepted/deferred follow-up: 1

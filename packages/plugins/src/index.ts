@@ -82,22 +82,37 @@ export {
   TrustResolverTimeoutError,
 } from "./errors.js";
 export type {
+  GenerationLoadError as GenerationLoadErrorLegacy,
+  GenerationPlugin as GenerationPluginLegacy,
+  GenerationSwapDiagnostic as GenerationSwapDiagnosticLegacy,
+  LoadGenerationOptions as LoadGenerationOptionsLegacy,
+  PluginGeneration as PluginGenerationLegacy,
+  PluginRuntime,
+  PluginRuntime as PluginRuntimeLegacy,
+  PluginRuntimeDebugInfo as PluginRuntimeDebugInfoLegacy,
+} from "./generation.js";
+export { makePluginRuntime } from "./generation.js";
+export type {
+  GenerationLease,
   GenerationLoadError,
   GenerationPlugin,
+  GenerationRuntime,
   GenerationSwapDiagnostic,
   LoadGenerationOptions,
   PluginGeneration,
-  PluginRuntime,
   PluginRuntimeDebugInfo,
   TrustResolutionRequest,
   TrustResolver,
-} from "./generation.js";
+} from "./generation-runtime.js";
 export {
   DEFAULT_IMPORT_TIMEOUT_MILLIS,
   DEFAULT_TRUST_RESOLVER_TIMEOUT_MILLIS,
+  GenerationBusyError,
+  GenerationDrainTimeoutError,
   loadGeneration,
-  makePluginRuntime,
-} from "./generation.js";
+  makeGenerationRuntime,
+  makeGenerationRuntimeWithLoader,
+} from "./generation-runtime.js";
 export {
   type CompactionGateHookInput,
   CompactionGateHookInputSchema,

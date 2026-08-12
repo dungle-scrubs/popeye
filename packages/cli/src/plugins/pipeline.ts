@@ -1,8 +1,8 @@
 /**
- * Owns CLI Plugin discovery-config construction and loadGeneration helpers (discovery, guard).
- * It exists so the runtime's ONE recomposition function can be tested without a process and so run.ts stays an I/O boundary.
- * The composition root is runtime.ts over makePluginRuntime; this module is its discovery/guard helper, not the runtime.
- * Not responsible for Tool adaptation (adapter owns that) or generation lifetime (runtime owns that).
+ * Owns CLI Plugin discovery-config as DiscoveryAdapter -> config only (D-003).
+ * It exists so GenerationRuntime's ONE recomposition loader can be tested without a process and so run.ts stays an I/O boundary.
+ * The composition root is runtime.ts as thin DiscoveryAdapter over GenerationRuntime; this module is its discovery/guard helper, not the runtime.
+ * Not responsible for generation lifetime (GenerationRuntime owns that) or Tool adaptation (adapter owns that).
  */
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
