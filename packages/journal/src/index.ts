@@ -21,6 +21,12 @@ export {
 } from "./errors.js";
 export { type CreatedSession, Journal, type JournalService } from "./journal.js";
 export {
+  JournalStore,
+  type JournalStoreEnv,
+  migrateDirectory,
+  selectJournalLayer,
+} from "./journal-store.js";
+export {
   type JournalDiagnostic,
   JournalDiagnosticSchema,
   JournalJsonl,

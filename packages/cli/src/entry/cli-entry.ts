@@ -20,11 +20,10 @@
  * in bin.test.ts and rpc.test.ts.
  */
 
-import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import type { Readable, Writable } from "node:stream";
 
-import { JournalJsonl, JournalSqlite, SessionIdSchema } from "@pop-eye/journal";
+import { JournalStore, type JournalStoreEnv, SessionIdSchema } from "@pop-eye/journal";
 import { type PluginInteractions, PluginInteractionsNullLive } from "@pop-eye/plugins";
 import { Cause, Data, Effect, Exit, Layer, Logger, Schema, Stream } from "effect";
 
@@ -143,22 +142,22 @@ Read stderr to distinguish exit 2 causes.
 `;
 
 // ---------------------------------------------------------------------------
-// Journal layer selection per D-006 <!-- D-006 -->
+// Journal layer selection per D-006 — now delegated to JournalStore deep module (C4 architecture review) <!-- D-006 -->
 // ---------------------------------------------------------------------------
 
 export const selectJournalLayer = (sessionDir: string, env: CliEnvironment) => {
   const explicit = env.PEYE_JOURNAL_LAYER;
-  if (explicit === "sqlite") return JournalSqlite(sessionDir);
-  if (explicit === "jsonl") return JournalJsonl(sessionDir);
-  if (explicit !== undefined && explicit.length > 0) {
-    // Unknown value falls back to jsonl with diagnostic; explicit sqlite/jsonl are the only supported values
+  if (
+    explicit !== undefined &&
+    explicit.length > 0 &&
+    explicit !== "sqlite" &&
+    explicit !== "jsonl"
+  ) {
     Effect.runSync(
       Effect.logWarning(`PEYE_JOURNAL_LAYER=${explicit} unknown, using file-detection`),
     );
   }
-  // File-detection: journal.sqlite present means sqlite, otherwise jsonl
-  const sqliteFile = `${sessionDir}/journal.sqlite`;
-  return existsSync(sqliteFile) ? JournalSqlite(sessionDir) : JournalJsonl(sessionDir);
+  return JournalStore.selectLayer(sessionDir, env as JournalStoreEnv);
 };
 
 // ---------------------------------------------------------------------------

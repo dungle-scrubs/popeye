@@ -1,6 +1,8 @@
 /**
  * Owns the JSONL Journal adapter and recovery of one unacknowledged torn tail.
  * It exists so durable acknowledgement, file validation, and diagnostics stay behind the Journal seam.
+ * Private seam of JournalStore (C4 architecture review): this adapter is selected via
+ * JournalStore.selectLayer, not directly by CLI; WAL vs torn-tail and diagnostics stay behind the store.
  *
  * This is a single-writer design: one in-process layer owns a journal directory at a time. The
  * kernel owns individual sessions, but cross-process locking is intentionally out of scope.

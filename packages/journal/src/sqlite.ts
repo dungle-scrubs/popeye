@@ -1,5 +1,5 @@
 /**
- * Owns the SQLite Journal adapter.
+ * Owns the SQLite Journal adapter as private seam of JournalStore (C4 architecture review).
  * It exists so a large durable journal can live in `journal.sqlite` per directory <!-- D-001 -->
  * behind the same `Journal` tag that memory and JSONL use.
  *
@@ -8,7 +8,8 @@
  * per-directory `journal.sqlite`, and translation between `JournalLine` and rows.
  * Why it exists: SQLite gives transactional appends and indexed reads without
  * JSONL's torn-tail truncation, and is the M1 step before fencing (M2) and
- * pagination (Phase 2).
+ * pagination (Phase 2). Private seam of JournalStore: selection via
+ * JournalStore.selectLayer, not direct CLI import, keeps WAL and fencing diagnostics behind the store.
  * What it does not own: single-writer mailbox serialization (adapter-core),
  * compaction validation (journal.ts), or snapshot pagination (SessionStore).
  */
