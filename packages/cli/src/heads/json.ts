@@ -9,18 +9,18 @@
  */
 
 import type { SessionId } from "@pop-eye/journal";
-import { ProgressSchema, SnapshotSchema } from "@pop-eye/protocol";
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 
 import type { DriverSnapshot } from "../compose.js";
-import { runSessionLoop } from "./session-loop.js";
 import {
+  encodeProgressLine,
+  encodeSnapshotLine,
   type HeadWriter,
-  protocolSnapshot,
   runHeadBoundary,
   type SnapshotAuditFields,
   stdoutHeadWriter,
-} from "./shared.js";
+} from "./head-wire.js";
+import { runSessionLoop } from "./session-loop.js";
 
 export interface JsonHeadOptions {
   readonly prompts: ReadonlyArray<string>;
@@ -29,22 +29,10 @@ export interface JsonHeadOptions {
   readonly writer?: HeadWriter;
 }
 
-const encodeProgressLine = (progress: unknown) =>
-  Schema.decodeUnknown(ProgressSchema, { onExcessProperty: "error" })(progress).pipe(
-    Effect.flatMap(Schema.encode(ProgressSchema)),
-    Effect.map((encoded) => `${JSON.stringify(encoded)}\n`),
-  );
-
-const encodeSnapshotLine = (
+const encodeSnapshotLineForHead = (
   snapshot: DriverSnapshot,
   snapshotAudit: SnapshotAuditFields | undefined,
-) =>
-  Schema.decodeUnknown(SnapshotSchema, { onExcessProperty: "error" })(
-    protocolSnapshot(snapshot, snapshotAudit),
-  ).pipe(
-    Effect.flatMap(Schema.encode(SnapshotSchema)),
-    Effect.map((encoded) => `${JSON.stringify(encoded)}\n`),
-  );
+) => encodeSnapshotLine(snapshot, snapshotAudit);
 
 export const runJsonHead = (options: JsonHeadOptions) =>
   runHeadBoundary(
@@ -53,7 +41,9 @@ export const runJsonHead = (options: JsonHeadOptions) =>
       return yield* runSessionLoop({
         onProgress: (progress) => encodeProgressLine(progress).pipe(Effect.flatMap(writer.write)),
         onSnapshot: (snapshot) =>
-          encodeSnapshotLine(snapshot, options.snapshotAudit).pipe(Effect.flatMap(writer.write)),
+          encodeSnapshotLineForHead(snapshot, options.snapshotAudit).pipe(
+            Effect.flatMap(writer.write),
+          ),
         prompts: options.prompts,
         ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
       });

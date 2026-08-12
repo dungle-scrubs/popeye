@@ -19,7 +19,7 @@ import { Deferred, Effect, Fiber, Stream } from "effect";
 
 import type { DriverSnapshot, TurnResult } from "../compose.js";
 import { Driver } from "../compose.js";
-import { exitCodeForStopReason, type HeadExitCode } from "./shared.js";
+import { exitCodeForStopReason, type HeadExitCode } from "./head-wire.js";
 
 export type HeadProgressHandler = (progress: unknown) => Effect.Effect<void, unknown>;
 export type HeadSnapshotHandler = (snapshot: DriverSnapshot) => Effect.Effect<void, unknown>;

@@ -53,6 +53,17 @@ import {
 
 import { Driver } from "../compose.js";
 import {
+  HEAD_EXIT_CODES,
+  type HeadExitCode,
+  HeadWriteError,
+  type HeadWriter,
+  makeWritableLogfmtLogger,
+  runHeadBoundary,
+  type SnapshotAuditFields,
+  stderrHeadWriter,
+  stdoutHeadWriter,
+} from "./head-wire.js";
+import {
   makeRpcDispatcher,
   type RpcDispatchBoundExceeded,
   type RpcDispatchRoute,
@@ -64,17 +75,6 @@ import {
   RpcReadError as TransportRpcReadError,
   strictLfFrames as transportStrictLfFrames,
 } from "./rpc-transport.js";
-import {
-  HEAD_EXIT_CODES,
-  type HeadExitCode,
-  HeadWriteError,
-  type HeadWriter,
-  makeWritableLogfmtLogger,
-  runHeadBoundary,
-  type SnapshotAuditFields,
-  stderrHeadWriter,
-  stdoutHeadWriter,
-} from "./shared.js";
 
 export const MAX_RPC_FRAME_BYTES = TRANSPORT_MAX_BYTES;
 

@@ -36,10 +36,6 @@ import {
   ProviderError,
   ToolRegistry,
 } from "../compose.js";
-import { runJsonHead } from "../heads/json.js";
-import { runPrintHead } from "../heads/print.js";
-import type { RpcInteractions } from "../heads/rpc.js";
-import { PluginInteractionsRpcLive, RpcInteractionsLive, runRpcHead } from "../heads/rpc.js";
 import {
   errorMessage,
   errorTag,
@@ -49,7 +45,11 @@ import {
   type HeadWriter,
   makeWritableHeadWriter,
   makeWritableLogfmtLogger,
-} from "../heads/shared.js";
+} from "../heads/head-wire.js";
+import { runJsonHead } from "../heads/json.js";
+import { runPrintHead } from "../heads/print.js";
+import type { RpcInteractions } from "../heads/rpc.js";
+import { PluginInteractionsRpcLive, RpcInteractionsLive, runRpcHead } from "../heads/rpc.js";
 import { makeCliRuntime } from "../plugins/runtime.js";
 
 import { CliArgsError, type ParsedRunArgs, parseArgs, withStdinPrompt } from "./args.js";

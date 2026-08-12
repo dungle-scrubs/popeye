@@ -9,14 +9,14 @@
 
 import type { SessionId } from "@pop-eye/journal";
 import { Effect } from "effect";
-import { runSessionLoop } from "./session-loop.js";
 import {
   finalAssistantText,
   type HeadWriter,
   runHeadBoundary,
   stderrHeadWriter,
   stdoutHeadWriter,
-} from "./shared.js";
+} from "./head-wire.js";
+import { runSessionLoop } from "./session-loop.js";
 
 export interface PrintHeadOptions {
   readonly errorWriter?: HeadWriter;

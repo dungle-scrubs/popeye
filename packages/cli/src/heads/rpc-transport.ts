@@ -17,8 +17,8 @@ import { StringDecoder } from "node:string_decoder";
 import { ProtocolError } from "@pop-eye/protocol";
 import type { Scope } from "effect";
 import { Data, Deferred, Effect, Ref, Stream } from "effect";
+import type { HeadWriteError, HeadWriter } from "./head-wire.js";
 import { type SerializedHeadWriter, serializedWriter } from "./rpc-dispatch.js";
-import type { HeadWriteError, HeadWriter } from "./shared.js";
 
 export const MAX_RPC_FRAME_BYTES = 1024 * 1024;
 

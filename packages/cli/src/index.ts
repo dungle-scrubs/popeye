@@ -29,6 +29,16 @@ export {
   CliRunError,
   run,
 } from "./entry/run.js";
+export {
+  encodeProgressLine,
+  encodeSnapshotLine,
+  HEAD_EXIT_CODES,
+  type HeadExitCode,
+  HeadWriteError,
+  type HeadWriter,
+  makeWritableHeadWriter,
+  stdoutHeadWriter,
+} from "./heads/head-wire.js";
 export { type JsonHeadOptions, runJsonHead } from "./heads/json.js";
 export { type PrintHeadOptions, runPrintHead } from "./heads/print.js";
 export {
@@ -42,11 +52,11 @@ export {
   strictLfFrames,
 } from "./heads/rpc.js";
 export {
-  HEAD_EXIT_CODES,
-  type HeadExitCode,
-  HeadWriteError,
-  type HeadWriter,
-  makeWritableHeadWriter,
-  stdoutHeadWriter,
+  HEAD_EXIT_CODES as HEAD_EXIT_CODES_LEGACY,
+  type HeadExitCode as HeadExitCodeLegacy,
+  HeadWriteError as HeadWriteErrorLegacy,
+  type HeadWriter as HeadWriterLegacy,
+  makeWritableHeadWriter as makeWritableHeadWriterLegacy,
+  stdoutHeadWriter as stdoutHeadWriterLegacy,
 } from "./heads/shared.js";
 export { adaptTools, generationCapabilityUnion } from "./tools/adapter.js";

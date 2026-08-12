@@ -6,6 +6,11 @@
  *
  * Why this module: turn.ts was a God Module; callers should depend on a small
  * Turn handle. This module hides retry/batch/compaction/steering.
+ * Deep module over TurnDurability (C2 architecture review): turn-scoped Journal durability
+ * (operation records, assistant/toolResult/steering entries, deduplication, revision counting)
+ * hides behind TurnDurability's handle; this module retains coordination (Context → Provider →
+ * Tool batch → steering decision) and delegates writes to durability. TurnDurability is its
+ * private seam, not a public dependency — callers depend on TurnOrchestrator, not on durability.
  * Not responsible for Journal folding (journal owns that) or generation lifetime
  * (GenerationRuntime owns that). Provider transport stays behind Provider seam.
  */
@@ -58,14 +63,9 @@ import {
   DEFAULT_RETRY_BASE_DELAY_MS,
   makeProviderRequestRuntime,
 } from "./provider-retry.js";
-import {
-  appendOperationFinished,
-  appendOperationStarted,
-  appendToolStarted,
-  createOperationId,
-} from "./records.js";
 import { ToolRegistry } from "./tool.js";
 import { executeToolBatch, type ToolBatchResult, type ToolCall } from "./tool-batch.js";
+import { makeTurnDurabilityHandle } from "./turn-durability.js";
 
 export const TurnOptionsSchema = Schema.Struct({
   abortGraceMs: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
@@ -445,6 +445,12 @@ export const TurnOrchestratorLive = (): Layer.Layer<
           const abortSettleFailure = yield* Ref.make<Cause.Cause<JournalFailure> | undefined>(
             undefined,
           );
+          const durability = yield* makeTurnDurabilityHandle({
+            journal,
+            progress,
+            sessionId,
+            turnOrdinal,
+          });
           const abortState = yield* Ref.make<ToolAbortState>({
             completed: new Map(),
             finalized: false,
@@ -458,11 +464,6 @@ export const TurnOrchestratorLive = (): Layer.Layer<
           const text = yield* Ref.make("");
           const toolCalls = yield* Ref.make<ReadonlyArray<BufferedToolCall>>([]);
           const executingCalls = yield* Ref.make<ReadonlyArray<ToolCall> | undefined>(undefined);
-          const persistedToolCallIds = yield* Ref.make<Set<string>>(new Set());
-          const persistenceMutex = yield* Effect.makeSemaphore(1);
-          const operationId = yield* createOperationId();
-          const operationFinished = yield* Ref.make(false);
-          const operationRecorded = yield* Ref.make(false);
           const compactionAttempted = yield* Ref.make(false);
           const providerRuntime = yield* makeProviderRequestRuntime({
             ...(options.retryBaseDelayMs === undefined
@@ -551,29 +552,11 @@ export const TurnOrchestratorLive = (): Layer.Layer<
           const applySteering = (
             items: ReadonlyArray<SteeringItem>,
           ): Effect.Effect<void, JournalFailure> =>
-            Effect.forEach(
-              items,
-              (item) =>
-                journal
-                  .appendEntry(
-                    sessionId,
-                    EntryDraftSchema.make({
-                      kind: "message",
-                      payload: { content: item.content, deliveryMode: "steer", role: "user" },
-                    }),
-                  )
-                  .pipe(
-                    Effect.zipRight(
-                      progress.publish(sessionId, {
-                        _tag: "steeringApplied",
-                        content: item.content,
-                      }),
-                    ),
-                  ),
-              { concurrency: 1 },
-            ).pipe(
-              Effect.zipRight(Ref.update(steeringDrainedCount, (count) => count + items.length)),
-            );
+            durability
+              .appendSteering(items.map((i) => ({ content: i.content })))
+              .pipe(
+                Effect.zipRight(Ref.update(steeringDrainedCount, (count) => count + items.length)),
+              );
 
           const queueConvertedSteering = (
             items: ReadonlyArray<SteeringItem>,
@@ -657,24 +640,10 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                 yield* phaseChanged(progress, sessionId, "SETTLING");
                 const assistantContent = contentOverride ?? (yield* Ref.get(text));
                 if (appendAssistant) {
-                  const assistant = yield* journal.appendEntry(
-                    sessionId,
-                    EntryDraftSchema.make({
-                      kind: "message",
-                      payload:
-                        diagnostic === undefined
-                          ? {
-                              content: assistantContent,
-                              role: "assistant",
-                              stopReason: reason,
-                            }
-                          : {
-                              content: assistantContent,
-                              diagnostic,
-                              role: "assistant",
-                              stopReason: reason,
-                            },
-                    }),
+                  const assistant = yield* durability.appendAssistant(
+                    assistantContent,
+                    reason,
+                    diagnostic,
                   );
                   yield* Effect.annotateCurrentSpan({
                     assistantEntryId: assistant.id,
@@ -689,15 +658,7 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                 if (steeringDecision._tag === "convert") {
                   yield* queueConvertedSteering(steeringDecision.items);
                 }
-                const shouldFinish =
-                  (yield* Ref.get(operationRecorded)) &&
-                  !(yield* Ref.getAndSet(operationFinished, true));
-                if (shouldFinish) {
-                  yield* appendOperationFinished(journal, sessionId, {
-                    operationId,
-                    outcome: reason,
-                  });
-                }
+                yield* durability.finishOperation(reason);
                 yield* finishSettlement(reason);
                 return false;
               }).pipe(Effect.onError(() => finishSettlement(reason))),
@@ -707,33 +668,7 @@ export const TurnOrchestratorLive = (): Layer.Layer<
             result: ToolBatchResult,
             toolName: string,
           ): Effect.Effect<boolean, JournalFailure> =>
-            persistenceMutex.withPermits(1)(
-              Effect.uninterruptible(
-                Effect.gen(function* () {
-                  const persisted = yield* Ref.get(persistedToolCallIds);
-                  if (persisted.has(result.toolCallId)) {
-                    return false;
-                  }
-                  yield* journal.appendEntry(
-                    sessionId,
-                    EntryDraftSchema.make({
-                      kind: "message",
-                      payload: {
-                        content: result.content,
-                        isError: result.isError === true,
-                        role: "toolResult",
-                        toolCallId: result.toolCallId,
-                        toolName,
-                      },
-                    }),
-                  );
-                  yield* Ref.update(persistedToolCallIds, (current) =>
-                    new Set(current).add(result.toolCallId),
-                  );
-                  return true;
-                }),
-              ),
-            );
+            durability.appendToolResult(result, toolName);
 
           const finalizeExecutingToolResults = (): Effect.Effect<boolean, JournalFailure> =>
             Ref.modify(abortState, (current) => [
@@ -1029,20 +964,7 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                     ),
                   );
                 const onToolStarted = (call: ToolCall): Effect.Effect<void, JournalFailure> =>
-                  appendToolStarted(journal, sessionId, {
-                    operationId,
-                    replay: sessionView.get(call.name)?.replay ?? "never",
-                    toolCallId: call.id,
-                    toolName: call.name,
-                  }).pipe(
-                    Effect.zipRight(
-                      progress.publish(sessionId, {
-                        _tag: "toolStarted",
-                        name: call.name,
-                        toolCallId: call.id,
-                      }),
-                    ),
-                  );
+                  durability.markToolStarted(call, sessionView.get(call.name)?.replay ?? "never");
                 const batchOptions =
                   options.toolConcurrency === undefined
                     ? {
@@ -1082,14 +1004,7 @@ export const TurnOrchestratorLive = (): Layer.Layer<
               sessionId,
               EntryDraftSchema.make({ kind: "message", payload: { content, role: "user" } }),
             );
-            yield* Effect.uninterruptible(
-              appendOperationStarted(journal, sessionId, {
-                intent: "turn",
-                operationId,
-                promptEntryId: user.id,
-                turnOrdinal,
-              }).pipe(Effect.zipRight(Ref.set(operationRecorded, true))),
-            );
+            yield* durability.beginOperation(user.id);
             yield* Effect.annotateCurrentSpan({ sessionId, turnOrdinal, userEntryId: user.id });
             let reason = yield* request();
             while (

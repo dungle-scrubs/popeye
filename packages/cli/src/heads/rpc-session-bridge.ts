@@ -25,9 +25,9 @@ import type { InteractionRequest, InteractionResponse } from "@pop-eye/protocol"
 import { snapshotView } from "@pop-eye/protocol";
 import { Effect, Fiber, Stream } from "effect";
 import type { Driver } from "../compose.js";
+import type { HeadWriteError } from "./head-wire.js";
+import { protocolSnapshot, type SnapshotAuditFields } from "./head-wire.js";
 import type { RpcInteractionsService } from "./rpc.js";
-import type { HeadWriteError } from "./shared.js";
-import { protocolSnapshot, type SnapshotAuditFields } from "./shared.js";
 
 // ---------------------------------------------------------------------------
 // Types shared with router (imported by rpc.ts for dispatch routing)
