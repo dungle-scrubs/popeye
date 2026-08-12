@@ -26,6 +26,7 @@ import {
 } from "../compose.js";
 import type { SnapshotAuditFields } from "../heads/shared.js";
 import { adaptTools, generationCapabilityUnion } from "../tools/adapter.js";
+import { clearToolGateSessionMemory } from "../tools/tool-gate.js";
 import { type ComposePluginRuntimeOptions, composePluginRuntime } from "./pipeline.js";
 import { ReloadBusyError, ReloadControl } from "./reload.js";
 
@@ -245,6 +246,8 @@ export const makeCliRuntime = (
           return cause;
         }),
       );
+      // GenerationSwap: clear ToolGate session memory (generation-scoped forget, fail-closed)
+      yield* clearToolGateSessionMemory;
       // Refresh sync cache after successful swap
       const fresh = yield* generationRuntime.currentGeneration;
       const freshGrants = createCapabilityGrants(

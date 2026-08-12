@@ -1,8 +1,8 @@
 /**
- * Owns the opt-in tool-vetting Plugin as a linkable module.
+ * Owns the opt-in tool-vetting Plugin as a linkable module (second adapter for tool-call-gate).
  * It exists so a human can vet each Tool call via PluginInteractions: allow once, allow for session, or reject.
- * Session memory is generation-scoped: a reload forgets prior allows (fail-closed).
- * Not responsible for transport (heads own that) or for Hook emission (adapter owns that); this module only owns the gate decision.
+ * Why this module: provides the human vetting decision as a Hook contribution; session memory itself lives in ToolGateService's generation-scoped Ref.
+ * Not responsible for transport (heads own that) or for Hook emission (emitter owns that); this module only owns the vetting prompt decision.
  */
 
 import {
@@ -12,20 +12,20 @@ import {
   type ToolCallGateHookInput,
   type ToolCallGateHookOutput,
 } from "@pop-eye/plugins";
-import { Effect } from "effect";
+import { Effect, Ref } from "effect";
+
+import { toolGateSessionMemoryRef } from "../tools/tool-gate.js";
 
 const makeToolVettingPlugin = () => {
-  // Generation-scoped session memory: allowed (sessionId + toolName) pairs.
-  // The Set lives inside the factory closure so each generation (fresh ESM import with cacheKey)
-  // starts empty; a reload therefore forgets.
-  const allowedForSession = new Set<string>();
-
   const hookRun = (
     input: ToolCallGateHookInput,
   ): Effect.Effect<ToolCallGateHookOutput, unknown, PluginInteractions> =>
     Effect.gen(function* () {
       const key = `${input.sessionId ?? "no-session"}:${input.toolName}`;
-      if (allowedForSession.has(key)) {
+      const allowed = yield* Ref.get(toolGateSessionMemoryRef).pipe(
+        Effect.map((set) => set.has(key)),
+      );
+      if (allowed) {
         yield* Effect.logInfo(
           JSON.stringify({
             diagnostic: "tool_vetting_allow_session_cached",
@@ -93,7 +93,7 @@ const makeToolVettingPlugin = () => {
       }
 
       if (choice === "allow-for-session") {
-        allowedForSession.add(key);
+        yield* Ref.update(toolGateSessionMemoryRef, (set) => new Set([...set, key]));
         yield* Effect.logInfo(
           JSON.stringify({
             diagnostic: "tool_vetting_allow_for_session",

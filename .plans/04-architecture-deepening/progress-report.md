@@ -5,7 +5,7 @@
 > file as features are implemented - never mark a milestone complete
 > until every current-cutoff checkbox under it is checked.
 
-> Current focus: Phase 3 - ToolGate deepening
+> Current focus: Phase 4 - RpcTransport seam realization
 
 ## Phase 1: Turn deepening
 
@@ -31,10 +31,10 @@ Source: `implementation.md` (M2)
 ### M3: ToolGateService
 Source: `implementation.md` (M3)
 
-- [ ] adapter execute delegates to ToolGateService.vet(toolCallId, toolName, args, sessionId)
-- [ ] allow-for-session Ref<Set> owned by service, cleared on GenerationSwap; generation-scoped forget asserted
-- [ ] GateRejected → {content, isError:true} model-visible in call order; diagnostics carry plugin
-- [ ] module comments; gates as second adapters
+- [x] adapter execute delegates to ToolGateService.vet(toolCallId, toolName, args, sessionId)
+- [x] allow-for-session Ref<Set> owned by service, cleared on GenerationSwap; generation-scoped forget asserted
+- [x] GateRejected → {content, isError:true} model-visible in call order; diagnostics carry plugin
+- [x] module comments; gates as second adapters
 
 ## Phase 4: RpcTransport seam realization
 
@@ -54,7 +54,7 @@ Source: `implementation.md` (Deferred)
 
 ## Summary
 - Total features: 14
-- Completed: 7
-- Remaining: 7
-- Current cutoff blockers: 7
+- Completed: 11
+- Remaining: 3
+- Current cutoff blockers: 3
 - Accepted/deferred follow-up: 1

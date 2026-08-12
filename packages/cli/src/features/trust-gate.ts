@@ -1,6 +1,7 @@
 /**
- * Owns the opt-in trust-gate Plugin as a linkable module.
+ * Owns the opt-in trust-gate Plugin as a linkable module (second adapter for trust).
  * It exists so project-local code is gated by human trust decisions via PluginInteractions.
+ * Why this module: provides the trust prompt as a Hook contribution; alternative fake adapters exist for testing.
  * The gate uses a confirm interaction; fallback untrusted makes headless startup deny immediately via the null layer (no stall, clocked).
  * On reload over rpc, an interactive Head can answer trusted to load stage-2, or the fallback untrusted swaps without project plugins.
  * Not responsible for transport (heads own that) or for Trust store I/O (trust owns that); this module only owns the trust Hook decision.
