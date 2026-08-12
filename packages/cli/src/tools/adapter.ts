@@ -1,7 +1,9 @@
 /**
  * Owns unqualified Tool-name collision resolution while adapting Plugin Contributions to kernel
  * Tools. Thin adapter over ToolGateService for vetting; capability filtering remains owned by the grant-aware Plugin registry.
- * Not responsible for gate branching or diagnostics (ToolGateService owns that) or for Tool execution (Tool owns that).
+ * Not responsible for gate branching or diagnostics (ToolGateService + ToolSessionMemory own that) or for Tool execution (Tool owns that).
+ * The adapter creates ONE ToolGateService per generation+grants and shares it across all adapted Tools,
+ * so session memory is generation-scoped and not per-Tool.
  */
 
 import {
@@ -17,7 +19,7 @@ import { Effect } from "effect";
 
 import type { Tool } from "../compose.js";
 import { ToolError } from "../compose.js";
-import { makeToolGateService } from "./tool-gate.js";
+import { makeToolGateService, type ToolGateService } from "./tool-gate.js";
 
 type RegisteredToolContribution = RegisteredContribution<"tool", AnyToolDeclaration>;
 
@@ -42,11 +44,9 @@ export const generationCapabilityUnion = (generation: PluginGeneration): Readonl
 
 const adaptTool = (
   contribution: RegisteredToolContribution,
-  generation: PluginGeneration,
-  grants: CapabilityGrants,
+  toolGate: ToolGateService,
 ): Tool.Any => {
   const tool = contribution.payload;
-  const toolGate = makeToolGateService({ generation, grants });
   return {
     description: tool.description,
     execute: (arguments_, context) =>
@@ -193,5 +193,7 @@ export const adaptTools = (
       (contribution) => !invalidKeys.has(contribution.key),
     );
     const selectedContributions = yield* resolveShadowing(declaredContributions, plugins);
-    return selectedContributions.map((contribution) => adaptTool(contribution, generation, grants));
+    // One gate per generation+grants: session memory is shared across all Tools in the generation.
+    const toolGate = makeToolGateService({ generation, grants });
+    return selectedContributions.map((contribution) => adaptTool(contribution, toolGate));
   });

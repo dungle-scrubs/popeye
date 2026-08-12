@@ -1,7 +1,10 @@
 /**
  * Owns the opt-in tool-vetting Plugin as a linkable module (second adapter for tool-call-gate).
  * It exists so a human can vet each Tool call via PluginInteractions: allow once, allow for session, or reject.
- * Why this module: provides the human vetting decision as a Hook contribution; session memory itself lives in ToolGateService's generation-scoped Ref.
+ * Why this module: provides the human vetting decision as a Hook contribution; session memory
+ * itself lives in ToolSessionMemory's generation-scoped Ref, accessed via a neutral seam.
+ * This module depends on ToolSessionMemory, not on ToolGateService, so the dependency
+ * direction is Plugin -> memory, not Plugin -> gate.
  * Not responsible for transport (heads own that) or for Hook emission (emitter owns that); this module only owns the vetting prompt decision.
  */
 
@@ -12,19 +15,16 @@ import {
   type ToolCallGateHookInput,
   type ToolCallGateHookOutput,
 } from "@pop-eye/plugins";
-import { Effect, Ref } from "effect";
+import { Effect } from "effect";
 
-import { toolGateSessionMemoryRef } from "../tools/tool-gate.js";
+import { hasToolSessionMemory, rememberToolForSession } from "../tools/tool-session-memory.js";
 
 const makeToolVettingPlugin = () => {
   const hookRun = (
     input: ToolCallGateHookInput,
   ): Effect.Effect<ToolCallGateHookOutput, unknown, PluginInteractions> =>
     Effect.gen(function* () {
-      const key = `${input.sessionId ?? "no-session"}:${input.toolName}`;
-      const allowed = yield* Ref.get(toolGateSessionMemoryRef).pipe(
-        Effect.map((set) => set.has(key)),
-      );
+      const allowed = yield* hasToolSessionMemory(input.sessionId, input.toolName);
       if (allowed) {
         yield* Effect.logInfo(
           JSON.stringify({
@@ -93,7 +93,7 @@ const makeToolVettingPlugin = () => {
       }
 
       if (choice === "allow-for-session") {
-        yield* Ref.update(toolGateSessionMemoryRef, (set) => new Set([...set, key]));
+        yield* rememberToolForSession(input.sessionId, input.toolName);
         yield* Effect.logInfo(
           JSON.stringify({
             diagnostic: "tool_vetting_allow_for_session",
