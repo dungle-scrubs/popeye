@@ -127,6 +127,12 @@ export {
   type RecoveryEngineService,
 } from "./recovery-engine.js";
 export {
+  makeSessionConductorForTest,
+  SessionConductor,
+  SessionConductorLive,
+  type SessionConductorService,
+} from "./session-conductor.js";
+export {
   branchContains,
   deriveSettings,
   makeSessionViewForTest,
