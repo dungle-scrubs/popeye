@@ -1,6 +1,12 @@
 /**
- * Owns canonical Plugin source resolution and the phase-2 execution set.
- * It exists so Trust digesting and Plugin loading use the same source enumeration.
+ * Owns Plugin source enumeration as private seam of PluginDiscovery.
+ * It exists so phase-1 (external only) and phase-2 (project-local only) file walks, realpath
+ * resolution, scope classification, and symlink-escape detection hide behind canonical helpers
+ * that PluginDiscovery composes. It is not a standalone seam: callers depend on PluginDiscovery
+ * (phase1Sources/phase2Sources), not on phase1ExecutionSources/phase2ExecutionSources directly.
+ * Not responsible for digest binding or trust decisions (trust-digest owns hashing and limits;
+ * discovery owns the trusted/untrusted branch) or for import/manifest validation (loader owns that)
+ * or for registry priority (registry owns that).
  */
 import { readdir, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";

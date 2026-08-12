@@ -1,19 +1,22 @@
 /**
- * Owns RPC session lifecycle against Driver and RpcInteractions.
+ * Owns RpcSessionBridge deep module for Driver-facing session lifecycle.
  * It exists so per-Session Driver sequencing, attach/detach
  * lifecycle, PluginInteractions wiring, Snapshot audit, and
- * Progress subscription management hide behind one deep interface.
+ * Progress subscription management hide behind one deep interface
+ * handle(command: BridgeCommand).
  *
  * Why this module: rpc.ts was 1,168 lines, owning decode/routing
  * plus Driver effects plus interaction clock plus Plugin
  * Interactions wiring. Transport (367) and dispatch (344) were
  * extracted, but the Head itself remained a God-module. This
- * module owns the Driver-facing session handling, leaving rpc.ts
- * as thin router over RpcTransport + RpcDispatcher.
+ * module owns the Driver-facing session handling, leaving RpcHead
+ * as the deep module that composes Transport + Dispatcher + Bridge
+ * behind runRpcHead(input, writer). It is the Head's private seam
+ * for session concerns, not a standalone public dependency.
  * Not responsible for byte framing or JSON serialization
- * (rpc-transport owns that) or for dispatch policy/fairness
- * (rpc-dispatch owns that) or for wire error mapping
- * (rpc.ts router owns that).
+ * (RpcTransport owns LF/1MB/U+2028/Buffer provenance) or for dispatch
+ * policy/fairness (RpcDispatcher owns FIFO caps) or for wire error
+ * mapping and decode routing (RpcHead owns those).
  */
 
 import type { SessionId } from "@pop-eye/journal";

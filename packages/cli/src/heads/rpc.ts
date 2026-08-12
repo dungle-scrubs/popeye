@@ -1,13 +1,21 @@
 /**
- * Owns RPC command routing and protocol effects for one long-lived stdio Head.
- * Thin router over RpcTransport (framing) + RpcDispatcher (per-Session FIFO)
- * + RpcSessionBridge (Driver-facing session lifecycle). Dispatch workers run
- * handlers outside the read loop: FIFO per Session, FIFO for sessionless
- * commands, concurrent across Sessions, and immediate for control frames.
- * Why this split: routing and Driver effects now live in rpc-session-bridge;
- * framing lives in rpc-transport; dispatch policy lives in rpc-dispatch.
- * Not responsible for byte framing, JSON serialization, or session
- * handling — those live in transport, dispatch, and bridge respectively.
+ * Owns RpcHead deep module for one long-lived stdio Head.
+ * It exists so interaction lifecycle, decode routing, wire error mapping, framing, dispatch,
+ * and session lifecycle hide behind one seam: runRpcHead({ input, writer }).
+ * Why this module: rpc.ts was 1,168 lines owning decode plus Driver effects plus interaction
+ * clock plus PluginInteractions wiring. Transport (367) and Dispatch (344) and Bridge (402) were
+ * extracted as deep seams, but the router still owned the heads/pending interaction bag, JSON
+ * decode branch, ProtocolError→WireError mapping, correlation-id extraction, and span attributes.
+ * This module now owns that bag: it hides the Ref<Map<sessionId, Head>> plus
+ * Ref<Map<requestId, PendingInteraction>> state, the decodeRpcInboundCommand tag switch
+ * (attach/detach/interaction-response vs CommandSchema), and the wire snapshot audit stamp
+ * routing via RpcSessionBridge behind one interface. Callers depend on runRpcHead; the three
+ * extracted modules are its private seams, not public dependencies.
+ * Not responsible for byte framing or per-Session FIFO queueing (RpcTransport owns LF/1MB/
+ * U+2028 provenance; RpcDispatcher owns FIFO caps) or for Driver sequencing/Snapshot audit/
+ * Progress subscription (RpcSessionBridge owns those). The seam is process I/O: two adapters
+ * justify it — SerializedRpcTransport over a real HeadWriter and FakeTransport over captured
+ * Buffers — both exercised in rpc.test.ts without second byte-hacks.
  * See pi's framing lesson: https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/rpc.md
  */
 

@@ -1,8 +1,14 @@
 /**
  * Owns RpcTransport deep module for framing (LF, 1MB, U+2028/2029, Buffer provenance, per-Session FIFO).
- * It exists to surface framing guarantees via interface and prove seam real via two adapters.
- * Why this module: rpc.ts was doing LF split + 1MB + Buffer handling inline; transport hides serialization and queues.
- * Not responsible for dispatch policy (rpc-dispatch owns that) or protocol schemas (protocol owns that).
+ * It exists to surface framing guarantees via interface and prove the seam real via two adapters:
+ * SerializedRpcTransport over a real HeadWriter and FakeTransport/FakeRpcTransport over captured
+ * Buffers — the latter proves Buffer provenance without a second soak.
+ * Why this module: rpc.ts was doing LF split + 1MB + Buffer handling inline; transport hides
+ * serialization and queue-depth tracking behind writeFrame/readFrames/frames/send. It is a private
+ * seam of RpcHead: callers depend on RpcHead.runRpcHead, not on Transport directly.
+ * Not responsible for dispatch policy or FIFO fairness (RpcDispatcher owns queue caps and worker
+ * scheduling) or for session lifecycle or Snapshot audit (RpcSessionBridge owns those) or for
+ * protocol decode/encode (RpcHead owns tag routing and ProtocolError mapping).
  */
 
 import type { Readable } from "node:stream";

@@ -3,7 +3,14 @@
  * It exists because D-003 needs one Ref counting the lease; CLI and future TUI reuse without copy.
  * Why this module: makePluginRuntime was the single owner but CLI duplicated routing (pendingOlds, isReloading).
  * This module owns the ONE routing Ref<{inFlight,drain}> and ONE isReloading flag; CLI becomes DiscoveryAdapter -> config only.
- * Not responsible for discovery (pipeline owns that) or Turn orchestration (TurnOrchestrator owns that).
+ * It consumes PluginDiscovery (discovery.ts) as its private seam for phase1/2 source enumeration
+ * and digest verification: GenerationRuntime calls phase1Sources for trust prompts and phase2Sources
+ * for execution, and loader + registry are its other private seams for import and priority. Callers
+ * depend on GenerationRuntime's checkout/use/reload; they do not reach through to discovery,
+ * loader, or registry directly, so checkout counting and drain timing are localized to the one Ref.
+ * Not responsible for source enumeration shape (sources owns file walks) or digest hash limits
+ * (trust-digest owns bounds) or module import caveats (loader owns ESM cacheKey tradeoffs) or
+ * Turn orchestration (TurnOrchestrator owns retry/batch/compaction/steering).
  */
 
 import { randomUUID } from "node:crypto";

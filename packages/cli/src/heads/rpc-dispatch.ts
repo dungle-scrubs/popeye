@@ -1,11 +1,17 @@
 /**
- * Owns RPC dispatch policy and serialized output independently of protocol command routing.
- * Session workers preserve FIFO order, the sessionless worker preserves connection-level order, and
- * control handlers bypass both. Interrupting an interruptible write releases its permit after
- * interruption finalizers run. An explicitly uninterruptible write keeps its permit until it
- * completes or reaches an interruptible region.
- * Why this split: dispatch policy (routing, queue bounds, FIFO per Session) stays here; framing (LF, 1MB, U+2028/2029, Buffer) lives in rpc-transport.
- * Not responsible for byte framing or JSON serialization (rpc-transport owns that).
+ * Owns RpcDispatcher deep module for per-Session dispatch policy and serialized output.
+ * It exists so FIFO per Session, FIFO for sessionless commands, and immediate control bypass
+ * hide behind one seam: dispatch({ route, run, onBoundExceeded, eofBehavior }). The dispatch
+ * workers preserve connection-level order for sessionless commands, concurrent execution across
+ * Sessions, and immediate bypass for control frames (abort/interaction-response).
+ * Why this module: routing and queue bounds were inline in rpc.ts; dispatch policy now lives
+ * here behind one interface, and RpcHead is the only caller. Interrupting an interruptible write
+ * releases its permit after finalizers; an uninterruptible write keeps its permit until it reaches
+ * an interruptible region — that guarantee lives here, not in the Head.
+ * Not responsible for byte framing or JSON serialization (RpcTransport owns LF/1MB/U+2028/Buffer
+ * provenance) or for session lifecycle or PluginInteractions wiring (RpcSessionBridge owns those)
+ * or for wire error mapping (RpcHead owns ProtocolError→WireError). It is a private seam of
+ * RpcHead; callers depend on runRpcHead, not on Dispatcher directly.
  */
 
 import type { Scope } from "effect";

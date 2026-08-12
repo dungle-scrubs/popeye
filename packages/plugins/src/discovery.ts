@@ -1,7 +1,24 @@
 /**
- * Owns two-phase Plugin discovery around the Trust boundary.
- * It exists so phase 2 verifies trusted content immediately before it returns executable sources.
- * Discovery is not a Trust decision source. A project cannot approve itself.
+ * Owns PluginDiscovery deep module for two-phase Plugin discovery around the Trust boundary.
+ * It exists so source enumeration, digest binding, and trust decision branching hide behind one
+ * seam: phase1Sources(config) for trust-prompt needs and phase2Sources(config, decision) for
+ * execution. Phase 2 verifies trusted content immediately before it returns executable sources,
+ * failing closed on digest mismatch so a project cannot approve itself by swapping files after
+ * trust was granted.
+ * Why this module: understanding "how a file becomes a live Tool" previously required bouncing
+ * between sources.ts (phase1/2 enumeration + realpath), trust-digest.ts (hash binding), loader.ts
+ * (import + timeout), and registry.ts (priority tiebreak) — 6 hops for one concept, each seam's
+ * interface nearly as complex as its implementation. This module hides file enumeration via
+ * sources.ts, content binding via trust-digest.ts, and the trusted/untrusted branch behind two
+ * methods; callers depend on PluginDiscovery, not on sources or digest directly. GenerationRuntime
+ * and pipeline are its only consumers, via the single trusted decision type, so digest-mismatch and
+ * "untrusted executes no project code" are localized to one module and one test seam.
+ * Not responsible for module import or manifest validation (loader owns native import, type
+ * stripping caveats, and timeout semantics) or for contribution priority and registry writes
+ * (registry owns that) or for generation lifetime and checkout counting (GenerationRuntime owns
+ * that). The seam is filesystem + trust: two adapters justify it — real readdir/realpath on
+ * the host vs FakeSources/FakeDigest in tests that prove "untrusted → no import" without
+ * touching the filesystem.
  */
 import { Effect } from "effect";
 import {

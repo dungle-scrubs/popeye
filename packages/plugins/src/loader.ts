@@ -1,5 +1,5 @@
 /**
- * Owns native Plugin module import and factory construction.
+ * Owns native Plugin module import and factory construction as private seam of the Plugin lifecycle.
  * It exists because D-027 requires Node type stripping through absolute file URLs, without a
  * transforming loader, and reload needs an explicit query-string cache key. That key reloads only
  * the entry module: relative sibling imports keep their original URLs, so sibling edits require a
@@ -7,7 +7,11 @@
  * entry. D-027 accepts that v1 tradeoff because reloads are human-paced rather than a hot loop.
  * Import timeout (RFC Design 4, 03/D-010) bounds composition latency only: native ESM imports are
  * not cancellable, a timed-out import's side effects may still run later, and repeated reload
- * attempts with cache-busted specifiers accumulate registry entries.
+ * attempts with cache-busted specifiers accumulate registry entries. It is consumed via
+ * PluginDiscovery→GenerationRuntime; callers depend on GenerationRuntime.loadGeneration, not on
+ * loadPluginModule directly, so timeout vs registry-accumulation tradeoffs are localized here.
+ * Not responsible for source enumeration or digest binding (discovery/sources own that) or for
+ * contribution priority or hook wiring (registry/emitter own that).
  */
 import { isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";

@@ -1,6 +1,12 @@
 /**
- * Owns the content digest for the exact phase-2 Plugin execution set.
- * It exists so Trust decisions have bounded, fail-closed content binding.
+ * Owns content digests for the exact phase-2 Plugin execution set as private seam of PluginDiscovery.
+ * It exists so Trust decisions have bounded, fail-closed content binding via hashing of the
+ * canonical phase-2 source enumeration. It is not a standalone seam: callers depend on
+ * PluginDiscovery's phase2Sources(trustDecision) which internally verifies digest equality,
+ * not on computeProjectPluginDigest directly. Digest limits (maxFileCount, maxTotalBytes) and
+ * the hash are owned here, but the decision to trust or to recompute lives in discovery.
+ * Not responsible for source enumeration (sources owns file walks) or for trust prompting/storage
+ * (trust owns records and checkTrust), or for module import (loader owns that).
  */
 import { createHash } from "node:crypto";
 import { open, readdir, realpath, stat } from "node:fs/promises";
