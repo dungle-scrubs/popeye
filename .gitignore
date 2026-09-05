@@ -8,3 +8,5 @@ coverage/
 .env
 .env.*
 .peye/
+*.db-wal
+*.db-shm
