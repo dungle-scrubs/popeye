@@ -82,7 +82,7 @@ test("packed packages run both conformance suites in a clean consumer", async ()
     );
 
     const installOptions = [
-      "--offline",
+      "--prefer-offline",
       "--ignore-scripts",
       "--config.auto-install-peers=false",
       "--store-dir",
