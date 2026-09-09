@@ -14,9 +14,9 @@ import {
   ToolRegistryLive,
 } from "../compose.js";
 import { normalizeJsonLines } from "../test-support/json.js";
+import { HEAD_EXIT_CODES, type HeadWriter, makeWritableHeadWriter } from "./head-wire.js";
 import { runJsonHead } from "./json.js";
 import { runPrintHead } from "./print.js";
-import { HEAD_EXIT_CODES, type HeadWriter, makeWritableHeadWriter } from "./shared.js";
 
 type ScriptCase = "abort" | "error" | "plain" | "tool";
 type ScriptPrompt = "defect" | ScriptCase;

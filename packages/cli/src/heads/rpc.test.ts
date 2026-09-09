@@ -13,6 +13,7 @@ import {
   type ProviderService,
   ToolRegistryLive,
 } from "../compose.js";
+import { HeadWriteError, type HeadWriter } from "./head-wire.js";
 import {
   MAX_RPC_FRAME_BYTES,
   RpcInteractions,
@@ -22,7 +23,6 @@ import {
 } from "./rpc.js";
 import { RPC_SESSION_QUEUE_CAPACITY } from "./rpc-dispatch.js";
 import { FakeTransport } from "./rpc-transport.js";
-import { HeadWriteError, type HeadWriter } from "./shared.js";
 
 const idleProvider: ProviderService = {
   streamAssistant: () => Stream.empty,

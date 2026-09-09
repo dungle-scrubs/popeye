@@ -7,11 +7,12 @@
  * at the first non-zero exit.
  * Why this module: print.ts and json.ts duplicated createSession/resumeSession, the
  * Deferred subscriptionReady handshake, Stream.takeUntil(turnSettled), Fiber.join, and
- * exitCodeForStopReason sequencing. shared.ts extracted only writers and boundary; it did
- * not own the lifecycle, so a fix to back-pressure had to be validated in two places.
+ * exitCodeForStopReason sequencing. The former shared.ts grab-bag extracted only writers and
+ * boundary; it did not own the lifecycle, so a fix to back-pressure had to be validated in
+ * two places.
  * This module owns the lifecycle and exposes two thin adapters via one seam.
  * Not responsible for wire encoding (json owns ProgressSchema/SnapshotSchema) or for
- * Protocol framing (rpc-transport owns LF/1MB) or for boundary envelope (shared owns headErrorEnvelope).
+ * Protocol framing (rpc-transport owns LF/1MB) or for boundary envelope (HeadWire owns headErrorEnvelope).
  */
 
 import type { SessionId } from "@pop-eye/journal";

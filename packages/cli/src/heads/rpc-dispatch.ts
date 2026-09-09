@@ -17,7 +17,7 @@
 import type { Scope } from "effect";
 import { Cause, Data, Deferred, Effect, Fiber, FiberSet, Queue, Ref } from "effect";
 
-import type { HeadWriteError, HeadWriter } from "./shared.js";
+import type { HeadWriteError, HeadWriter } from "./head-wire.js";
 
 export const RPC_CONTROL_FORK_CAPACITY = 64;
 export const RPC_SESSION_MAP_CAPACITY = 1_024;

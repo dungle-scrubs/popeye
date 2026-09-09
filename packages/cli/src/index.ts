@@ -51,12 +51,4 @@ export {
   runRpcHead,
   strictLfFrames,
 } from "./heads/rpc.js";
-export {
-  HEAD_EXIT_CODES as HEAD_EXIT_CODES_LEGACY,
-  type HeadExitCode as HeadExitCodeLegacy,
-  HeadWriteError as HeadWriteErrorLegacy,
-  type HeadWriter as HeadWriterLegacy,
-  makeWritableHeadWriter as makeWritableHeadWriterLegacy,
-  stdoutHeadWriter as stdoutHeadWriterLegacy,
-} from "./heads/shared.js";
 export { adaptTools, generationCapabilityUnion } from "./tools/adapter.js";

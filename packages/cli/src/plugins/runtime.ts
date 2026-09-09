@@ -24,7 +24,7 @@ import {
   type Tool,
   type ToolRegistryService,
 } from "../compose.js";
-import type { SnapshotAuditFields } from "../heads/shared.js";
+import type { SnapshotAuditFields } from "../heads/head-wire.js";
 import { adaptTools, generationCapabilityUnion } from "../tools/adapter.js";
 import { clearToolSessionMemory } from "../tools/tool-session-memory.js";
 import { type ComposePluginRuntimeOptions, composePluginRuntime } from "./pipeline.js";

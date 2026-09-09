@@ -1,6 +1,6 @@
 import { Deferred, Effect, Exit, Fiber } from "effect";
 import { expect, test } from "vitest";
-
+import { HeadWriteError, type HeadWriter } from "./head-wire.js";
 import {
   makeRpcDispatcher,
   RPC_CONTROL_FORK_CAPACITY,
@@ -8,7 +8,6 @@ import {
   RPC_SESSIONLESS_QUEUE_CAPACITY,
   serializedWriter,
 } from "./rpc-dispatch.js";
-import { HeadWriteError, type HeadWriter } from "./shared.js";
 
 const healthyWriterState = { checkPoisoned: Effect.void };
 
