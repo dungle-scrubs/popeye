@@ -82,17 +82,6 @@ export {
   TrustResolverTimeoutError,
 } from "./errors.js";
 export type {
-  GenerationLoadError as GenerationLoadErrorLegacy,
-  GenerationPlugin as GenerationPluginLegacy,
-  GenerationSwapDiagnostic as GenerationSwapDiagnosticLegacy,
-  LoadGenerationOptions as LoadGenerationOptionsLegacy,
-  PluginGeneration as PluginGenerationLegacy,
-  PluginRuntime,
-  PluginRuntime as PluginRuntimeLegacy,
-  PluginRuntimeDebugInfo as PluginRuntimeDebugInfoLegacy,
-} from "./generation.js";
-export { makePluginRuntime } from "./generation.js";
-export type {
   GenerationLease,
   GenerationLoadError,
   GenerationPlugin,

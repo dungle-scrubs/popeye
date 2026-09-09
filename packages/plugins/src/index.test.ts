@@ -73,7 +73,7 @@ test("exports the M18 loader and generation interfaces from the public Plugin se
       "TrustResolverTimeoutError",
       "loadGeneration",
       "loadPluginModule",
-      "makePluginRuntime",
+      "makeGenerationRuntime",
     ]),
   );
 });

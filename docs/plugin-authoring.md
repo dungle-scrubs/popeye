@@ -10,7 +10,7 @@ Read their source at
 `@pop-eye/plugins` publishes the manifest, registry, Hook emitter, Trust, discovery, loading, and
 generation APIs. The v1 CLI package publishes Head functions rather than an executable. Its
 first-party host statically composes the compact and Session-name Plugins. An application that uses
-dynamic discovery must wire `makePluginRuntime` into its own host.
+dynamic discovery must wire `makeGenerationRuntime` into its own host.
 
 npm-referenced Plugin packages are not in v1. The loader accepts absolute paths to local TypeScript
 files. Project discovery reads `.peye/plugins/`. User-global directories and explicit CLI paths come

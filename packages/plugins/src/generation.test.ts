@@ -7,8 +7,8 @@ import { Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Tracer } from "ef
 import { expect, test } from "vitest";
 
 import { createCapabilityGrants } from "./capability.js";
-import type { GenerationSwapDiagnostic } from "./generation.js";
-import { loadGeneration, makePluginRuntime } from "./generation.js";
+import type { GenerationSwapDiagnostic } from "./generation-runtime.js";
+import { loadGeneration, makeGenerationRuntime } from "./generation-runtime.js";
 import { InstructionFragmentContributionKind } from "./registry.js";
 import { TrustStoreMemory } from "./trust.js";
 
@@ -163,7 +163,7 @@ test("reload swaps the generation and work admitted after the swap uses only the
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const runtime = yield* makePluginRuntime({
+        const runtime = yield* makeGenerationRuntime({
           config: { cliPaths: [pluginPath], projectPath, userGlobalDirectories: [] },
           trust: "untrusted",
         });
@@ -209,7 +209,7 @@ test("in-flight work finishes on its old generation after reload swaps to the ne
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const runtime = yield* makePluginRuntime({
+        const runtime = yield* makeGenerationRuntime({
           config: { cliPaths: [pluginPath], projectPath, userGlobalDirectories: [] },
           trust: "untrusted",
         });
@@ -266,7 +266,7 @@ test("reload waits for blocking work even after the current generation previousl
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const runtime = yield* makePluginRuntime({
+        const runtime = yield* makeGenerationRuntime({
           config: { cliPaths: [pluginPath], projectPath, userGlobalDirectories: [] },
           generationDiagnosticSink: () => Effect.void,
           trust: "untrusted",
@@ -341,7 +341,7 @@ test("the old generation Scope closes exactly once after its last in-flight work
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const runtime = yield* makePluginRuntime({
+        const runtime = yield* makeGenerationRuntime({
           config: { cliPaths: [pluginPath], projectPath, userGlobalDirectories: [] },
           trust: "untrusted",
         });
@@ -393,7 +393,7 @@ test("reload is serialized and cannot import a new generation during a running g
 
     const markerWasAbsent = await Effect.runPromise(
       Effect.gen(function* () {
-        const runtime = yield* makePluginRuntime({
+        const runtime = yield* makeGenerationRuntime({
           config: { cliPaths: [pluginPath], projectPath, userGlobalDirectories: [] },
           trust: "untrusted",
         });
@@ -457,7 +457,7 @@ test("generation-swap diagnostics and the plugins.reload span report ids, drain,
 
     const returned = await Effect.runPromise(
       Effect.gen(function* () {
-        const runtime = yield* makePluginRuntime({
+        const runtime = yield* makeGenerationRuntime({
           config: { cliPaths: [], projectPath, userGlobalDirectories: [] },
           generationDiagnosticSink: (diagnostic) => Effect.sync(() => diagnostics.push(diagnostic)),
           trust: "trusted",
@@ -508,7 +508,7 @@ test("generation reload passes a 120-iteration admission, interruption, swap, an
 
     const iterations = await Effect.runPromise(
       Effect.gen(function* () {
-        const runtime = yield* makePluginRuntime({
+        const runtime = yield* makeGenerationRuntime({
           config: { cliPaths: [pluginPath], projectPath, userGlobalDirectories: [] },
           generationDiagnosticSink: () => Effect.void,
           generationFinalizerSink: (generationId) =>
@@ -606,7 +606,7 @@ test("unsupported syntax and build failures during reload leave the old generati
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const runtime = yield* makePluginRuntime({
+        const runtime = yield* makeGenerationRuntime({
           config: { cliPaths: [pluginPath], projectPath, userGlobalDirectories: [] },
           generationDiagnosticSink: () => Effect.void,
           trust: "untrusted",
@@ -718,7 +718,7 @@ test("a timed-out Trust resolver fails reload and releases the reload mutex", as
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const runtime = yield* makePluginRuntime({
+        const runtime = yield* makeGenerationRuntime({
           config: { cliPaths: [], projectPath, userGlobalDirectories: [] },
           generationDiagnosticSink: () => Effect.void,
           trust: () =>
