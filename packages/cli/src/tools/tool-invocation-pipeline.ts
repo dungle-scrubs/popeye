@@ -9,9 +9,6 @@
  * and a new vetting policy plugs as another Hook without touching the cache.
  * Not responsible for Tool execution (kernel/tool-batch owns that) or for
  * PluginInteractions transport (heads own that); it only decides allow/block/replace.
- *
- * This file is the deep module; tool-gate.ts re-exports its interface for
- * backward compatibility with existing imports.
  */
 
 import type { CapabilityGrants, PluginGeneration } from "@pop-eye/plugins";
@@ -20,7 +17,7 @@ import { Context, Effect, Layer, type Ref } from "effect";
 import {
   clearToolSessionMemory,
   hasToolSessionMemory,
-  toolGateSessionMemoryRef as sessionMemoryRef,
+  sessionMemoryRef,
 } from "./tool-session-memory.js";
 
 export type GateDecision =
@@ -42,13 +39,6 @@ export class ToolInvocationPipelineTag extends Context.Tag("@pop-eye/cli/ToolInv
   ToolInvocationPipelineTag,
   ToolInvocationPipeline
 >() {}
-
-// Backward-compat alias: old name ToolGateService
-export type ToolGateService = ToolInvocationPipeline;
-export const ToolGateServiceTag = ToolInvocationPipelineTag;
-
-export const toolGateSessionMemoryRef: Ref.Ref<Set<string>> = sessionMemoryRef;
-export const clearToolGateSessionMemory: Effect.Effect<void> = clearToolSessionMemory;
 
 export const makeToolInvocationPipeline = (options: {
   readonly generation: PluginGeneration;
@@ -283,15 +273,8 @@ export const makeToolInvocationPipeline = (options: {
   return { clear, memoryRef, vet };
 };
 
-// Alias for existing callers
-export const makeToolGateService = makeToolInvocationPipeline;
-
 export const ToolInvocationPipelineLive = (options: {
   readonly generation: PluginGeneration;
   readonly grants: CapabilityGrants;
 }): Layer.Layer<ToolInvocationPipelineTag> =>
   Layer.succeed(ToolInvocationPipelineTag, makeToolInvocationPipeline(options));
-
-export const ToolGateServiceLive = ToolInvocationPipelineLive;
-
-export const onGenerationSwap: Effect.Effect<void> = clearToolSessionMemory;

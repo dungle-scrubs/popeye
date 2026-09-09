@@ -12,8 +12,9 @@
 
 import { Effect, Ref } from "effect";
 
-// Private singleton: not exported directly except via helpers. Cleared on generation swap.
-const sessionMemoryRef: Ref.Ref<Set<string>> = Effect.runSync(Ref.make(new Set<string>()));
+// The ONE generation-scoped session allow-list Ref. Cleared on generation swap.
+// Exported for ToolInvocationPipeline's memoryRef member; all other access goes through the helpers below.
+export const sessionMemoryRef: Ref.Ref<Set<string>> = Effect.runSync(Ref.make(new Set<string>()));
 
 const keyOf = (sessionId: string | undefined, toolName: string): string =>
   `${sessionId ?? "no-session"}:${toolName}`;
@@ -34,10 +35,3 @@ export const clearToolSessionMemory: Effect.Effect<void> = Ref.set(
   sessionMemoryRef,
   new Set<string>(),
 );
-
-/**
- * Backward compatibility: older code imported the raw Ref from tool-gate.
- * New code should use hasToolSessionMemory / rememberToolForSession / clearToolSessionMemory.
- * This alias preserves the import path for any external consumer while hiding the Ref behind a seam.
- */
-export const toolGateSessionMemoryRef: Ref.Ref<Set<string>> = sessionMemoryRef;

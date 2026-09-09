@@ -3,7 +3,7 @@
  * It exists so a human can vet each Tool call via PluginInteractions: allow once, allow for session, or reject.
  * Why this module: provides the human vetting decision as a Hook contribution; session memory
  * itself lives in ToolSessionMemory's generation-scoped Ref, accessed via a neutral seam.
- * This module depends on ToolSessionMemory, not on ToolGateService, so the dependency
+ * This module depends on ToolSessionMemory, not on ToolInvocationPipeline, so the dependency
  * direction is Plugin -> memory, not Plugin -> gate.
  * Not responsible for transport (heads own that) or for Hook emission (emitter owns that); this module only owns the vetting prompt decision.
  */

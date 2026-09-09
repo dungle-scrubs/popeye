@@ -1,12 +1,10 @@
 /**
  * Owns unqualified Tool-name collision resolution while adapting Plugin Contributions to kernel
- * Tools. Thin adapter over ToolInvocationPipeline (deep module, formerly ToolGateService) for vetting;
+ * Tools. Thin adapter over ToolInvocationPipeline (deep module) for vetting;
  * capability filtering remains owned by the grant-aware Plugin registry.
  * Not responsible for gate branching or diagnostics (ToolInvocationPipeline + ToolSessionMemory own that) or for Tool execution (Tool owns that).
  * The adapter creates ONE ToolInvocationPipeline per generation+grants and shares it across all adapted Tools,
- * so session memory is generation-scoped and not per-Tool. The ToolGateService alias in
- * tool-invocation-pipeline.ts remains for one more commit for backward compat; new code should
- * import ToolInvocationPipeline directly.
+ * so session memory is generation-scoped and not per-Tool.
  */
 
 import {
@@ -22,7 +20,10 @@ import { Effect } from "effect";
 
 import type { Tool } from "../compose.js";
 import { ToolError } from "../compose.js";
-import { makeToolGateService, type ToolGateService } from "./tool-gate.js";
+import {
+  makeToolInvocationPipeline,
+  type ToolInvocationPipeline,
+} from "./tool-invocation-pipeline.js";
 
 type RegisteredToolContribution = RegisteredContribution<"tool", AnyToolDeclaration>;
 
@@ -47,7 +48,7 @@ export const generationCapabilityUnion = (generation: PluginGeneration): Readonl
 
 const adaptTool = (
   contribution: RegisteredToolContribution,
-  toolGate: ToolGateService,
+  pipeline: ToolInvocationPipeline,
 ): Tool.Any => {
   const tool = contribution.payload;
   return {
@@ -56,7 +57,7 @@ const adaptTool = (
       Effect.gen(function* () {
         const toolCallId = (context as { readonly toolCallId?: string }).toolCallId ?? "unknown";
         const sessionId = context.sessionId as unknown as string | undefined;
-        const decision = yield* toolGate.vet(toolCallId, tool.name, arguments_, sessionId);
+        const decision = yield* pipeline.vet(toolCallId, tool.name, arguments_, sessionId);
 
         if (decision._tag === "Rejected") {
           return { content: decision.reason, isError: true as const };
@@ -196,7 +197,7 @@ export const adaptTools = (
       (contribution) => !invalidKeys.has(contribution.key),
     );
     const selectedContributions = yield* resolveShadowing(declaredContributions, plugins);
-    // One gate per generation+grants: session memory is shared across all Tools in the generation.
-    const toolGate = makeToolGateService({ generation, grants });
-    return selectedContributions.map((contribution) => adaptTool(contribution, toolGate));
+    // One pipeline per generation+grants: session memory is shared across all Tools in the generation.
+    const pipeline = makeToolInvocationPipeline({ generation, grants });
+    return selectedContributions.map((contribution) => adaptTool(contribution, pipeline));
   });
