@@ -12,10 +12,11 @@
  * a policy seam, not a direct driver→journal drift. Provider transport stays
  * behind Provider seam.
  *
- * DriverDefault is the supported composition. It shares one ProgressHub instance between Turns,
- * Compaction, and Driver. Composing those layers with separate ProgressHub instances makes phases
- * and subscriptions disagree. Fork copies entries after it creates the target Session. A later copy
- * failure leaves that target Session in the Journal because the Journal has no compensation API.
+ * DriverDefault is the supported composition. It shares one ProgressHub instance between
+ * TurnOrchestrator, Compaction, and Driver. Composing those layers with separate ProgressHub
+ * instances makes phases and subscriptions disagree. Fork copies entries after it creates the
+ * target Session. A later copy failure leaves that target Session in the Journal because the
+ * Journal has no compensation API.
  *
  * Settings are Branch-derived via SessionView. The newest model_change, session_name,
  * and thinking_change on the current Branch win independently. Branching to an Entry
@@ -77,10 +78,10 @@ import {
   type AbortTurnResult,
   type TurnFailure,
   type TurnOptions,
+  TurnOrchestrator,
+  TurnOrchestratorLive,
   type TurnResult,
-  Turns,
-  TurnsLive,
-} from "./turn.js";
+} from "./turn-orchestrator.js";
 
 export const DriverSnapshotSchema = Schema.Struct({
   entries: Schema.Array(EntrySchema),
@@ -266,7 +267,7 @@ const makeSnapshot = (core: DriverSnapshotCore, revision: number): DriverSnapsho
 export const DriverLive: Layer.Layer<
   Driver,
   never,
-  Compaction | Journal | Mailbox | PluginHost | ProgressHub | Provider | Sessions | Turns
+  Compaction | Journal | Mailbox | PluginHost | ProgressHub | Provider | Sessions | TurnOrchestrator
 > = Layer.effect(
   Driver,
   Effect.gen(function* () {
@@ -278,7 +279,7 @@ export const DriverLive: Layer.Layer<
     const progress = yield* ProgressHub;
     const provider = yield* Provider;
     const sessions = yield* Sessions;
-    const turns = yield* Turns;
+    const orchestrator = yield* TurnOrchestrator;
 
     const readSnapshotCore = (
       sessionId: SessionId,
@@ -427,7 +428,7 @@ export const DriverLive: Layer.Layer<
       );
 
     return {
-      abortTurn: (sessionId) => turns.abortTurn(sessionId),
+      abortTurn: (sessionId) => orchestrator.abortTurn(sessionId),
       branch: (sessionId, toEntryId, expectedRevision) =>
         mailbox
           .enqueue(sessionId, {
@@ -481,7 +482,7 @@ export const DriverLive: Layer.Layer<
           .pipe(Effect.map((result) => result.value)),
       listSessions: () => sessions.list(),
       prompt: (sessionId, content, options = {}) =>
-        turns.runTurn(sessionId, content, options, (turnOptions) =>
+        orchestrator.openTurn(sessionId, content, undefined, options, (turnOptions) =>
           Effect.gen(function* () {
             const entries = yield* store
               .getBranch(sessionId)
@@ -504,7 +505,7 @@ export const DriverLive: Layer.Layer<
         sessions.resume(sessionId).pipe(Effect.tap(() => readSnapshot(sessionId))),
       setModel: updateModel,
       setThinkingLevel: updateThinkingLevel,
-      steer: (sessionId, content) => turns.steer(sessionId, content),
+      steer: (sessionId, content) => orchestrator.steer(sessionId, content),
       subscribeProgress: (sessionId) => progress.subscribe(sessionId),
     } satisfies DriverService;
   }),
@@ -520,7 +521,7 @@ export const DriverDefault = (
   const compaction = CompactionLive(options.compaction).pipe(Layer.provide(shared));
   const kernel = Layer.mergeAll(shared, compaction);
   const sessions = SessionsLive(options.sessions).pipe(Layer.provide(kernel));
-  const turns = TurnsLive().pipe(Layer.provide(Layer.merge(kernel, pluginHost)));
+  const turns = TurnOrchestratorLive().pipe(Layer.provide(Layer.merge(kernel, pluginHost)));
   const dependencies = Layer.mergeAll(kernel, pluginHost, sessions, turns);
   return DriverLive.pipe(Layer.provide(dependencies));
 };

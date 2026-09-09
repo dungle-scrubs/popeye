@@ -13,7 +13,7 @@ import { PluginHostNone } from "../plugin-host.js";
 import { ProgressHubLive } from "../progress.js";
 import { Sessions, SessionsLive } from "../sessions.js";
 import { ToolRegistryLive } from "../tool.js";
-import { Turns, TurnsLive } from "../turn.js";
+import { TurnOrchestrator, TurnOrchestratorLive } from "../turn-orchestrator.js";
 import { PiAiProviderLive } from "./seam.js";
 
 const liveSmoke =
@@ -53,16 +53,19 @@ test.skipIf(liveSmoke === undefined)(
     const liveLayer = Layer.mergeAll(
       turnDependencies,
       SessionsLive().pipe(Layer.provide(Layer.mergeAll(journalLayer, mailboxLayer, toolLayer))),
-      TurnsLive().pipe(Layer.provide(turnDependencies)),
+      TurnOrchestratorLive().pipe(Layer.provide(turnDependencies)),
     );
 
     const output = await Effect.runPromise(
       Effect.gen(function* () {
         const journal = yield* Journal;
         const sessions = yield* Sessions;
-        const turns = yield* Turns;
+        const orchestrator = yield* TurnOrchestrator;
         const session = yield* sessions.create();
-        const settled = yield* turns.runTurn(session.id, "Reply with exactly: peye live smoke");
+        const settled = yield* orchestrator.openTurn(
+          session.id,
+          "Reply with exactly: peye live smoke",
+        );
         return { branch: yield* journal.readBranch(session.id), settled };
       }).pipe(Effect.provide(liveLayer)),
     );

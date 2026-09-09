@@ -105,15 +105,12 @@ export {
   ToolStartedPayloadSchema,
 } from "./records.js";
 export {
-  applyRecoveryPlan,
-  boundedRecoveryRecords,
   type RecoveryAction,
   RecoveryActionSchema,
   type RecoveryApplicationOptions,
   type RecoveryPlan,
   type RecoveryReport,
   RecoveryReportSchema,
-  recoverSession,
   type SafeReplayCall,
   SafeReplayCallSchema,
   type ToolRecoveryAction,
@@ -186,15 +183,10 @@ export {
   type TurnOptions,
   type TurnOptionsResolver,
   TurnOptionsSchema,
-  type TurnResult,
-  TurnResultSchema,
-  Turns,
-  TurnsLive,
-  type TurnsService,
-} from "./turn.js";
-export {
   TurnOrchestrator,
   TurnOrchestratorLive,
   type TurnOrchestratorService,
+  type TurnResult,
+  TurnResultSchema,
   validateTurnOptionsSync,
 } from "./turn-orchestrator.js";

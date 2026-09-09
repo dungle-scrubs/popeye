@@ -34,7 +34,11 @@ import {
 import { appendOperationStarted, createOperationId } from "./records.js";
 import { Sessions, SessionsLive } from "./sessions.js";
 import { defineTool, type Tool, ToolRegistryLive } from "./tool.js";
-import { TURN_INPUT_QUEUE_CAPACITY, Turns, TurnsLive } from "./turn.js";
+import {
+  TURN_INPUT_QUEUE_CAPACITY,
+  TurnOrchestrator,
+  TurnOrchestratorLive,
+} from "./turn-orchestrator.js";
 
 const providerLayer = (service: ProviderService): Layer.Layer<Provider> =>
   Layer.succeed(Provider, service);
@@ -61,7 +65,7 @@ const testLayer = (
   return Layer.mergeAll(
     turnDependencies,
     sessionsLayer,
-    TurnsLive().pipe(Layer.provide(turnDependencies)),
+    TurnOrchestratorLive().pipe(Layer.provide(turnDependencies)),
   );
 };
 
@@ -296,16 +300,16 @@ test("tool-free turn walks IDLE through SETTLING to IDLE and persists final stop
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const progress = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           Effect.sync(() => observed.push(item)),
         ),
       );
       yield* Effect.yieldNow();
 
-      yield* turns.runTurn(session.id, "Hello");
+      yield* orchestrator.openTurn(session.id, "Hello");
 
       yield* Fiber.interrupt(progress);
       return {
@@ -349,16 +353,16 @@ test("truncated provider output settles the turn and progress without degrading 
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const progress = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           Effect.sync(() => observed.push(item)),
         ),
       );
       yield* Effect.yieldNow();
 
-      const settled = yield* turns.runTurn(session.id, "Long answer");
+      const settled = yield* orchestrator.openTurn(session.id, "Long answer");
 
       yield* Fiber.interrupt(progress);
       return { branch: yield* journal.readBranch(session.id), settled };
@@ -389,15 +393,15 @@ test("assistant text and thinking deltas stream only during STREAMING and persis
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const progress = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           Effect.sync(() => observed.push(item)),
         ),
       );
       yield* Effect.yieldNow();
-      yield* turns.runTurn(session.id, "Explain this");
+      yield* orchestrator.openTurn(session.id, "Explain this");
       yield* Fiber.interrupt(progress);
       return yield* journal.readBranch(session.id);
     }).pipe(
@@ -452,17 +456,17 @@ test("steer during a tool-free turn drains at SETTLING and loops before settleme
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const progress = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           Effect.sync(() => observed.push(item)),
         ),
       );
       yield* Effect.yieldNow();
-      const running = yield* Effect.fork(turns.runTurn(session.id, "Initial prompt"));
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Initial prompt"));
       yield* Deferred.await(enteredSettling);
-      yield* turns.steer(session.id, "Steer at settle");
+      yield* orchestrator.steer(session.id, "Steer at settle");
       yield* Deferred.succeed(releaseSettling, undefined);
       const settled = yield* Fiber.join(running);
       yield* Fiber.interrupt(progress);
@@ -526,10 +530,10 @@ test("permanent ProviderError never retries and converts queued steering to FIFO
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const progress = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           Effect.sync(() => observed.push(item)).pipe(
             Effect.zipRight(
               item._tag === "turnSettled" && ++settlements === 3
@@ -540,10 +544,10 @@ test("permanent ProviderError never retries and converts queued steering to FIFO
         ),
       );
       yield* Effect.yieldNow();
-      const running = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Initial"));
       yield* Deferred.await(firstProviderEntered);
-      yield* turns.steer(session.id, "Recover first");
-      yield* turns.steer(session.id, "Recover second");
+      yield* orchestrator.steer(session.id, "Recover first");
+      yield* orchestrator.steer(session.id, "Recover second");
       yield* Deferred.succeed(releaseFirstProvider, undefined);
       const settled = yield* Fiber.join(running);
       const followUpsSettled = yield* Deferred.await(convertedTurnsSettled).pipe(
@@ -594,12 +598,12 @@ test("abort in the settlement drain window prevents a queued steering loop", asy
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const running = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Initial"));
       yield* Deferred.await(enteredSettling);
-      yield* turns.steer(session.id, "Do not loop");
-      const aborted = yield* turns.abortTurn(session.id);
+      yield* orchestrator.steer(session.id, "Do not loop");
+      const aborted = yield* orchestrator.abortTurn(session.id);
       yield* Deferred.succeed(releaseSettling, undefined);
       const settled = yield* Fiber.join(running);
       return {
@@ -647,14 +651,14 @@ test("abort during looped ASSEMBLING does not reuse text from the completed roun
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const running = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Initial"));
       yield* Deferred.await(firstProviderEntered);
-      yield* turns.steer(session.id, "Loop once");
+      yield* orchestrator.steer(session.id, "Loop once");
       yield* Deferred.succeed(releaseFirstProvider, undefined);
       yield* Deferred.await(loopAssembling);
-      const aborted = yield* turns.abortTurn(session.id);
+      const aborted = yield* orchestrator.abortTurn(session.id);
       yield* Deferred.succeed(releaseLoopAssembling, undefined);
       return {
         aborted,
@@ -708,21 +712,21 @@ test("prompt during a running turn routes steer mode to steering and defaults to
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const progress = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           Effect.sync(() => observed.push(item)),
         ),
       );
       yield* Effect.yieldNow();
-      const initial = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      const initial = yield* Effect.fork(orchestrator.openTurn(session.id, "Initial"));
       yield* Deferred.await(providerEntered);
       const steered = yield* Effect.fork(
-        turns.runTurn(session.id, "Steer mode", { deliveryMode: "steer" }),
+        orchestrator.openTurn(session.id, "Steer mode", undefined, { deliveryMode: "steer" }),
       );
       yield* Effect.yieldNow();
-      const followed = yield* Effect.fork(turns.runTurn(session.id, "Default follow-up"));
+      const followed = yield* Effect.fork(orchestrator.openTurn(session.id, "Default follow-up"));
       yield* Effect.yieldNow();
       yield* Deferred.succeed(releaseProvider, undefined);
       const results = yield* Effect.all(
@@ -779,11 +783,11 @@ test("follow-up opens the next turn automatically after the running turn settles
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const initial = yield* Effect.fork(turns.runTurn(session.id, "First turn"));
+      const initial = yield* Effect.fork(orchestrator.openTurn(session.id, "First turn"));
       yield* Deferred.await(providerEntered);
-      const followUp = yield* Effect.fork(turns.runTurn(session.id, "Second turn"));
+      const followUp = yield* Effect.fork(orchestrator.openTurn(session.id, "Second turn"));
       yield* Effect.yieldNow();
       yield* Deferred.succeed(releaseProvider, undefined);
       yield* Fiber.join(initial);
@@ -823,21 +827,21 @@ test("abort discards queued steering and retains follow-ups for the next turn", 
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const progress = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           item._tag === "followUpQueued"
             ? Deferred.succeed(followUpQueued, undefined)
             : Effect.void,
         ),
       );
-      const initial = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      const initial = yield* Effect.fork(orchestrator.openTurn(session.id, "Initial"));
       yield* Deferred.await(providerEntered);
-      yield* turns.steer(session.id, "Discard this steering");
-      const followUp = yield* Effect.fork(turns.runTurn(session.id, "Keep this follow-up"));
+      yield* orchestrator.steer(session.id, "Discard this steering");
+      const followUp = yield* Effect.fork(orchestrator.openTurn(session.id, "Keep this follow-up"));
       yield* Deferred.await(followUpQueued);
-      const aborted = yield* turns.abortTurn(session.id);
+      const aborted = yield* orchestrator.abortTurn(session.id);
       const initialResult = yield* Fiber.join(initial);
       const followUpResult = yield* Fiber.join(followUp);
       yield* Fiber.interrupt(progress);
@@ -871,9 +875,9 @@ test("steering while IDLE rejects typed as phase-invalid", async () => {
   const error = await Effect.runPromise(
     Effect.gen(function* () {
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      return yield* Effect.flip(turns.steer(session.id, "Cannot steer while idle"));
+      return yield* Effect.flip(orchestrator.steer(session.id, "Cannot steer while idle"));
     }).pipe(Effect.provide(testLayer(scriptedProvider([])))),
   );
 
@@ -889,9 +893,9 @@ test("runTurn steer delivery at IDLE starts a normal turn", async () => {
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const settled = yield* turns.runTurn(session.id, "Start from IDLE", {
+      const settled = yield* orchestrator.openTurn(session.id, "Start from IDLE", undefined, {
         deliveryMode: "steer",
       });
       return { branch: yield* journal.readBranch(session.id), settled };
@@ -935,18 +939,18 @@ test("runTurn steer delivery converts to follow-up after settlement closes steer
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const progress = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           Effect.sync(() => observed.push(item)),
         ),
       );
       yield* Effect.yieldNow();
-      const initial = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      const initial = yield* Effect.fork(orchestrator.openTurn(session.id, "Initial"));
       yield* Deferred.await(settlementCountEntered);
       const raced = yield* Effect.fork(
-        turns.runTurn(session.id, "Race follow-up", { deliveryMode: "steer" }),
+        orchestrator.openTurn(session.id, "Race follow-up", undefined, { deliveryMode: "steer" }),
       );
       yield* Effect.yieldNow();
       yield* Deferred.succeed(releaseSettlementCount, undefined);
@@ -994,18 +998,18 @@ test("explicit steer converts to follow-up after settlement closes steering", as
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const progress = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           item._tag === "turnSettled" && ++settlements === 2
             ? Deferred.succeed(secondSettled, undefined)
             : Effect.void,
         ),
       );
-      const initial = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      const initial = yield* Effect.fork(orchestrator.openTurn(session.id, "Initial"));
       yield* Deferred.await(settlementCountEntered);
-      yield* turns.steer(session.id, "Explicit follow-up");
+      yield* orchestrator.steer(session.id, "Explicit follow-up");
       yield* Deferred.succeed(releaseSettlementCount, undefined);
       yield* Fiber.join(initial);
       yield* Deferred.await(secondSettled);
@@ -1063,15 +1067,15 @@ test("tool calls append results in call order while completion order appears onl
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const progress = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           Effect.sync(() => observed.push(item)),
         ),
       );
       yield* Effect.yieldNow();
-      const settled = yield* turns.runTurn(session.id, "Use the tools");
+      const settled = yield* orchestrator.openTurn(session.id, "Use the tools");
       yield* Fiber.interrupt(progress);
       return { branch: yield* journal.readBranch(session.id), settled };
     }).pipe(
@@ -1157,9 +1161,9 @@ test("a Tool-using turn persists its crash-recovery Record sequence", async () =
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      yield* turns.runTurn(session.id, "Record this turn");
+      yield* orchestrator.openTurn(session.id, "Record this turn");
       return {
         branch: yield* journal.readBranch(session.id),
         records: yield* journal.readRecords(session.id),
@@ -1217,9 +1221,9 @@ test("a tool_started Record failure closes every assistant Tool call with a resu
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const error = yield* Effect.flip(turns.runTurn(session.id, "write"));
+      const error = yield* Effect.flip(orchestrator.openTurn(session.id, "write"));
       return {
         branch: yield* journal.readBranch(session.id),
         error,
@@ -1264,7 +1268,7 @@ test("a recovered session accepts and settles a new prompt normally", async () =
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const interruptedPrompt = yield* journal.appendEntry(
         session.id,
@@ -1280,7 +1284,7 @@ test("a recovered session accepts and settles a new prompt normally", async () =
         turnOrdinal: 1,
       });
       const resumed = yield* sessions.resume(session.id);
-      const settled = yield* turns.runTurn(session.id, "Continue after recovery");
+      const settled = yield* orchestrator.openTurn(session.id, "Continue after recovery");
       return { branch: yield* journal.readBranch(session.id), resumed, settled };
     }).pipe(Effect.provide(testLayer(provider))),
   );
@@ -1336,11 +1340,11 @@ test("steer during EXECUTING drains after the tool batch before the next provide
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const running = yield* Effect.fork(turns.runTurn(session.id, "Start tools"));
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Start tools"));
       yield* Deferred.await(toolStarted);
-      yield* turns.steer(session.id, "Use this constraint");
+      yield* orchestrator.steer(session.id, "Use this constraint");
       yield* Deferred.succeed(releaseTool, undefined);
       const settled = yield* Fiber.join(running);
       return {
@@ -1413,9 +1417,9 @@ test("name-last tool call deltas assemble without discarding early argument frag
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const settled = yield* turns.runTurn(session.id, "Assemble fragments");
+      const settled = yield* orchestrator.openTurn(session.id, "Assemble fragments");
       return { branch: yield* journal.readBranch(session.id), settled };
     }).pipe(Effect.provide(testLayer(provider, undefined, ToolRegistryLive([defineTool(echo)])))),
   );
@@ -1483,9 +1487,9 @@ test("tool defects remain model-visible and the turn continues after healthy sib
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const settled = yield* turns.runTurn(session.id, "Run all tools");
+      const settled = yield* orchestrator.openTurn(session.id, "Run all tools");
       return { branch: yield* journal.readBranch(session.id), settled };
     }).pipe(
       Effect.provide(
@@ -1541,9 +1545,11 @@ test("a looping tool-call provider settles at the configured provider round boun
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const settled = yield* turns.runTurn(session.id, "Loop", { maxProviderRounds: 2 });
+      const settled = yield* orchestrator.openTurn(session.id, "Loop", undefined, {
+        maxProviderRounds: 2,
+      });
       return { branch: yield* journal.readBranch(session.id), settled };
     }).pipe(Effect.provide(testLayer(provider, undefined, ToolRegistryLive([defineTool(loop)])))),
   );
@@ -1587,16 +1593,16 @@ test("steering-driven loops settle at the configured provider round bound", asyn
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const running = yield* Effect.fork(
-        turns.runTurn(session.id, "Loop", { maxProviderRounds: 2 }),
+        orchestrator.openTurn(session.id, "Loop", undefined, { maxProviderRounds: 2 }),
       );
       yield* Deferred.await(firstEntered);
-      yield* turns.steer(session.id, "Loop one");
+      yield* orchestrator.steer(session.id, "Loop one");
       yield* Deferred.succeed(releaseFirst, undefined);
       yield* Deferred.await(secondEntered);
-      yield* turns.steer(session.id, "Loop two");
+      yield* orchestrator.steer(session.id, "Loop two");
       yield* Deferred.succeed(releaseSecond, undefined);
       const settled = yield* Fiber.join(running);
       return { branch: yield* journal.readBranch(session.id), settled };
@@ -1623,9 +1629,9 @@ test("toolCalls stop reason without calls settles as a diagnostic error", async 
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const settled = yield* turns.runTurn(session.id, "Degenerate");
+      const settled = yield* orchestrator.openTurn(session.id, "Degenerate");
       return { branch: yield* journal.readBranch(session.id), settled };
     }).pipe(
       Effect.provide(testLayer(scriptedProvider([{ _tag: "done", stopReason: "toolCalls" }]))),
@@ -1665,9 +1671,11 @@ test("retry exhaustion persists an error Entry and settles the turn", async () =
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const settled = yield* turns.runTurn(session.id, "Try again", { maxAttempts: 3 });
+      const settled = yield* orchestrator.openTurn(session.id, "Try again", undefined, {
+        maxAttempts: 3,
+      });
       return { branch: yield* journal.readBranch(session.id), settled };
     }).pipe(Effect.provide(testLayer(failingProvider))),
   );
@@ -1695,15 +1703,15 @@ test("budget exhaustion persists the fold diagnostic and publishes an error sett
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const progress = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           Effect.sync(() => observed.push(item)),
         ),
       );
       yield* Effect.yieldNow();
-      const settled = yield* turns.runTurn(session.id, "Too large", {
+      const settled = yield* orchestrator.openTurn(session.id, "Too large", undefined, {
         compaction: { enabled: false },
         contextBudget: 0,
       });
@@ -1741,9 +1749,11 @@ test("a disabled Compaction service makes overflow settle without a summarize re
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const settled = yield* turns.runTurn(session.id, "Too large", { contextBudget: 0 });
+      const settled = yield* orchestrator.openTurn(session.id, "Too large", undefined, {
+        contextBudget: 0,
+      });
       return { branch: yield* journal.readBranch(session.id), settled };
     }).pipe(
       Effect.provide(
@@ -1784,9 +1794,9 @@ test("compactNow waits for an active turn to settle before it compacts", async (
       const compaction = yield* Compaction;
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const running = yield* Effect.fork(turns.runTurn(session.id, "Hold"));
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Hold"));
       yield* Deferred.await(entered);
       const compacting = yield* Effect.fork(compaction.compactNow(session.id));
       yield* Effect.yieldNow();
@@ -1825,7 +1835,7 @@ test("context overflow triggers compact-then-retry exactly once per turn", async
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       yield* journal.appendEntry(
         session.id,
@@ -1834,7 +1844,7 @@ test("context overflow triggers compact-then-retry exactly once per turn", async
           payload: { content: "Older branch content.", role: "user" },
         }),
       );
-      const settled = yield* turns.runTurn(session.id, "Now", {
+      const settled = yield* orchestrator.openTurn(session.id, "Now", undefined, {
         compaction: { retainedTailCount: 1, sliceBudget: 256 },
         contextBudget: 12,
       });
@@ -1873,7 +1883,7 @@ test("compaction summarization requests are bounded slices", async () => {
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       yield* journal.appendEntry(
         session.id,
@@ -1882,7 +1892,7 @@ test("compaction summarization requests are bounded slices", async () => {
           payload: { content: "x".repeat(500), role: "user" },
         }),
       );
-      yield* turns.runTurn(session.id, "Now", {
+      yield* orchestrator.openTurn(session.id, "Now", undefined, {
         compaction: { retainedTailCount: 0, sliceBudget: 256 },
         contextBudget: 64,
       });
@@ -1942,7 +1952,7 @@ test("successive overflows carry the prior summary marker through compaction-of-
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       yield* journal.appendEntry(
         session.id,
@@ -1955,8 +1965,8 @@ test("successive overflows carry the prior summary marker through compaction-of-
         compaction: { retainedTailCount: 0, sliceBudget: 256 },
         contextBudget: 40,
       } as const;
-      yield* turns.runTurn(session.id, "First", options);
-      yield* turns.runTurn(session.id, "Second", options);
+      yield* orchestrator.openTurn(session.id, "First", undefined, options);
+      yield* orchestrator.openTurn(session.id, "Second", undefined, options);
       return yield* journal.readBranch(session.id);
     }).pipe(Effect.provide(testLayer(provider))),
   );
@@ -1990,7 +2000,7 @@ test("retained tail extends backward to keep a Tool call with its retained resul
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       yield* journal.appendEntry(
         session.id,
@@ -2024,7 +2034,7 @@ test("retained tail extends backward to keep a Tool call with its retained resul
           },
         }),
       );
-      yield* turns.runTurn(session.id, "Continue", {
+      yield* orchestrator.openTurn(session.id, "Continue", undefined, {
         compaction: { retainedTailCount: 2, sliceBudget: 256 },
         contextBudget: 60,
       });
@@ -2058,7 +2068,7 @@ test("Compaction slices long Tool results into plain user fragments", async () =
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       yield* journal.appendEntry(
         session.id,
@@ -2085,7 +2095,7 @@ test("Compaction slices long Tool results into plain user fragments", async () =
           },
         }),
       );
-      yield* turns.runTurn(session.id, "Continue", {
+      yield* orchestrator.openTurn(session.id, "Continue", undefined, {
         compaction: { retainedTailCount: 0, sliceBudget: 256 },
         contextBudget: 32,
       });
@@ -2128,7 +2138,7 @@ test("a transient summarize failure retries under the turn attempt policy", asyn
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       yield* journal.appendEntry(
         session.id,
@@ -2137,7 +2147,7 @@ test("a transient summarize failure retries under the turn attempt policy", asyn
           payload: { content: "x".repeat(80), role: "user" },
         }),
       );
-      return yield* turns.runTurn(session.id, "Now", {
+      return yield* orchestrator.openTurn(session.id, "Now", undefined, {
         compaction: { retainedTailCount: 0, sliceBudget: 256 },
         contextBudget: 20,
         maxAttempts: 2,
@@ -2170,7 +2180,7 @@ test("Compaction slice requests stop at the shared provider-round bound", async 
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       yield* journal.appendEntry(
         session.id,
@@ -2179,7 +2189,7 @@ test("Compaction slice requests stop at the shared provider-round bound", async 
           payload: { content: "x".repeat(600), role: "user" },
         }),
       );
-      const settled = yield* turns.runTurn(session.id, "Now", {
+      const settled = yield* orchestrator.openTurn(session.id, "Now", undefined, {
         compaction: { retainedTailCount: 0, sliceBudget: 256 },
         contextBudget: 20,
         maxAttempts: 1,
@@ -2221,7 +2231,7 @@ test("unsummarizable overflow yields BudgetExceeded with the options diagnostic"
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       yield* journal.appendEntry(
         session.id,
@@ -2230,10 +2240,15 @@ test("unsummarizable overflow yields BudgetExceeded with the options diagnostic"
           payload: { content: "Older overflowing Context.", role: "user" },
         }),
       );
-      const settled = yield* turns.runTurn(session.id, "Retained tail is too large", {
-        compaction: { retainedTailCount: 1, sliceBudget: 256 },
-        contextBudget: 12,
-      });
+      const settled = yield* orchestrator.openTurn(
+        session.id,
+        "Retained tail is too large",
+        undefined,
+        {
+          compaction: { retainedTailCount: 1, sliceBudget: 256 },
+          contextBudget: 12,
+        },
+      );
       return { branch: yield* journal.readBranch(session.id), settled };
     }).pipe(Effect.provide(testLayer(provider))),
   );
@@ -2276,7 +2291,7 @@ test("retry and compaction-trigger diagnostics surface as structured progress", 
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       yield* journal.appendEntry(
         session.id,
@@ -2286,12 +2301,12 @@ test("retry and compaction-trigger diagnostics surface as structured progress", 
         }),
       );
       const subscription = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           Effect.sync(() => observed.push(item)),
         ),
       );
       yield* Effect.yieldNow();
-      const settled = yield* turns.runTurn(session.id, "Now", {
+      const settled = yield* orchestrator.openTurn(session.id, "Now", undefined, {
         compaction: { retainedTailCount: 1, sliceBudget: 256 },
         contextBudget: 12,
         maxAttempts: 2,
@@ -2323,17 +2338,17 @@ test("a journal failure settles progress to IDLE, notifies subscribers, and leav
   const result = await Effect.runPromise(
     Effect.gen(function* () {
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const progress = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           Effect.sync(() => observed.push(item)),
         ),
       );
       yield* Effect.yieldNow();
-      const error = yield* Effect.flip(turns.runTurn(session.id, "Fail journal"));
+      const error = yield* Effect.flip(orchestrator.openTurn(session.id, "Fail journal"));
       yield* Fiber.interrupt(progress);
-      const nextSubscriber = yield* Stream.runHead(turns.subscribeProgress(session.id));
+      const nextSubscriber = yield* Stream.runHead(orchestrator.subscribeProgress(session.id));
       return { error, nextSubscriber };
     }).pipe(Effect.provide(testLayer(scriptedProvider([]), failSecondBranchRead()))),
   );
@@ -2380,16 +2395,16 @@ test("transient ProviderError retries on exponential backoff up to the configure
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const progress = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           Effect.sync(() => observed.push(item)),
         ),
       );
       yield* Effect.yieldNow();
-      yield* turns.runTurn(session.id, "First", { maxAttempts: 3 });
-      yield* turns.runTurn(session.id, "Second");
+      yield* orchestrator.openTurn(session.id, "First", undefined, { maxAttempts: 3 });
+      yield* orchestrator.openTurn(session.id, "Second");
       yield* Fiber.interrupt(progress);
       return yield* journal.readBranch(session.id);
     }).pipe(Effect.provide(testLayer(retryingProvider))),
@@ -2426,11 +2441,11 @@ test("abort during ASSEMBLING settles an empty assistant entry before the provid
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const running = yield* Effect.fork(turns.runTurn(session.id, "Assemble"));
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Assemble"));
       yield* Deferred.await(entered);
-      const aborted = yield* turns.abortTurn(session.id);
+      const aborted = yield* orchestrator.abortTurn(session.id);
       yield* Deferred.succeed(release, undefined);
       return {
         aborted,
@@ -2467,11 +2482,13 @@ test("abort after operation_started lands records a finished operation before re
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const running = yield* Effect.fork(turns.runTurn(session.id, "Abort at operation start"));
+      const running = yield* Effect.fork(
+        orchestrator.openTurn(session.id, "Abort at operation start"),
+      );
       yield* Deferred.await(entered);
-      const aborting = yield* Effect.fork(turns.abortTurn(session.id));
+      const aborting = yield* Effect.fork(orchestrator.abortTurn(session.id));
       yield* Effect.yieldNow();
       yield* Deferred.succeed(release, undefined);
       const aborted = yield* Fiber.join(aborting);
@@ -2516,11 +2533,11 @@ test("abort mid-stream persists the partial assistant entry with stop reason abo
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const running = yield* Effect.fork(turns.runTurn(session.id, "Start"));
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Start"));
       yield* Deferred.await(started);
-      const aborted = yield* turns.abortTurn(session.id);
+      const aborted = yield* orchestrator.abortTurn(session.id);
       const settled = yield* Fiber.join(running).pipe(Effect.timeoutOption("100 millis"));
       return { aborted, branch: yield* journal.readBranch(session.id), settled };
     }).pipe(Effect.provide(testLayer(hangingProvider))),
@@ -2560,11 +2577,11 @@ test("abort during a tool batch interrupts execution and persists one result per
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const running = yield* Effect.fork(turns.runTurn(session.id, "Run tools"));
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Run tools"));
       yield* Deferred.await(started);
-      const aborted = yield* turns.abortTurn(session.id);
+      const aborted = yield* orchestrator.abortTurn(session.id);
       return {
         aborted,
         branch: yield* journal.readBranch(session.id),
@@ -2631,19 +2648,19 @@ test("abort preserves completed results and writes exactly one result for every 
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const progress = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           item._tag === "toolCompleted" && item.toolCallId === "fast-call"
             ? Deferred.succeed(fastObserved, undefined)
             : Effect.void,
         ),
       );
-      const running = yield* Effect.fork(turns.runTurn(session.id, "Run mixed batch"));
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Run mixed batch"));
       yield* Deferred.await(waitStarted);
       yield* Deferred.await(fastObserved);
-      const aborted = yield* turns.abortTurn(session.id);
+      const aborted = yield* orchestrator.abortTurn(session.id);
       const settled = yield* Fiber.join(running);
       yield* Fiber.interrupt(progress);
       return { aborted, branch: yield* journal.readBranch(session.id), settled };
@@ -2713,11 +2730,13 @@ test("an uninterruptible tool cannot block abort beyond its configured grace", a
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const running = yield* Effect.fork(turns.runTurn(session.id, "Leak", { abortGraceMs: 20 }));
+      const running = yield* Effect.fork(
+        orchestrator.openTurn(session.id, "Leak", undefined, { abortGraceMs: 20 }),
+      );
       yield* Deferred.await(started);
-      const aborted = yield* turns.abortTurn(session.id).pipe(Effect.timeout("500 millis"));
+      const aborted = yield* orchestrator.abortTurn(session.id).pipe(Effect.timeout("500 millis"));
       const settled = yield* Fiber.join(running).pipe(Effect.timeout("500 millis"));
       return { aborted, branch: yield* journal.readBranch(session.id), settled };
     }).pipe(Effect.provide(testLayer(provider, undefined, ToolRegistryLive([defineTool(leak)])))),
@@ -2763,10 +2782,10 @@ test("turn ordinal counts user turns once across provider tool rounds", async ()
   await Effect.runPromise(
     Effect.gen(function* () {
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      yield* turns.runTurn(session.id, "First");
-      yield* turns.runTurn(session.id, "Second");
+      yield* orchestrator.openTurn(session.id, "First");
+      yield* orchestrator.openTurn(session.id, "Second");
     }).pipe(Effect.provide(testLayer(provider, undefined, ToolRegistryLive([defineTool(once)])))),
   );
 
@@ -2777,22 +2796,24 @@ test("turn capacity options reject invalid values before enqueue", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      expect(() => turns.runTurn(session.id, "Invalid", { maxProviderRounds: 0 })).toThrow(
-        "Maximum provider rounds must be a positive safe integer.",
-      );
-      expect(() => turns.runTurn(session.id, "Invalid", { maxToolRounds: 0 })).toThrow(
-        "Maximum tool rounds must be a positive safe integer.",
-      );
-      expect(() => turns.runTurn(session.id, "Invalid", { toolConcurrency: 0 })).toThrow(
-        "Tool concurrency must be a positive safe integer.",
-      );
       expect(() =>
-        turns.runTurn(session.id, "Invalid", { compaction: { retainedTailCount: -1 } }),
+        orchestrator.openTurn(session.id, "Invalid", undefined, { maxProviderRounds: 0 }),
+      ).toThrow("Maximum provider rounds must be a positive safe integer.");
+      expect(() =>
+        orchestrator.openTurn(session.id, "Invalid", undefined, { maxToolRounds: 0 }),
+      ).toThrow("Maximum tool rounds must be a positive safe integer.");
+      expect(() =>
+        orchestrator.openTurn(session.id, "Invalid", undefined, { toolConcurrency: 0 }),
+      ).toThrow("Tool concurrency must be a positive safe integer.");
+      expect(() =>
+        orchestrator.openTurn(session.id, "Invalid", undefined, {
+          compaction: { retainedTailCount: -1 },
+        }),
       ).toThrow("Compaction retained-tail count must be a non-negative safe integer.");
       expect(() =>
-        turns.runTurn(session.id, "Invalid", { compaction: { sliceBudget: 0 } }),
+        orchestrator.openTurn(session.id, "Invalid", undefined, { compaction: { sliceBudget: 0 } }),
       ).toThrow("Compaction slice budget must be a safe integer of at least 200.");
     }).pipe(Effect.provide(testLayer(scriptedProvider([])))),
   );
@@ -2803,10 +2824,12 @@ test("runTurn threads expectedRevision to the mailbox command", async () => {
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const error = yield* Effect.flip(
-        turns.runTurn(session.id, "Stale", { expectedRevision: session.revision - 1 }),
+        orchestrator.openTurn(session.id, "Stale", undefined, {
+          expectedRevision: session.revision - 1,
+        }),
       );
       return { branch: yield* journal.readBranch(session.id), error };
     }).pipe(Effect.provide(testLayer(scriptedProvider([])))),
@@ -2829,10 +2852,10 @@ test("a prompt in the active-turn registration gap publishes turnQueued", async 
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const progress = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           Effect.sync(() => observed.push(item)).pipe(
             Effect.zipRight(
               item._tag === "turnQueued" ? Deferred.succeed(turnQueued, undefined) : Effect.void,
@@ -2841,9 +2864,9 @@ test("a prompt in the active-turn registration gap publishes turnQueued", async 
         ),
       );
       yield* Effect.yieldNow();
-      const first = yield* Effect.fork(turns.runTurn(session.id, "First"));
+      const first = yield* Effect.fork(orchestrator.openTurn(session.id, "First"));
       yield* Deferred.await(registrationEntered);
-      const second = yield* Effect.fork(turns.runTurn(session.id, "Second"));
+      const second = yield* Effect.fork(orchestrator.openTurn(session.id, "Second"));
       yield* Deferred.await(turnQueued);
       yield* Deferred.succeed(releaseRegistration, undefined);
       const results = yield* Effect.all([Fiber.join(first), Fiber.join(second)], {
@@ -2877,16 +2900,16 @@ test("steering queue rejects the item beyond capacity with TurnQueueFull", async
   const result = await Effect.runPromise(
     Effect.gen(function* () {
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const running = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Initial"));
       yield* Deferred.await(providerEntered);
       yield* Effect.forEach(
         Array.from({ length: TURN_INPUT_QUEUE_CAPACITY }, (_, index) => index),
-        (index) => turns.steer(session.id, `Steering ${index}`),
+        (index) => orchestrator.steer(session.id, `Steering ${index}`),
       );
-      const error = yield* Effect.flip(turns.steer(session.id, "Overflow"));
-      yield* turns.abortTurn(session.id);
+      const error = yield* Effect.flip(orchestrator.steer(session.id, "Overflow"));
+      yield* orchestrator.abortTurn(session.id);
       yield* Fiber.join(running);
       return { error, session };
     }).pipe(
@@ -2928,24 +2951,24 @@ test("follow-up queue rejects the item beyond capacity with TurnQueueFull", asyn
   const result = await Effect.runPromise(
     Effect.gen(function* () {
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const progress = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           item._tag === "followUpQueued" && ++queuedCount === TURN_INPUT_QUEUE_CAPACITY
             ? Deferred.succeed(allQueued, undefined)
             : Effect.void,
         ),
       );
-      const running = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Initial"));
       yield* Deferred.await(providerEntered);
       const followers = yield* Effect.forEach(
         Array.from({ length: TURN_INPUT_QUEUE_CAPACITY }, (_, index) => index),
-        (index) => Effect.fork(turns.runTurn(session.id, `Follow-up ${index}`)),
+        (index) => Effect.fork(orchestrator.openTurn(session.id, `Follow-up ${index}`)),
       );
       yield* Deferred.await(allQueued);
-      const error = yield* Effect.flip(turns.runTurn(session.id, "Overflow"));
-      yield* turns.abortTurn(session.id);
+      const error = yield* Effect.flip(orchestrator.openTurn(session.id, "Overflow"));
+      yield* orchestrator.abortTurn(session.id);
       yield* Fiber.join(running);
       yield* Effect.forEach(followers, Fiber.join, { concurrency: "unbounded" });
       yield* Fiber.interrupt(progress);
@@ -2967,11 +2990,11 @@ test("abort after assistant settlement begins prevents any settlement loop", asy
   const result = await Effect.runPromise(
     Effect.gen(function* () {
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const running = yield* Effect.fork(turns.runTurn(session.id, "Settle"));
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Settle"));
       yield* Deferred.await(entered);
-      const aborted = yield* turns.abortTurn(session.id);
+      const aborted = yield* orchestrator.abortTurn(session.id);
       yield* Deferred.succeed(release, undefined);
       return { aborted, settled: yield* Fiber.join(running) };
     }).pipe(
@@ -3018,14 +3041,14 @@ test("kernel.turn records the accumulated steering drain count once at settlemen
   await Effect.runPromise(
     Effect.gen(function* () {
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      const running = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Initial"));
       yield* Deferred.await(firstEntered);
-      yield* turns.steer(session.id, "First steering");
+      yield* orchestrator.steer(session.id, "First steering");
       yield* Deferred.succeed(releaseFirst, undefined);
       yield* Deferred.await(secondEntered);
-      yield* turns.steer(session.id, "Second steering");
+      yield* orchestrator.steer(session.id, "Second steering");
       yield* Deferred.succeed(releaseSecond, undefined);
       yield* Fiber.join(running);
     }).pipe(Effect.provide(testLayer(provider).pipe(Layer.provide(tracerLayer(spans))))),
@@ -3058,18 +3081,18 @@ test("follow-up drain count is recorded on kernel.turn instead of kernel.command
   await Effect.runPromise(
     Effect.gen(function* () {
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const progress = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           item._tag === "followUpQueued"
             ? Deferred.succeed(followUpQueued, undefined)
             : Effect.void,
         ),
       );
-      const initial = yield* Effect.fork(turns.runTurn(session.id, "Initial"));
+      const initial = yield* Effect.fork(orchestrator.openTurn(session.id, "Initial"));
       yield* Deferred.await(providerEntered);
-      const followUp = yield* Effect.fork(turns.runTurn(session.id, "Follow-up"));
+      const followUp = yield* Effect.fork(orchestrator.openTurn(session.id, "Follow-up"));
       yield* Deferred.await(followUpQueued);
       yield* Deferred.succeed(releaseProvider, undefined);
       yield* Fiber.join(initial);
@@ -3126,10 +3149,10 @@ test("turn spans carry session id, turn ordinal, appended entry ids, and stop re
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
-      yield* turns.runTurn(session.id, "First");
-      yield* turns.runTurn(session.id, "Second");
+      yield* orchestrator.openTurn(session.id, "First");
+      yield* orchestrator.openTurn(session.id, "Second");
       return { branch: yield* journal.readBranch(session.id), session };
     }).pipe(
       Effect.provide(
@@ -3193,13 +3216,13 @@ test("error and abort turn spans end with failure", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const failed = yield* sessions.create();
       const aborted = yield* sessions.create();
-      yield* turns.runTurn(failed.id, "fail");
-      const running = yield* Effect.fork(turns.runTurn(aborted.id, "abort"));
+      yield* orchestrator.openTurn(failed.id, "fail");
+      const running = yield* Effect.fork(orchestrator.openTurn(aborted.id, "abort"));
       yield* Deferred.await(abortStarted);
-      yield* turns.abortTurn(aborted.id);
+      yield* orchestrator.abortTurn(aborted.id);
       yield* Fiber.join(running);
     }).pipe(
       Effect.provide(
@@ -3247,15 +3270,15 @@ test("every terminal path leaves a well-formed entry sequence in a fixture repla
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const done = yield* sessions.create();
       const failed = yield* sessions.create();
       const aborted = yield* sessions.create();
-      yield* turns.runTurn(done.id, "done");
-      yield* turns.runTurn(failed.id, "fail");
-      const running = yield* Effect.fork(turns.runTurn(aborted.id, "abort"));
+      yield* orchestrator.openTurn(done.id, "done");
+      yield* orchestrator.openTurn(failed.id, "fail");
+      const running = yield* Effect.fork(orchestrator.openTurn(aborted.id, "abort"));
       yield* Deferred.await(abortStarted);
-      yield* turns.abortTurn(aborted.id);
+      yield* orchestrator.abortTurn(aborted.id);
       yield* Fiber.join(running);
       return yield* Effect.all([
         journal.readBranch(done.id),
@@ -3302,10 +3325,10 @@ test("abort between provider retry attempts aborts with one provider start and l
     Effect.gen(function* () {
       const journal = yield* Journal;
       const sessions = yield* Sessions;
-      const turns = yield* Turns;
+      const orchestrator = yield* TurnOrchestrator;
       const session = yield* sessions.create();
       const progressFiber = yield* Effect.fork(
-        Stream.runForEach(turns.subscribeProgress(session.id), (item) =>
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
           Effect.gen(function* () {
             observed.push(item);
             if (item._tag === "providerRetryScheduled" && item.attempt === 2) {
@@ -3316,18 +3339,18 @@ test("abort between provider retry attempts aborts with one provider start and l
       );
       yield* Effect.yieldNow();
       const running = yield* Effect.fork(
-        turns.runTurn(session.id, "Transient then abort", {
+        orchestrator.openTurn(session.id, "Transient then abort", undefined, {
           maxAttempts: 3,
           retryBaseDelayMs: 5000,
         }),
       );
       yield* Deferred.await(retryScheduled).pipe(Effect.timeout("2 seconds"), Effect.orDie);
       expect(providerStarts).toStrictEqual(1);
-      const aborted = yield* turns.abortTurn(session.id);
+      const aborted = yield* orchestrator.abortTurn(session.id);
       const settled = yield* Fiber.join(running);
       yield* Fiber.interrupt(progressFiber);
       const providerStartsAtAbort = providerStarts;
-      const secondSettled = yield* turns.runTurn(session.id, "Follow-up usable");
+      const secondSettled = yield* orchestrator.openTurn(session.id, "Follow-up usable");
       const branch = yield* journal.readBranch(session.id);
       return {
         aborted,

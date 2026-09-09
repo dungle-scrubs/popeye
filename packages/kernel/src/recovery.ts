@@ -5,10 +5,11 @@
  * Recovery remains a pure function of a bounded Record slice, so every durable action is
  * inspectable and repeatable without hidden Journal reads.
  * Private seam of RecoveryEngine (C1 architecture review): boundedRecoveryRecords /
- * recoverSession / applyRecoveryPlan are the private seams that RecoveryEngine composes
- * behind resume(sessionId, availableToolNames). Direct callers should prefer
- * RecoveryEngine; these helpers stay exported only for backward compat and for
- * recovery.test.ts which asserts the pure plan synthesis in isolation.
+ * recoverSession / applyRecoveryPlan are the package-private seams that RecoveryEngine composes
+ * behind resume(sessionId, availableToolNames). They are exported from this module for
+ * RecoveryEngine, the recovery-matrix harness, and recovery.test.ts (which asserts the pure
+ * plan synthesis in isolation); they are not re-exported from the package index. Direct
+ * callers should use RecoveryEngine.
  * Not responsible for Journal I/O (RecoveryEngine owns the 6-step sequence) or for
  * Branch folding (journal owns that).
  */

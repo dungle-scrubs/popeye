@@ -21,7 +21,7 @@ import { appendOperationStarted, appendToolStarted, OperationIdSchema } from "./
 import type { RecoveryReport } from "./recovery.js";
 import { Sessions, SessionsLive } from "./sessions.js";
 import { defineTool, ToolRegistryLive } from "./tool.js";
-import { Turns, TurnsLive } from "./turn.js";
+import { TurnOrchestrator, TurnOrchestratorLive } from "./turn-orchestrator.js";
 
 const crash = new Error("Injected process crash.");
 
@@ -87,7 +87,7 @@ const kernelLayer = <E>(
   return Layer.mergeAll(
     turnDependencies,
     sessionsLayer,
-    TurnsLive().pipe(Layer.provide(turnDependencies)),
+    TurnOrchestratorLive().pipe(Layer.provide(turnDependencies)),
   );
 };
 
@@ -106,10 +106,10 @@ test("JSONL kill after operation_started reopens to an interrupted assistant and
     const crashed = await Effect.runPromiseExit(
       Effect.gen(function* () {
         const sessions = yield* Sessions;
-        const turns = yield* Turns;
+        const orchestrator = yield* TurnOrchestrator;
         const session = yield* sessions.create();
         sessionId = session.id;
-        return yield* turns.runTurn(session.id, "crash after start");
+        return yield* orchestrator.openTurn(session.id, "crash after start");
       }).pipe(Effect.provide(kernelLayer(faultInjectedJournal(directory, 3), doneProvider))),
     );
     expect(Exit.isFailure(crashed)).toBe(true);
@@ -161,10 +161,10 @@ test("JSONL kill after the user Entry closes the orphaned trailing prompt on res
     const crashed = await Effect.runPromiseExit(
       Effect.gen(function* () {
         const sessions = yield* Sessions;
-        const turns = yield* Turns;
+        const orchestrator = yield* TurnOrchestrator;
         const session = yield* sessions.create();
         sessionId = session.id;
-        return yield* turns.runTurn(session.id, "crash before operation start");
+        return yield* orchestrator.openTurn(session.id, "crash before operation start");
       }).pipe(Effect.provide(kernelLayer(faultInjectedJournal(directory, 2), doneProvider))),
     );
     expect(Exit.isFailure(crashed)).toBe(true);
@@ -227,10 +227,10 @@ test("JSONL kill after the assistant Tool-call Entry synthesizes its missing Too
     const crashed = await Effect.runPromiseExit(
       Effect.gen(function* () {
         const sessions = yield* Sessions;
-        const turns = yield* Turns;
+        const orchestrator = yield* TurnOrchestrator;
         const session = yield* sessions.create();
         sessionId = session.id;
-        return yield* turns.runTurn(session.id, "crash after assistant entry");
+        return yield* orchestrator.openTurn(session.id, "crash after assistant entry");
       }).pipe(
         Effect.provide(
           kernelLayer(
@@ -321,10 +321,10 @@ test("JSONL kill after tool_started recovers according to never and safe replay 
       const crashed = await Effect.runPromiseExit(
         Effect.gen(function* () {
           const sessions = yield* Sessions;
-          const turns = yield* Turns;
+          const orchestrator = yield* TurnOrchestrator;
           const session = yield* sessions.create();
           sessionId = session.id;
-          return yield* turns.runTurn(session.id, `crash after ${replay} start`);
+          return yield* orchestrator.openTurn(session.id, `crash after ${replay} start`);
         }).pipe(
           Effect.provide(
             kernelLayer(
@@ -406,10 +406,10 @@ test("safe-replay recovery closes before another crashed Turn and leaves no dang
     const firstCrash = await Effect.runPromiseExit(
       Effect.gen(function* () {
         const sessions = yield* Sessions;
-        const turns = yield* Turns;
+        const orchestrator = yield* TurnOrchestrator;
         const session = yield* sessions.create();
         sessionId = session.id;
-        return yield* turns.runTurn(session.id, "first crash");
+        return yield* orchestrator.openTurn(session.id, "first crash");
       }).pipe(
         Effect.provide(
           kernelLayer(
@@ -440,9 +440,9 @@ test("safe-replay recovery closes before another crashed Turn and leaves no dang
     const secondCrash = await Effect.runPromiseExit(
       Effect.gen(function* () {
         const sessions = yield* Sessions;
-        const turns = yield* Turns;
+        const orchestrator = yield* TurnOrchestrator;
         yield* sessions.resume(sessionId as SessionId);
-        return yield* turns.runTurn(sessionId as SessionId, "second crash");
+        return yield* orchestrator.openTurn(sessionId as SessionId, "second crash");
       }).pipe(
         Effect.provide(
           kernelLayer(
@@ -468,9 +468,9 @@ test("safe-replay recovery closes before another crashed Turn and leaves no dang
       Effect.gen(function* () {
         const journal = yield* Journal;
         const sessions = yield* Sessions;
-        const turns = yield* Turns;
+        const orchestrator = yield* TurnOrchestrator;
         const resumed = yield* sessions.resume(sessionId as SessionId);
-        yield* turns.runTurn(sessionId as SessionId, "after both crashes");
+        yield* orchestrator.openTurn(sessionId as SessionId, "after both crashes");
         return {
           records: yield* journal.readRecords(sessionId as SessionId),
           resumed,
@@ -553,10 +553,10 @@ test("JSONL kills after partial and complete Tool results recover without duplic
       const crashed = await Effect.runPromiseExit(
         Effect.gen(function* () {
           const sessions = yield* Sessions;
-          const turns = yield* Turns;
+          const orchestrator = yield* TurnOrchestrator;
           const session = yield* sessions.create();
           sessionId = session.id;
-          return yield* turns.runTurn(session.id, `crash after ${scenario.label} results`);
+          return yield* orchestrator.openTurn(session.id, `crash after ${scenario.label} results`);
         }).pipe(
           Effect.provide(
             kernelLayer(

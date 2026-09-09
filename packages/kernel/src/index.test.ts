@@ -27,9 +27,9 @@ test("exports the record and recovery seams", () => {
   expect(kernel.appendOperationStarted).toBeTypeOf("function");
   expect(kernel.appendToolStarted).toBeTypeOf("function");
   expect(kernel.appendOperationFinished).toBeTypeOf("function");
-  expect(kernel.boundedRecoveryRecords).toBeTypeOf("function");
-  expect(kernel.recoverSession).toBeTypeOf("function");
-  expect(kernel.applyRecoveryPlan).toBeTypeOf("function");
+  expect(kernel.RecoveryEngine).toBeDefined();
+  expect(kernel.RecoveryEngineLive).toBeTypeOf("function");
+  expect(kernel.makeRecoveryEngineForTest).toBeTypeOf("function");
 });
 
 test("exports the Compaction policy seam for explicit plugin commands", () => {
