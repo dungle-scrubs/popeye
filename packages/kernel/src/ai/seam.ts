@@ -32,6 +32,7 @@ import type {
   AssistantStopReason,
   ContextItem,
   ProviderStreamOptions,
+  ProviderUsage,
 } from "../provider.js";
 import { Provider } from "../provider.js";
 import type { RegisteredTool } from "../tool.js";
@@ -269,10 +270,127 @@ const toolCallAt = (event: Extract<AssistantMessageEvent, { readonly type: "tool
   return content?.type === "toolCall" ? content : undefined;
 };
 
+/** Chars per token for the assembled-context estimate (Decision 1: full request). */
+const ESTIMATE_CHARS_PER_TOKEN = 4;
+
+const isValidUsageComponent = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+/** Prompt occupancy: measured input plus cache read plus cache write. Cached tokens
+ *  occupy context. NaN/negative/missing degrades to undefined, never throws. */
+const measuredOccupancy = (usage: {
+  readonly cacheRead?: unknown;
+  readonly cacheWrite?: unknown;
+  readonly input?: unknown;
+}): number | undefined => {
+  if (!isValidUsageComponent(usage.input)) {
+    return undefined;
+  }
+  const cacheRead = isValidUsageComponent(usage.cacheRead) ? usage.cacheRead : 0;
+  const cacheWrite = isValidUsageComponent(usage.cacheWrite) ? usage.cacheWrite : 0;
+  return usage.input + cacheRead + cacheWrite;
+};
+
+/** Assembled-context estimate in tokens. Counts full request content per Decision 1. */
+const estimateTokens = (estimateChars: number): number | undefined =>
+  Number.isSafeInteger(estimateChars) && estimateChars > 0
+    ? Math.ceil(estimateChars / ESTIMATE_CHARS_PER_TOKEN)
+    : undefined;
+
+export interface UsageResolutionInput {
+  readonly estimateChars: number;
+  readonly requestEmpty: boolean;
+  readonly usage:
+    | { readonly cacheRead?: unknown; readonly cacheWrite?: unknown; readonly input?: unknown }
+    | undefined;
+  readonly windowTrusted: boolean;
+  readonly contextWindow: number;
+}
+
+/** Resolve one terminal usage report. Measured wins when valid and positive on a
+ *  nonempty request; a reported zero on a nonempty request reads as absent because
+ *  pi-ai zero-initializes usage. Larger of measured and estimate wins per request. */
+export const resolveUsage = (input: UsageResolutionInput): ProviderUsage | undefined => {
+  const measured =
+    input.usage === undefined || input.requestEmpty ? undefined : measuredOccupancy(input.usage);
+  const validMeasured = measured !== undefined && measured > 0 ? measured : undefined;
+  const estimated = estimateTokens(input.estimateChars);
+  const inputTokens =
+    validMeasured !== undefined && estimated !== undefined
+      ? Math.max(validMeasured, estimated)
+      : (validMeasured ?? estimated);
+  if (inputTokens === undefined) {
+    return undefined;
+  }
+  return {
+    contextWindowTokens:
+      input.windowTrusted && Number.isSafeInteger(input.contextWindow) && input.contextWindow > 0
+        ? input.contextWindow
+        : 0,
+    inputTokens,
+    source:
+      validMeasured !== undefined && validMeasured >= (estimated ?? 0) ? "provider" : "estimate",
+  };
+};
+
+/** Recognized overflow formats with separate required-input and window captures.
+ *  Ambiguous matches reject (undefined). Never learns the input count as the limit. */
+const OVERFLOW_WINDOW_PATTERNS: ReadonlyArray<{
+  readonly input: RegExp;
+  readonly window: RegExp;
+}> = [
+  {
+    input: /(\d[\d,]*)\s*tokens?\s*>/,
+    window: />\s*(\d[\d,]*)\s*(?:maximum|tokens)/,
+  },
+  {
+    input: /requested(?:\s+about)?\s*(\d[\d,]*)\s*tokens?/,
+    window: /maximum context length (?:is\s*)?(\d[\d,]*)\s*tokens?/,
+  },
+  {
+    input: /request contains\s*(\d[\d,]*)\s*tokens?/,
+    window: /maximum prompt length is\s*(\d[\d,]*)/,
+  },
+  {
+    input: /input length\s*\(?(\d[\d,]*)\)?\s*(?:tokens?\s*)?exceeds/,
+    window: /maximum (?:context length|allowed input length)[^\d]*(\d[\d,]*)\s*tokens?/,
+  },
+];
+
+const parseCount = (text: string): number | undefined => {
+  const parsed = Number.parseInt(text.replace(/,/g, ""), 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+export const parseOverflowWindow = (message: string): number | undefined => {
+  for (const pattern of OVERFLOW_WINDOW_PATTERNS) {
+    const windowMatch = pattern.window.exec(message);
+    const inputMatch = pattern.input.exec(message);
+    if (windowMatch?.[1] === undefined || inputMatch?.[1] === undefined) {
+      continue;
+    }
+    const window = parseCount(windowMatch[1]);
+    const required = parseCount(inputMatch[1]);
+    if (window === undefined || required === undefined || required <= window) {
+      continue;
+    }
+    return window;
+  }
+  return undefined;
+};
+
+export interface MapStreamItemContext {
+  readonly estimateChars: number;
+  readonly requestEmpty: boolean;
+  readonly windowTrusted: boolean;
+  readonly contextWindow: number;
+}
+
 const mapStreamItem = (
   event: AssistantMessageEvent,
   runtime: PiAiRuntime,
   responseStatus: () => number | undefined,
+  usageContext: MapStreamItemContext,
 ): Effect.Effect<Option.Option<AssistantItem>, ProviderError> => {
   switch (event.type) {
     case "text_delta":
@@ -307,20 +425,48 @@ const mapStreamItem = (
           name: event.toolCall.name,
         }),
       );
-    case "done":
-      return event.message.stopReason !== event.reason
-        ? Effect.fail(
-            new ProviderError({
-              message: `pi-ai terminal mismatch: event=${event.reason}, message=${event.message.stopReason}.`,
-              transient: false,
-            }),
-          )
-        : stopReason(event.reason).pipe(
-            Effect.map((reason) => Option.some({ _tag: "done", stopReason: reason })),
-          );
+    case "done": {
+      if (event.message.stopReason !== event.reason) {
+        return Effect.fail(
+          new ProviderError({
+            message: `pi-ai terminal mismatch: event=${event.reason}, message=${event.message.stopReason}.`,
+            transient: false,
+          }),
+        );
+      }
+      const usage = resolveUsage({
+        estimateChars: usageContext.estimateChars,
+        requestEmpty: usageContext.requestEmpty,
+        usage: event.message.usage,
+        windowTrusted: usageContext.windowTrusted,
+        contextWindow: usageContext.contextWindow,
+      });
+      return stopReason(event.reason).pipe(
+        Effect.map((reason) =>
+          Option.some({
+            _tag: "done",
+            stopReason: reason,
+            ...(usage === undefined ? {} : { usage }),
+          }),
+        ),
+      );
+    }
     case "error": {
+      const errorUsage = resolveUsage({
+        estimateChars: usageContext.estimateChars,
+        requestEmpty: usageContext.requestEmpty,
+        usage: event.error.usage,
+        windowTrusted: usageContext.windowTrusted,
+        contextWindow: usageContext.contextWindow,
+      });
       if (event.reason === "aborted") {
-        return Effect.succeed(Option.some({ _tag: "done", stopReason: "aborted" }));
+        return Effect.succeed(
+          Option.some({
+            _tag: "done",
+            stopReason: "aborted",
+            ...(errorUsage === undefined ? {} : { usage: errorUsage }),
+          }),
+        );
       }
       const transient = runtime.classifyError(event.error);
       const status = responseStatus();
@@ -331,6 +477,7 @@ const mapStreamItem = (
               message: event.error.errorMessage ?? "pi-ai provider request failed.",
               ...(status === undefined ? {} : { status }),
               transient,
+              ...(errorUsage === undefined ? {} : { usage: errorUsage }),
             }),
           ),
         ),
@@ -415,14 +562,19 @@ const fromPiAiStream = (
     );
   });
 
+export interface MakePiAiProviderLayerOptions {
+  readonly baseWindowTrusted?: boolean;
+}
+
 export const makePiAiProviderLayer = (
   model: Model<Api>,
   runtime: PiAiRuntime,
   idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS,
   thinkingLevel?: PiAiProviderLayerOptions["thinkingLevel"],
   apiKey?: string,
-  resolveRequestModel: (modelId: string) => Model<Api> | undefined = (modelId) =>
+  resolveRequestModel: (modelId: string) => Model<Api> | undefined = (modelId: string) =>
     getModelRegistry().getModel(model.provider, modelId),
+  layerOptions: MakePiAiProviderLayerOptions = {},
 ): Layer.Layer<Provider, ProviderError, ToolRegistry> => {
   if (!Number.isSafeInteger(idleTimeoutMs) || idleTimeoutMs < 1) {
     throw new RangeError("Provider idle timeout milliseconds must be a positive safe integer.");
@@ -520,8 +672,30 @@ export const makePiAiProviderLayer = (
                 },
               });
               const stream = yield* fromPiAiStream(source, controller);
+              const estimateChars = context.reduce(
+                (total, item) => total + item.content.length,
+                declarations.reduce(
+                  (total, declaration) =>
+                    total + declaration.name.length + declaration.description.length,
+                  0,
+                ),
+              );
+              const requestEmpty =
+                context.length === 0 || context.every((item) => item.content.length === 0);
+              const registryKnown =
+                getModelRegistry().getModel(requestModel.provider, requestModel.id) !== undefined;
+              const windowTrusted =
+                requestModel === model ? (layerOptions.baseWindowTrusted ?? true) : registryKnown;
+              const usageContext: MapStreamItemContext = {
+                estimateChars,
+                requestEmpty,
+                windowTrusted,
+                contextWindow: requestModel.contextWindow,
+              };
               return stream.pipe(
-                Stream.mapEffect((event) => mapStreamItem(event, runtime, () => responseStatus)),
+                Stream.mapEffect((event) =>
+                  mapStreamItem(event, runtime, () => responseStatus, usageContext),
+                ),
                 Stream.filterMap((item) => item),
                 Stream.timeoutFail(
                   () =>
@@ -550,25 +724,37 @@ export const makePiAiProviderLayer = (
   );
 };
 
-const resolveModel = (options: PiAiProviderLayerOptions): Model<Api> | undefined => {
+export interface ResolvedModel {
+  readonly model: Model<Api>;
+  /** False when the window is the fabricated default with no explicit configuration. */
+  readonly windowTrusted: boolean;
+}
+
+const resolveModel = (options: PiAiProviderLayerOptions): ResolvedModel | undefined => {
   const known = getModelRegistry().getModel(options.provider, options.modelId);
   if (known !== undefined) {
-    return options.baseUrl === undefined ? known : { ...known, baseUrl: options.baseUrl };
+    return {
+      model: options.baseUrl === undefined ? known : { ...known, baseUrl: options.baseUrl },
+      windowTrusted: true,
+    };
   }
   if (options.baseUrl === undefined) {
     return undefined;
   }
   return {
-    api: "openai-completions",
-    baseUrl: options.baseUrl,
-    contextWindow: options.contextWindow ?? DEFAULT_LOCAL_CONTEXT_WINDOW,
-    cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
-    id: options.modelId,
-    input: ["text"],
-    maxTokens: options.maxTokens ?? DEFAULT_LOCAL_MAX_TOKENS,
-    name: options.modelId,
-    provider: options.provider,
-    reasoning: options.reasoning ?? false,
+    model: {
+      api: "openai-completions",
+      baseUrl: options.baseUrl,
+      contextWindow: options.contextWindow ?? DEFAULT_LOCAL_CONTEXT_WINDOW,
+      cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
+      id: options.modelId,
+      input: ["text"],
+      maxTokens: options.maxTokens ?? DEFAULT_LOCAL_MAX_TOKENS,
+      name: options.modelId,
+      provider: options.provider,
+      reasoning: options.reasoning ?? false,
+    },
+    windowTrusted: options.contextWindow !== undefined,
   };
 };
 
@@ -581,8 +767,8 @@ export const PiAiProviderLive = (
   ) {
     throw new RangeError("Provider idle timeout milliseconds must be a positive safe integer.");
   }
-  const model = resolveModel(options);
-  return model === undefined
+  const resolved = resolveModel(options);
+  return resolved === undefined
     ? Layer.fail(
         new ProviderError({
           message: `Unknown pi-ai model ${options.provider}/${options.modelId}.`,
@@ -590,11 +776,12 @@ export const PiAiProviderLive = (
         }),
       )
     : makePiAiProviderLayer(
-        model,
+        resolved.model,
         defaultRuntime,
         options.idleTimeoutMs,
         options.thinkingLevel,
         options.apiKey ?? (options.provider === "lmstudio" ? "lm-studio" : undefined),
-        (modelId) => resolveModel({ ...options, modelId }),
+        (modelId) => resolveModel({ ...options, modelId })?.model,
+        { baseWindowTrusted: resolved.windowTrusted },
       );
 };

@@ -50,6 +50,7 @@ import { BudgetExceeded, type ProviderError, TurnQueueFull } from "./errors.js";
 import { Mailbox, type MailboxFailure } from "./mailbox.js";
 import { PluginHost } from "./plugin-host.js";
 import { type Progress, ProgressHub, type TurnPhase } from "./progress.js";
+import type { ProviderUsage } from "./provider.js";
 import {
   type AssistantStopReason,
   AssistantStopReasonSchema,
@@ -248,6 +249,13 @@ const journalFailureDetail = (failure: JournalFailure, cause: Cause.Cause<unknow
   "message" in failure && typeof failure.message === "string"
     ? failure.message
     : causeDetail(cause);
+
+const withUsageDetail = (detail: string, usage: ProviderUsage | undefined): string =>
+  usage === undefined
+    ? detail
+    : `${detail} (prompt ~${usage.inputTokens} tokens${
+        usage.contextWindowTokens > 0 ? ` of ${usage.contextWindowTokens}` : ""
+      }, measured by ${usage.source})`;
 
 export const validateTurnOptionsSync = (
   options: TurnOptions,
@@ -461,6 +469,7 @@ export const TurnOrchestratorLive = (): Layer.Layer<
           const steeringMutex = yield* Effect.makeSemaphore(1);
           const stopReason = yield* Ref.make<AssistantStopReason>("done");
           const terminalDiagnostic = yield* Ref.make<AssistantDiagnostic | undefined>(undefined);
+          const terminalUsage = yield* Ref.make<ProviderUsage | undefined>(undefined);
           const text = yield* Ref.make("");
           const toolCalls = yield* Ref.make<ReadonlyArray<BufferedToolCall>>([]);
           const executingCalls = yield* Ref.make<ReadonlyArray<ToolCall> | undefined>(undefined);
@@ -732,6 +741,7 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                 Ref.set(executingCalls, undefined),
                 Ref.set(stopReason, "done"),
                 Ref.set(terminalDiagnostic, undefined),
+                Ref.set(terminalUsage, undefined),
                 Ref.set(text, ""),
                 Ref.set(toolCalls, []),
               ],
@@ -803,7 +813,13 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                             : current.map((call, index) => (index === priorIndex ? next : call));
                         });
                       }
-                      return Ref.set(stopReason, item.stopReason);
+                      return Ref.set(stopReason, item.stopReason).pipe(
+                        Effect.zipRight(
+                          item.usage === undefined
+                            ? Effect.void
+                            : Ref.set(terminalUsage, item.usage),
+                        ),
+                      );
                     },
                   );
                   const buffered = yield* Ref.get(attemptProgress);
@@ -1042,11 +1058,15 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                       Effect.zipRight(
                         providerRuntime.attemptCount.pipe(
                           Effect.flatMap((attemptCount) =>
-                            settle("error", {
-                              attempts: attemptCount,
-                              detail: failure.message,
-                              reason: "provider_error",
-                            }),
+                            Ref.get(terminalUsage).pipe(
+                              Effect.flatMap((usage) =>
+                                settle("error", {
+                                  attempts: attemptCount,
+                                  detail: withUsageDetail(failure.message, usage),
+                                  reason: "provider_error",
+                                }),
+                              ),
+                            ),
                           ),
                         ),
                       ),

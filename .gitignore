@@ -8,5 +8,6 @@ coverage/
 .env
 .env.*
 .popeye/
+.scratch/
 *.db-wal
 *.db-shm

@@ -75,8 +75,20 @@ export type ContextItem =
       readonly toolName: string;
     };
 
+export const ProviderUsageSchema = Schema.Struct({
+  inputTokens: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
+  contextWindowTokens: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
+  source: Schema.Literal("provider", "estimate"),
+});
+
+export type ProviderUsage = Schema.Schema.Type<typeof ProviderUsageSchema>;
+
 export type AssistantItem =
-  | { readonly _tag: "done"; readonly stopReason: AssistantStopReason }
+  | {
+      readonly _tag: "done";
+      readonly stopReason: AssistantStopReason;
+      readonly usage?: ProviderUsage;
+    }
   | { readonly _tag: "textDelta"; readonly text: string }
   | { readonly _tag: "thinkingDelta"; readonly text: string }
   | {

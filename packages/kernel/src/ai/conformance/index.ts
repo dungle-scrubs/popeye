@@ -178,7 +178,11 @@ export const describeAiSeamContract = async <TFixture>(
           id: "tool-1",
           name: "weather",
         },
-        { _tag: "done", stopReason: "toolCalls" },
+        {
+          _tag: "done",
+          stopReason: "toolCalls",
+          usage: { contextWindowTokens: 32_000, inputTokens: 15, source: "estimate" },
+        },
       ]);
       expect(requests).toHaveLength(1);
       expect(requests[0]).toMatchObject({

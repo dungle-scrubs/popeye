@@ -186,7 +186,11 @@ test("recorded interleaved pi-ai fixture maps context, tools, deltas, and settle
       id: "tool-1",
       name: "weather",
     },
-    { _tag: "done", stopReason: "toolCalls" },
+    {
+      _tag: "done",
+      stopReason: "toolCalls",
+      usage: { contextWindowTokens: 32_000, inputTokens: 15, source: "estimate" },
+    },
   ]);
   expect(receivedContext).toMatchObject({
     messages: [
@@ -1055,7 +1059,11 @@ test("real openai-completions adapter preserves context, tools, deltas, and sett
         id: "wire-call",
         name: "weather",
       },
-      { _tag: "done", stopReason: "toolCalls" },
+      {
+        _tag: "done",
+        stopReason: "toolCalls",
+        usage: { contextWindowTokens: 0, inputTokens: 13, source: "estimate" },
+      },
     ]);
     expect(requests).toHaveLength(1);
     expect(requests[0]?.body).toMatchObject({

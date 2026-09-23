@@ -6,10 +6,13 @@
 import type { EntryId, SessionId } from "@popeye/journal";
 import { Data } from "effect";
 
+import type { ProviderUsage } from "./provider.js";
+
 export class ProviderError extends Data.TaggedError("ProviderError")<{
   readonly message: string;
   readonly status?: number;
   readonly transient: boolean;
+  readonly usage?: ProviderUsage;
 }> {}
 
 export class ToolError extends Data.TaggedError("ToolError")<{

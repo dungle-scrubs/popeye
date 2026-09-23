@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!**/.plans", "!assets"]
+    "includes": ["**", "!**/.plans", "!**/.scratch", "!assets"]
   },
   "formatter": {
     "enabled": true,
