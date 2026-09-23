@@ -1,0 +1,4 @@
+{"kind":"identity","sessionId":"<id-1>","authority":"harness-minted","capabilities":{"vision":false,"images":false,"streaming":"token","session":true,"source":"curated","confidence":"none","escalation":{"supported":false,"source":"unknown","confidence":"none"},"compactionReporting":{"source":"stream","states":["started","compacted"],"tokens":false},"grantedCapabilities":[]}}
+{"kind":"token","text":"Fake provider answer."}
+{"kind":"message","role":"assistant","text":"Fake provider answer."}
+{"kind":"done","exitCode":0,"cause":"clean","escalation":{"mode":"none","detection":"none"}}
