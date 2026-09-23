@@ -1,0 +1,45 @@
+CASE plain
+HCN EXIT 0
+{"kind":"identity","sessionId":"<id-1>","authority":"harness-minted","capabilities":{"vision":false,"images":false,"streaming":"token","session":true,"source":"curated","confidence":"none","escalation":{"supported":false,"source":"unknown","confidence":"none"},"compactionReporting":{"source":"stream","states":["started","compacted"],"tokens":false},"grantedCapabilities":[]}}
+{"kind":"token","text":"Plain answer."}
+{"kind":"message","role":"assistant","text":"Plain answer."}
+{"kind":"done","exitCode":0,"cause":"clean","escalation":{"mode":"none","detection":"none"}}
+
+CASE tool
+HCN EXIT 0
+{"kind":"identity","sessionId":"<id-1>","authority":"harness-minted","capabilities":{"vision":false,"images":false,"streaming":"token","session":true,"source":"curated","confidence":"none","escalation":{"supported":false,"source":"unknown","confidence":"none"},"compactionReporting":{"source":"stream","states":["started","compacted"],"tokens":false},"grantedCapabilities":[]}}
+{"kind":"token","text":"Tool answer: contents:fixture.txt"}
+{"kind":"message","role":"assistant","text":"Tool answer: contents:fixture.txt"}
+{"kind":"done","exitCode":0,"cause":"clean","escalation":{"mode":"none","detection":"none"}}
+
+CASE error
+HCN EXIT 1
+{"kind":"identity","sessionId":"<id-1>","authority":"harness-minted","capabilities":{"vision":false,"images":false,"streaming":"token","session":true,"source":"curated","confidence":"none","escalation":{"supported":false,"source":"unknown","confidence":"none"},"compactionReporting":{"source":"stream","states":["started","compacted"],"tokens":false},"grantedCapabilities":[]}}
+{"kind":"token","text":"Error-settled answer."}
+{"kind":"message","role":"assistant","text":"Error-settled answer."}
+{"kind":"error","message":"Turn failed.","terminal":true}
+{"kind":"failure","class":"task","retryable":false,"message":"Turn failed."}
+{"kind":"done","exitCode":1,"cause":"failed","failure":{"class":"task","retryable":false,"message":"Turn failed."},"escalation":{"mode":"none","detection":"none"}}
+
+CASE budget
+HCN EXIT 1
+{"kind":"identity","sessionId":"<id-1>","authority":"harness-minted","capabilities":{"vision":false,"images":false,"streaming":"token","session":true,"source":"curated","confidence":"none","escalation":{"supported":false,"source":"unknown","confidence":"none"},"compactionReporting":{"source":"stream","states":["started","compacted"],"tokens":false},"grantedCapabilities":[]}}
+{"kind":"message","role":"assistant","text":"branch to an earlier entry or start a new session"}
+{"kind":"error","message":"branch to an earlier entry or start a new session","terminal":true}
+{"kind":"failure","class":"budget","retryable":false,"message":"branch to an earlier entry or start a new session"}
+{"kind":"done","exitCode":1,"cause":"failed","failure":{"class":"budget","retryable":false,"message":"branch to an earlier entry or start a new session"},"escalation":{"mode":"none","detection":"none"}}
+
+CASE truncated
+HCN EXIT 0
+{"kind":"identity","sessionId":"<id-1>","authority":"harness-minted","capabilities":{"vision":false,"images":false,"streaming":"token","session":true,"source":"curated","confidence":"none","escalation":{"supported":false,"source":"unknown","confidence":"none"},"compactionReporting":{"source":"stream","states":["started","compacted"],"tokens":false},"grantedCapabilities":[]}}
+{"kind":"token","text":"Partial answer."}
+{"kind":"message","role":"assistant","text":"Partial answer.\nturn truncated: context reached its limit"}
+{"kind":"done","exitCode":0,"cause":"clean","escalation":{"mode":"none","detection":"none"}}
+
+CASE abort
+HCN EXIT 1
+{"kind":"identity","sessionId":"<id-1>","authority":"harness-minted","capabilities":{"vision":false,"images":false,"streaming":"token","session":true,"source":"curated","confidence":"none","escalation":{"supported":false,"source":"unknown","confidence":"none"},"compactionReporting":{"source":"stream","states":["started","compacted"],"tokens":false},"grantedCapabilities":[]}}
+{"kind":"token","text":"Aborted answer."}
+{"kind":"message","role":"assistant","text":"Aborted answer."}
+{"kind":"done","exitCode":1,"cause":"killed","escalation":{"mode":"none","detection":"none"}}
+

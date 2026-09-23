@@ -29,9 +29,9 @@ export type ParsedArgs =
   | { readonly action: "help" }
   | { readonly action: "version" };
 
-export type CliMode = "json" | "print" | "rpc";
+export type CliMode = "hcn" | "json" | "print" | "rpc";
 
-const CLI_MODES: ReadonlySet<string> = new Set<CliMode>(["json", "print", "rpc"]);
+const CLI_MODES: ReadonlySet<string> = new Set<CliMode>(["hcn", "json", "print", "rpc"]);
 
 const isCliMode = (value: string): value is CliMode => CLI_MODES.has(value);
 
@@ -91,7 +91,7 @@ export const parseArgs = (argv: ReadonlyArray<string>): Effect.Effect<ParsedArgs
       if (!isCliMode(mode)) {
         return Effect.fail(
           invalidArguments(
-            `Invalid --mode value ${JSON.stringify(mode)}. Use print, json, or rpc.`,
+            `Invalid --mode value ${JSON.stringify(mode)}. Use print, json, rpc, or hcn.`,
           ),
         );
       }

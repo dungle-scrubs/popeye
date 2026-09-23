@@ -22,17 +22,19 @@ test("-p selects a headless print invocation", async () => {
   });
 });
 
-test("--mode accepts print, json, and rpc while print remains the default", async () => {
+test("--mode accepts print, json, rpc, and hcn while print remains the default", async () => {
   const defaultMode = await parseRunArgs(["-p", "Default mode."]);
   const print = await parseRunArgs(["-p", "--mode", "print", "Print mode."]);
   const json = await parseRunArgs(["-p", "--mode", "json", "JSON mode."]);
   const rpc = await parseRunArgs(["-p", "--mode", "rpc"]);
+  const hcn = await parseRunArgs(["-p", "--mode", "hcn", "HCN mode."]);
 
-  expect([defaultMode.mode, print.mode, json.mode, rpc.mode]).toEqual([
+  expect([defaultMode.mode, print.mode, json.mode, rpc.mode, hcn.mode]).toEqual([
     "print",
     "print",
     "json",
     "rpc",
+    "hcn",
   ]);
 });
 

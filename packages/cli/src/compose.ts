@@ -3,11 +3,14 @@
  * It exists so wire heads remain protocol-only while local hosting has one explicit exception.
  */
 import {
+  type AssistantDiagnostic,
+  AssistantDiagnosticSchema,
   type AssistantItem,
   AssistantStopReasonSchema,
   Driver,
   DriverDefault,
   type DriverDefaultOptions,
+  type DriverService,
   type DriverSnapshot,
   defineTool,
   InvokeCommandError,
@@ -18,6 +21,7 @@ import {
   type PluginCompactionGateResult,
   PluginHost,
   type PluginHostService,
+  type Progress,
   Provider,
   ProviderError,
   type ProviderService,
@@ -28,6 +32,7 @@ import {
   ToolRegistry,
   ToolRegistryLive,
   type ToolRegistryService,
+  type TurnOptions,
   type TurnResult,
 } from "@popeye/kernel";
 import {
@@ -43,20 +48,25 @@ import { Effect, Layer, Logger, Schema } from "effect";
 import { composePluginRuntime, type FirstPartyPlugin } from "./plugins/pipeline.js";
 
 export type {
+  AssistantDiagnostic,
   AssistantItem,
+  DriverService,
   DriverSnapshot,
   PluginCommandContext,
   PluginCompactionGateRequest,
   PluginCompactionGateResult,
   PluginHostService,
+  Progress,
   ProviderService,
   RegisteredTool,
   SessionToolView,
   Tool,
   ToolRegistryService,
+  TurnOptions,
   TurnResult,
 };
 export {
+  AssistantDiagnosticSchema,
   AssistantStopReasonSchema,
   Driver,
   defineTool,

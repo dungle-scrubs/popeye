@@ -36,6 +36,7 @@ import {
   ProviderError,
   ToolRegistry,
 } from "../compose.js";
+import { runHcnHead } from "../heads/hcn.js";
 import {
   errorMessage,
   errorTag,
@@ -120,7 +121,7 @@ Options:
   --base-url <url>         Set the OpenAI-compatible endpoint. Env: POPEYE_BASE_URL.
   -p, --headless           Run headless.
   --help                   Print this usage text.
-  --mode <print|json|rpc>  Select the Head. Default: print.
+  --mode <print|json|rpc|hcn>  Select the Head. Default: print.
   --model <model>          Select the Provider model. Env: POPEYE_MODEL.
   --no-project-plugins     Do not load project-local Plugins.
   --plugin <path>          Add a Plugin path. Repeatable.
@@ -425,6 +426,13 @@ const runWithConfig = (
         );
       } else if (config.mode === "json") {
         head = runJsonHead({
+          prompts: [config.prompt],
+          ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
+          snapshotAudit,
+          writer,
+        });
+      } else if (config.mode === "hcn") {
+        head = runHcnHead({
           prompts: [config.prompt],
           ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
           snapshotAudit,

@@ -29,6 +29,14 @@ export {
   CliRunError,
   run,
 } from "./entry/run.js";
+export { type HcnHeadOptions, runHcnHead } from "./heads/hcn.js";
+export {
+  HCN_EXIT_CODES,
+  type HcnEvent,
+  type HcnExitCode,
+  type HcnFailureClass,
+  hcnExitCodeForStopReason,
+} from "./heads/hcn-events.js";
 export {
   encodeProgressLine,
   encodeSnapshotLine,
