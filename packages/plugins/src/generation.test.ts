@@ -2,7 +2,7 @@ import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { SessionIdSchema } from "@pop-eye/journal";
+import { SessionIdSchema } from "@popeye/journal";
 import { Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Tracer } from "effect";
 import { expect, test } from "vitest";
 
@@ -31,7 +31,7 @@ const pluginSource = (name: string, content: string): string =>
   ].join("\n");
 
 test("a loaded Plugin generation exposes its name-correlated manifest", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-manifest-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-fixture-generation-manifest-"));
   const projectPath = join(root, "project");
   const pluginPath = join(root, "manifest-plugin.ts");
 
@@ -105,9 +105,9 @@ const tracerLayer = (spans: Array<CapturedSpan>): Layer.Layer<never> => {
 };
 
 test("two-phase loading never imports project-local code on the untrusted path", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-untrusted-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-fixture-generation-untrusted-"));
   const projectPath = join(root, "project");
-  const projectPluginDirectory = join(projectPath, ".peye", "plugins");
+  const projectPluginDirectory = join(projectPath, ".popeye", "plugins");
   const markerPath = join(root, "project-plugin-imported");
   const externalPath = join(root, "external-plugin.ts");
 
@@ -153,7 +153,7 @@ test("two-phase loading never imports project-local code on the untrusted path",
 });
 
 test("reload swaps the generation and work admitted after the swap uses only the new generation", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-swap-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-fixture-generation-swap-"));
   const projectPath = join(root, "project");
   const pluginPath = join(root, "external-plugin.ts");
 
@@ -199,7 +199,7 @@ test("reload swaps the generation and work admitted after the swap uses only the
 });
 
 test("in-flight work finishes on its old generation after reload swaps to the new generation", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-in-flight-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-fixture-generation-in-flight-"));
   const projectPath = join(root, "project");
   const pluginPath = join(root, "external-plugin.ts");
 
@@ -256,7 +256,7 @@ test("in-flight work finishes on its old generation after reload swaps to the ne
 });
 
 test("reload waits for blocking work even after the current generation previously returned to idle", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-idle-drain-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-fixture-generation-idle-drain-"));
   const projectPath = join(root, "project");
   const pluginPath = join(root, "external-plugin.ts");
 
@@ -331,7 +331,7 @@ test("reload waits for blocking work even after the current generation previousl
 });
 
 test("the old generation Scope closes exactly once after its last in-flight work settles", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-scope-close-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-fixture-generation-scope-close-"));
   const projectPath = join(root, "project");
   const pluginPath = join(root, "external-plugin.ts");
 
@@ -382,7 +382,7 @@ test("the old generation Scope closes exactly once after its last in-flight work
 });
 
 test("reload is serialized and cannot import a new generation during a running gate hook", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-serialized-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-fixture-generation-serialized-"));
   const projectPath = join(root, "project");
   const pluginPath = join(root, "external-plugin.ts");
   const reloadImportMarker = join(root, "reload-imported");
@@ -441,9 +441,9 @@ test("reload is serialized and cannot import a new generation during a running g
 });
 
 test("generation-swap diagnostics and the plugins.reload span report ids, drain, resources, and Plugin changes", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-observability-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-fixture-generation-observability-"));
   const projectPath = join(root, "project");
-  const pluginDirectory = join(projectPath, ".peye", "plugins");
+  const pluginDirectory = join(projectPath, ".popeye", "plugins");
   const keptPath = join(pluginDirectory, "kept.ts");
   const removedPath = join(pluginDirectory, "removed.ts");
   const addedPath = join(pluginDirectory, "added.ts");
@@ -496,7 +496,7 @@ test("generation-swap diagnostics and the plugins.reload span report ids, drain,
 });
 
 test("generation reload passes a 120-iteration admission, interruption, swap, and drain race", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-race-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-fixture-generation-race-"));
   const projectPath = join(root, "project");
   const pluginPath = join(root, "external-plugin.ts");
   const finalizerCounts = new Map<string, number>();
@@ -596,7 +596,7 @@ test("generation reload passes a 120-iteration admission, interruption, swap, an
 }, 20_000);
 
 test("unsupported syntax and build failures during reload leave the old generation intact", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-atomic-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-fixture-generation-atomic-"));
   const projectPath = join(root, "project");
   const pluginPath = join(root, "external-plugin.ts");
 
@@ -649,9 +649,9 @@ test("unsupported syntax and build failures during reload leave the old generati
 });
 
 test("a Trust resolver runs after user-global Plugins load and before trusted project-local Plugins load", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-generation-trust-resolver-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-fixture-generation-trust-resolver-"));
   const projectPath = join(root, "project");
-  const projectPluginDirectory = join(projectPath, ".peye", "plugins");
+  const projectPluginDirectory = join(projectPath, ".popeye", "plugins");
   const userGlobalDirectory = join(root, "user-plugins");
   const externalMarker = join(root, "external-imported");
   const projectMarker = join(root, "project-imported");
@@ -705,10 +705,10 @@ test("a Trust resolver runs after user-global Plugins load and before trusted pr
 
 test("a timed-out Trust resolver fails reload and releases the reload mutex", async () => {
   const root = await mkdtemp(
-    join(tmpdir(), "peye-plugin-fixture-generation-trust-resolver-timeout-"),
+    join(tmpdir(), "popeye-plugin-fixture-generation-trust-resolver-timeout-"),
   );
   const projectPath = join(root, "project");
-  const projectPluginDirectory = join(projectPath, ".peye", "plugins");
+  const projectPluginDirectory = join(projectPath, ".popeye", "plugins");
   const pluginPath = join(projectPluginDirectory, "project.ts");
   let resolverCalls = 0;
 

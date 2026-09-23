@@ -1,4 +1,4 @@
-import type { SessionId } from "@pop-eye/journal";
+import type { SessionId } from "@popeye/journal";
 import { Deferred, Effect, Fiber, Layer, Ref, Schema, type Scope, Tracer } from "effect";
 import { expect, test } from "vitest";
 

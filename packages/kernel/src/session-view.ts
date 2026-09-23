@@ -25,8 +25,8 @@ import {
   JournalError as JournalErrorClass,
   type JournalFailure,
   type SessionId,
-} from "@pop-eye/journal";
-import { StaleRevision } from "@pop-eye/protocol";
+} from "@popeye/journal";
+import { StaleRevision } from "@popeye/protocol";
 import { Context, Effect, Layer, Schema } from "effect";
 import {
   ModelChangePayloadSchema,
@@ -68,7 +68,7 @@ export interface SessionViewService {
   ) => Effect.Effect<void, StaleRevision>;
 }
 
-export class SessionViewTag extends Context.Tag("@pop-eye/kernel/SessionView")<
+export class SessionViewTag extends Context.Tag("@popeye/kernel/SessionView")<
   SessionViewTag,
   SessionViewService
 >() {}

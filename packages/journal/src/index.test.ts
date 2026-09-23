@@ -13,7 +13,7 @@ import {
 } from "./index.js";
 
 test("exports the journal package marker", () => {
-  expect(journalPackage).toBe("@pop-eye/journal");
+  expect(journalPackage).toBe("@popeye/journal");
 });
 
 test("exports the Journal seam and memory adapter", () => {

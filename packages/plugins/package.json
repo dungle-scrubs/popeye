@@ -1,5 +1,5 @@
 {
-  "name": "@pop-eye/plugins",
+  "name": "@popeye/plugins",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -13,14 +13,14 @@
     }
   },
   "dependencies": {
-    "@pop-eye/journal": "workspace:*",
-    "@pop-eye/protocol": "workspace:*"
+    "@popeye/journal": "workspace:*",
+    "@popeye/protocol": "workspace:*"
   },
   "peerDependencies": {
     "effect": "^3.22.1"
   },
   "devDependencies": {
-    "@pop-eye/kernel": "workspace:*",
+    "@popeye/kernel": "workspace:*",
     "effect": "3.22.1"
   }
 }

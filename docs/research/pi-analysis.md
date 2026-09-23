@@ -1,6 +1,6 @@
 # pi Source Analysis (earendil-works/pi @ 0.84.1)
 
-Research baseline for the pop-eye plan. Produced 2026-08-10 from a
+Research baseline for the popeye plan. Produced 2026-08-10 from a
 full source read of the pi monorepo (three parallel deep-dives: extension
 system, agent loop + ai layer, protocol/session/TUI). File references are to
 the pi repo at that version.
@@ -17,7 +17,7 @@ Pi ships **two parallel stacks**:
 | Design doc | - | `packages/agent/docs/harness-v2.md` (~4,600 lines) |
 
 Pi's authors already diagnosed their debts; harness-v2 is the cure, unfinished.
-pop-eye is essentially that design finished, in Effect, dogfooded.
+popeye is essentially that design finished, in Effect, dogfooded.
 
 ## Best parts (keep/steal)
 
@@ -104,7 +104,7 @@ pop-eye is essentially that design finished, in Effect, dogfooded.
 6. **Five discovery surfaces** (extensions, skills, prompt templates, themes,
    packages) over what is nearly one primitive.
 
-## pop-eye design direction (per ledger D-001..D-005)
+## popeye design direction (per ledger D-001..D-005)
 
 - **journal**: Schema-versioned append-only log; session = log; branch =
   leaf move; compaction = entry with retained tail; state = fold. JSONL and

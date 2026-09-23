@@ -1,6 +1,0 @@
-{"payload":{"format":"peye_journal","sessionId":"HcJvVh64iF4jzE8q","type":"journal_header","version":1},"v":1}
-{"payload":{"item":{"id":"5YNTWFWb6-oAvW0V","kind":"session_root","parentId":null,"payload":{}},"sessionId":"HcJvVh64iF4jzE8q","type":"entry"},"v":1}
-{"payload":{"item":{"id":"OsbyMtddIbY9-Ooc","kind":"message","parentId":"5YNTWFWb6-oAvW0V","payload":{"content":"Reply with exactly: OK","role":"user"}},"sessionId":"HcJvVh64iF4jzE8q","type":"entry"},"v":1}
-{"payload":{"item":{"id":"1eOVcdEQhbGobChb","kind":"operation_started","payload":{"intent":"turn","operationId":"d09c49ca-3aec-428f-80b8-d445475f9565","promptEntryId":"OsbyMtddIbY9-Ooc","turnOrdinal":1}},"sessionId":"HcJvVh64iF4jzE8q","type":"record"},"v":1}
-{"payload":{"item":{"id":"6XPikilzx_43VJZQ","kind":"message","parentId":"OsbyMtddIbY9-Ooc","payload":{"content":"\n\nOK","role":"assistant","stopReason":"done"}},"sessionId":"HcJvVh64iF4jzE8q","type":"entry"},"v":1}
-{"payload":{"item":{"id":"nnp_O5u9YPb5zL1s","kind":"operation_finished","payload":{"operationId":"d09c49ca-3aec-428f-80b8-d445475f9565","outcome":"done"}},"sessionId":"HcJvVh64iF4jzE8q","type":"record"},"v":1}

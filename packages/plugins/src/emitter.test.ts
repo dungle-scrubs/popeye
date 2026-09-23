@@ -1,4 +1,4 @@
-import { SessionIdSchema } from "@pop-eye/journal";
+import { SessionIdSchema } from "@popeye/journal";
 import {
   Context,
   Data,

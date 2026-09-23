@@ -26,8 +26,8 @@ const expectedViolations = [
     file: "packages/kernel/src/not-ai/invalid-pi-ai-import.ts",
   },
   {
-    code: BOUNDARY_CODES.PROTOCOL_PEYE_IMPORT,
-    file: "packages/protocol/src/invalid-peye-import.ts",
+    code: BOUNDARY_CODES.PROTOCOL_POPEYE_IMPORT,
+    file: "packages/protocol/src/invalid-popeye-import.ts",
   },
   {
     code: BOUNDARY_CODES.FEATURE_DEEP_IMPORT,

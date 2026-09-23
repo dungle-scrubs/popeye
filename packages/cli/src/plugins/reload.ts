@@ -4,7 +4,7 @@
  * Not responsible for Tool adaptation (adapter owns that) or for generation construction (pipeline owns that).
  */
 
-import type { GenerationSwapDiagnostic } from "@pop-eye/plugins";
+import type { GenerationSwapDiagnostic } from "@popeye/plugins";
 import { Context, Data, type Effect } from "effect";
 
 export const DRAIN_TIMEOUT_MILLIS = 5_000;
@@ -29,7 +29,7 @@ export interface ReloadControlService {
   >;
 }
 
-export class ReloadControl extends Context.Tag("@pop-eye/cli/ReloadControl")<
+export class ReloadControl extends Context.Tag("@popeye/cli/ReloadControl")<
   ReloadControl,
   ReloadControlService
 >() {}

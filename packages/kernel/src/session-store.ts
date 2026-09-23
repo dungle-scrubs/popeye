@@ -22,7 +22,7 @@ import {
   JournalDraftRejected,
   type JournalFailure,
   type SessionId,
-} from "@pop-eye/journal";
+} from "@popeye/journal";
 import { Context, Effect, Layer, Schema } from "effect";
 import { SessionNamePayloadSchema } from "./entry-payloads.js";
 import type { RecoveryReport } from "./recovery.js";
@@ -35,11 +35,11 @@ export interface SessionStoreOptions {
 export interface SessionStoreService {
   readonly appendCompaction: (
     sessionId: SessionId,
-    payload: import("@pop-eye/journal").CompactionPayload,
+    payload: import("@popeye/journal").CompactionPayload,
   ) => Effect.Effect<Entry, JournalFailure>;
   readonly appendEntry: (
     sessionId: SessionId,
-    entry: import("@pop-eye/journal").EntryDraft,
+    entry: import("@popeye/journal").EntryDraft,
   ) => Effect.Effect<Entry, JournalFailure>;
   readonly appendSessionName: (
     sessionId: SessionId,
@@ -62,14 +62,14 @@ export interface SessionStoreService {
   ) => Effect.Effect<void, JournalFailure>;
   readonly readRecords: (
     sessionId: SessionId,
-  ) => Effect.Effect<ReadonlyArray<import("@pop-eye/journal").Record>, JournalFailure>;
+  ) => Effect.Effect<ReadonlyArray<import("@popeye/journal").Record>, JournalFailure>;
   readonly resume: (
     sessionId: SessionId,
     availableToolNames: ReadonlySet<string>,
   ) => Effect.Effect<{ readonly leaf: Entry; readonly report: RecoveryReport }, JournalFailure>;
 }
 
-export class SessionStore extends Context.Tag("@pop-eye/kernel/SessionStore")<
+export class SessionStore extends Context.Tag("@popeye/kernel/SessionStore")<
   SessionStore,
   SessionStoreService
 >() {}
@@ -86,7 +86,7 @@ const defaultRecoveryDiagnosticSink = (report: RecoveryReport): Effect.Effect<vo
   );
 
 const makeSessionStoreService = (
-  journal: import("@pop-eye/journal").JournalService,
+  journal: import("@popeye/journal").JournalService,
   options: SessionStoreOptions = {},
 ): SessionStoreService => {
   const recoveryDiagnosticSink = options.recoveryDiagnosticSink ?? defaultRecoveryDiagnosticSink;
@@ -130,7 +130,7 @@ const makeSessionStoreService = (
         ),
     moveLeaf: (sessionId, toEntryId) =>
       journal
-        .moveLeaf(sessionId, toEntryId as unknown as import("@pop-eye/journal").EntryId)
+        .moveLeaf(sessionId, toEntryId as unknown as import("@popeye/journal").EntryId)
         .pipe(Effect.asVoid),
     readRecords: (sessionId) => journal.readRecords(sessionId),
     resume: (sessionId, availableToolNames) => recoveryEngine.resume(sessionId, availableToolNames),
@@ -149,6 +149,6 @@ export const SessionStoreLive = (
   );
 
 export const makeSessionStoreForTest = (
-  journal: import("@pop-eye/journal").JournalService,
+  journal: import("@popeye/journal").JournalService,
   options: SessionStoreOptions = {},
 ): SessionStoreService => makeSessionStoreService(journal, options);

@@ -140,7 +140,7 @@ test("Response round-trips every tagged result family through both directions", 
       id: "invoke-response",
       result: {
         _tag: "commandInvoked",
-        commandName: "peye/compact",
+        commandName: "popeye/compact",
         value: { entriesCovered: 8 },
       },
     },

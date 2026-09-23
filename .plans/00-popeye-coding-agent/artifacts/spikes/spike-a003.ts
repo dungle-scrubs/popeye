@@ -16,7 +16,7 @@ interface GenerationService {
   readonly id: number;
 }
 
-class Generation extends Context.Tag("peye/Generation")<Generation, GenerationService>() {}
+class Generation extends Context.Tag("popopeye/Generation")<Generation, GenerationService>() {}
 
 interface GenerationRuntime {
   readonly drained: Deferred.Deferred<void>;

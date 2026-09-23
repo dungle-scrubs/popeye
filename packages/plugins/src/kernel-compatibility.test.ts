@@ -1,4 +1,4 @@
-import type { Tool } from "@pop-eye/kernel";
+import type { Tool } from "@popeye/kernel";
 import { expect, test } from "vitest";
 
 import type { AnyToolDeclaration } from "./contribution.js";

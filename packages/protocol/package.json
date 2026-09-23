@@ -1,5 +1,5 @@
 {
-  "name": "@pop-eye/protocol",
+  "name": "@popeye/protocol",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -16,10 +16,10 @@
     }
   },
   "imports": {
-    "#journal": "@pop-eye/journal"
+    "#journal": "@popeye/journal"
   },
   "dependencies": {
-    "@pop-eye/journal": "workspace:*"
+    "@popeye/journal": "workspace:*"
   },
   "peerDependencies": {
     "effect": "^3.22.1"

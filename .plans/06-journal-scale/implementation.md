@@ -60,7 +60,7 @@ Dependency rules: only `packages/journal/src/sqlite*` may import `node:sqlite` <
 | Single-writer per session | Still enforced by `adapter-core` TSemaphore; SQLite fencing is persistence-local, not a second lock |
 | Append-only: acknowledged lines never rewritten | SQLite transactions are atomic commits, not rewrites; diagnostics mirror JSONL |
 | Snapshot authority | Every paginated Snapshot carries true `leafEntryId` + `revision` for its window |
-| 1 MiB hard threshold configurable | Default 1,048,576 bytes, env `PEYE_SNAPSHOT_PAGE_BYTES` overrides <!-- D-003 -->; 256 KiB warning never triggers pagination |
+| 1 MiB hard threshold configurable | Default 1,048,576 bytes, env `POPEYE_SNAPSHOT_PAGE_BYTES` overrides <!-- D-003 -->; 256 KiB warning never triggers pagination |
 
 ### Boundaries
 
@@ -123,7 +123,7 @@ Phase 1 (SQLite) `required`: spans for `journal.open` / `journal.persistLine` / 
   1. Seams under test: `conformance` suite parameterized by SQLite layer, CLI `--journal-layer` / dir detection
   2. RED: `packages/journal/src/conformance` run with `makeJournalSqlite()` fails until M1/M2 complete; JSONL and memory still green
   3. GREEN: Register conformance: `describeSqlite( makeSqlite )` alongside `describeMemory` / `describeJsonl`; all M3/M4 behaviors green - create, branchToLeaf, append entry/record, moveLeaf, readBranch isolation, leaf rebuild after close/reopen, two sessions isolated, migration chain
-  4. RED: CLI selection - `PEYE_JOURNAL_LAYER=sqlite` or presence of `journal.sqlite` selects SQLite layer; absent selects JSONL; explicit `peye migrate` required for JSONL-to-SQLite bulk import <!-- D-006 -->
+  4. RED: CLI selection - `POPEYE_JOURNAL_LAYER=sqlite` or presence of `journal.sqlite` selects SQLite layer; absent selects JSONL; explicit `popeye migrate` required for JSONL-to-SQLite bulk import <!-- D-006 -->
   5. GREEN: Wire `packages/cli/src/entry` journal factory: detect flag/env/file, construct correct `JournalPersistence`, document in README; no auto-migration path
   6. Verify: `pnpm check-boundaries` green, `pnpm test` full suite green, 10x flake run on SQLite conformance
 
@@ -149,7 +149,7 @@ Phase 1 (SQLite) `required`: spans for `journal.open` / `journal.persistLine` / 
 - **Tasks:**
   1. Seams under test: `SessionStore.getSnapshot` / driver snapshot fold, `SnapshotSchema.encode` byte measurement, `EntryRange` flags
   2. RED: Harness from `snapshot-size-report.md` - 500 turns (~563 KiB) stays full Snapshot below threshold; 1,000 turns (~2,202 entries, ~1.1 MiB) emits paginated Snapshot - `entries` is leaf-anchored suffix under threshold, `entryRange` has `hasMoreBefore=true`, `leafEntryId` matches branch leaf, `revision` authoritative <!-- D-002 --><!-- D-003 -->
-  3. GREEN: Implement threshold config `PEYE_SNAPSHOT_PAGE_BYTES` with default 1,048,576 <!-- D-003 -->, validated as positive integer; size strategy estimate-then-verify - `entryCount * ~511` picks candidate window then `JSON.stringify(SnapshotSchema.encode(snapshot))` UTF-8 verify <!-- D-007 -->
+  3. GREEN: Implement threshold config `POPEYE_SNAPSHOT_PAGE_BYTES` with default 1,048,576 <!-- D-003 -->, validated as positive integer; size strategy estimate-then-verify - `entryCount * ~511` picks candidate window then `JSON.stringify(SnapshotSchema.encode(snapshot))` UTF-8 verify <!-- D-007 -->
   4. RED: Threshold configurable - set env to 10 KiB, 10-turn workload paginates early; invalid env value fails typed with diagnostic
   5. GREEN: Add env reading in `SessionStore` construction / factory, plumb through `packages/cli/src/entry` config
   6. RED: Single Entry over bound - craft a 2 MiB tool-result entry, expect Snapshot with that single Entry exceeding threshold, `entryRange` set, diagnostic names the oversized entry <!-- D-004 -->
@@ -231,7 +231,7 @@ pnpm test
 pnpm check-boundaries
 # plan-scoped
 pnpm --filter @popeye/journal test -- conformance
-PEYE_SNAPSHOT_PAGE_BYTES=10240 pnpm test -- snapshot pagination harness
+POPEYE_SNAPSHOT_PAGE_BYTES=10240 pnpm test -- snapshot pagination harness
 ```
 
 ## 8. Decisions
@@ -240,7 +240,7 @@ Canonical: `plan.db` `query-decisions --plan 06-journal-scale`. Inline markers:
 
 * D-001 per-directory `journal.sqlite` per journal directory
 * D-002 hard activation at encoded >1 MiB, 256 KiB warning-only
-* D-003 configurable via `PEYE_SNAPSHOT_PAGE_BYTES`, default 1,048,576
+* D-003 configurable via `POPEYE_SNAPSHOT_PAGE_BYTES`, default 1,048,576
 * D-004 single large Entry delivered as one-entry Snapshot with diagnostic
 * D-005 256 KiB warning as span + structured diagnostic
 * D-006 no auto-migration, explicit flag/migrate command

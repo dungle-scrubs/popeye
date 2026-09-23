@@ -9,7 +9,7 @@ import {
   type InteractionRequest,
   type InteractionResponse,
   InteractionTimeout,
-} from "@pop-eye/protocol";
+} from "@popeye/protocol";
 import { Context, Effect, FiberRef, Layer, Option } from "effect";
 import { type CapabilityGrants, hasCapability } from "./capability.js";
 
@@ -46,7 +46,7 @@ export interface PluginInteractionsService {
   ) => Effect.Effect<PluginInteractionResolution>;
 }
 
-export class PluginInteractions extends Context.Tag("@pop-eye/plugins/PluginInteractions")<
+export class PluginInteractions extends Context.Tag("@popeye/plugins/PluginInteractions")<
   PluginInteractions,
   PluginInteractionsService
 >() {}

@@ -15,7 +15,7 @@
  * Protocol framing (rpc-transport owns LF/1MB) or for boundary envelope (HeadWire owns headErrorEnvelope).
  */
 
-import type { SessionId } from "@pop-eye/journal";
+import type { SessionId } from "@popeye/journal";
 import { Deferred, Effect, Fiber, Stream } from "effect";
 
 import type { DriverSnapshot, TurnResult } from "../compose.js";

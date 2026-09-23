@@ -1,3 +1,3 @@
-import { kernelPackage } from "@pop-eye/kernel";
+import { kernelPackage } from "@popeye/kernel";
 
 export const invalidProtocolImport = kernelPackage;

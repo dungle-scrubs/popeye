@@ -84,7 +84,7 @@ const resolveRealPath = (path: string): Effect.Effect<string, PluginDiscoveryErr
 const projectPluginPaths = (
   projectPath: string,
 ): Effect.Effect<ReadonlyArray<string>, PluginDiscoveryError> => {
-  const directory = join(projectPath, ".peye", "plugins");
+  const directory = join(projectPath, ".popeye", "plugins");
   return Effect.tryPromise({
     catch: (cause) =>
       new PluginDiscoveryError({ cause, path: directory, reason: "read_directory_failed" }),

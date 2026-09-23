@@ -1,19 +1,19 @@
 # Plugin authoring
 
-A Plugin is the only unit of behavior addition in pop-eye. It returns a Schema-validated manifest and
+A Plugin is the only unit of behavior addition in popeye. It returns a Schema-validated manifest and
 an array of Contributions. The shipped compact and Session-name features use this public interface.
 Read their source at
 [`packages/cli/src/features`](../packages/cli/src/features) beside this guide.
 
 ## Current host boundary
 
-`@pop-eye/plugins` publishes the manifest, registry, Hook emitter, Trust, discovery, loading, and
+`@popeye/plugins` publishes the manifest, registry, Hook emitter, Trust, discovery, loading, and
 generation APIs. The v1 CLI package publishes Head functions rather than an executable. Its
 first-party host statically composes the compact and Session-name Plugins. An application that uses
 dynamic discovery must wire `makeGenerationRuntime` into its own host.
 
 npm-referenced Plugin packages are not in v1. The loader accepts absolute paths to local TypeScript
-files. Project discovery reads `.peye/plugins/`. User-global directories and explicit CLI paths come
+files. Project discovery reads `.popeye/plugins/`. User-global directories and explicit CLI paths come
 from the host's `PluginDiscoveryConfig`.
 
 ## Minimal Plugin
@@ -22,8 +22,8 @@ A module must export a factory as either `plugin` or `default`. The factory can 
 a Promise.
 
 ```typescript
-import { defineCommandContribution } from "@pop-eye/plugins";
-import type { PluginManifest } from "@pop-eye/plugins";
+import { defineCommandContribution } from "@popeye/plugins";
+import type { PluginManifest } from "@popeye/plugins";
 import { Effect, Schema } from "effect";
 
 const manifest = {
@@ -46,7 +46,7 @@ export const plugin = () => ({
 });
 ```
 
-Import from package roots. Do not import `@pop-eye/plugins/src/*` or another package's source files.
+Import from package roots. Do not import `@popeye/plugins/src/*` or another package's source files.
 
 ## Manifest Schema
 
@@ -183,15 +183,15 @@ Two gates ship as linkable modules under `packages/cli/src/features/` and never 
 - `trust-gate.ts` - contributes to the `trust` Hook. It raises a confirm interaction (project path, digest, change summary) with a 25s timeout and fallback `untrusted`. With the null `PluginInteractions` layer (print/json heads and startup composition in every mode) the fallback resolves immediately: unknown project code is denied without stalling. Over rpc with an interactive Head, the Head answers; `trusted` loads stage-2 project plugins, fallback `untrusted` swaps without them and the `/reload` result reports the reduced counts.
 - `tool-vetting.ts` - contributes to `tool-call-gate`. It raises a select (`allow once` / `allow for session` / `reject`) with a 25s timeout and fallback `reject`. Session memory is generation-scoped: a reload forgets prior allows (fail-closed). A rejection becomes a model-visible error `ToolResult` with `isError: true` in the call's journal position, preserving call order.
 
-Install them by symlinking or copying into a user-global Plugin directory (the host's `userPluginDir`, by default `~/.peye/plugins/`):
+Install them by symlinking or copying into a user-global Plugin directory (the host's `userPluginDir`, by default `~/.popeye/plugins/`):
 
 ```bash
-mkdir -p ~/.peye/plugins
-ln -s "$PWD/packages/cli/src/features/tool-vetting.ts" ~/.peye/plugins/tool-vetting.ts
-ln -s "$PWD/packages/cli/src/features/trust-gate.ts" ~/.peye/plugins/trust-gate.ts
+mkdir -p ~/.popeye/plugins
+ln -s "$PWD/packages/cli/src/features/tool-vetting.ts" ~/.popeye/plugins/tool-vetting.ts
+ln -s "$PWD/packages/cli/src/features/trust-gate.ts" ~/.popeye/plugins/trust-gate.ts
 # or copy instead of symlink
-cp packages/cli/src/features/tool-vetting.ts ~/.peye/plugins/
-cp packages/cli/src/features/trust-gate.ts ~/.peye/plugins/
+cp packages/cli/src/features/tool-vetting.ts ~/.popeye/plugins/
+cp packages/cli/src/features/trust-gate.ts ~/.popeye/plugins/
 ```
 
 The default first-party set is `compact`, `reload`, and `session-name` only; the gates load only when the user places them in the Plugin source directory. Remove the symlink or file to uninstall.
@@ -201,7 +201,7 @@ The default first-party set is `compact`, `reload`, and `session-name` only; the
 `PluginInteractions` lets Plugin code ask the user. The emitter stamps the originating Plugin name via `CurrentPluginFiberRef` around every Hook and Command execution, so you do not supply `pluginName` yourself; Heads receive it for attribution and a malicious Plugin cannot impersonate another. Declare the `interaction` Capability in the manifest; without it the request resolves its declared fallback with an `interaction_ungranted` diagnostic and never reaches a Head.
 
 ```typescript
-import { PluginInteractions, DEFAULT_INTERACTION_TIMEOUT_MILLIS } from "@pop-eye/plugins";
+import { PluginInteractions, DEFAULT_INTERACTION_TIMEOUT_MILLIS } from "@popeye/plugins";
 import { Effect } from "effect";
 
 const run = Effect.gen(function* () {
@@ -267,7 +267,7 @@ name across a crash boundary own that risk.
 
 ## First-party import boundary
 
-Files below a `features/` directory must import pop-eye packages from package roots only. They must not
+Files below a `features/` directory must import popeye packages from package roots only. They must not
 use deep imports or relative imports that escape their feature package. A feature imports
-`@pop-eye/plugins`. The CLI composition module alone imports `@pop-eye/kernel` to supply public kernel
+`@popeye/plugins`. The CLI composition module alone imports `@popeye/kernel` to supply public kernel
 operations. Run `pnpm check-boundaries` to enforce this rule.

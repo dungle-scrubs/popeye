@@ -1,4 +1,4 @@
-# RFC Review: RFC-01 - peye v1: Headless Effect-Based Coding Agent
+# RFC Review: RFC-01 - popeye v1: Headless Effect-Based Coding Agent
 
 Round 1. Reviewers: structural validator (script), internal consistency
 (opus-5), source alignment vs pi/pi-ai (sonnet-5), adversarial (GPT via

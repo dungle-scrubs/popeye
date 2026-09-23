@@ -19,13 +19,13 @@ import { createSqliteJournalHarness, JournalSqlite } from "./sqlite.js";
 const directories: Array<string> = [];
 
 const makeDirectory = async (): Promise<string> => {
-  const dir = await mkdtemp(join(tmpdir(), "peye-sqlite-"));
+  const dir = await mkdtemp(join(tmpdir(), "popeye-sqlite-"));
   directories.push(dir);
   return dir;
 };
 
 const makeDirectorySync = (): string => {
-  const dir = mkdtempSync(join(tmpdir(), "peye-sqlite-"));
+  const dir = mkdtempSync(join(tmpdir(), "popeye-sqlite-"));
   directories.push(dir);
   return dir;
 };

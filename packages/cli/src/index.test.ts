@@ -3,7 +3,7 @@ import { expect, test } from "vitest";
 import * as cli from "./index.js";
 
 test("exports the cli package marker", () => {
-  expect(cli.cliPackage).toBe("@pop-eye/cli");
+  expect(cli.cliPackage).toBe("@popeye/cli");
 });
 
 test("exports the rpc Head and interaction transport", () => {

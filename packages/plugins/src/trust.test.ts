@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { SessionIdSchema } from "@pop-eye/journal";
+import { SessionIdSchema } from "@popeye/journal";
 import { Context, Effect, Exit, Layer, Schema, Tracer } from "effect";
 import { expect, test } from "vitest";
 
@@ -82,9 +82,9 @@ const tracerLayer = (spans: Array<CapturedSpan>): Layer.Layer<never> => {
 };
 
 test("a Trust decision records a digest of sorted project Plugin files", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-trust-digest-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-trust-digest-"));
   const projectPath = join(root, "project");
-  const pluginDirectory = join(projectPath, ".peye", "plugins");
+  const pluginDirectory = join(projectPath, ".popeye", "plugins");
 
   try {
     await mkdir(join(pluginDirectory, "nested"), { recursive: true });
@@ -116,8 +116,8 @@ test("a Trust decision records a digest of sorted project Plugin files", async (
     expect(result.record.decidedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(result.record.digest).toMatch(/^[a-f\d]{64}$/);
     expect(result.record.files.map((file) => file.path)).toEqual([
-      ".peye/plugins/nested/a.ts",
-      ".peye/plugins/z.ts",
+      ".popeye/plugins/nested/a.ts",
+      ".popeye/plugins/z.ts",
     ]);
     expect(result.record.files.every((file) => /^[a-f\d]{64}$/.test(file.digest))).toBe(true);
   } finally {
@@ -126,9 +126,9 @@ test("a Trust decision records a digest of sorted project Plugin files", async (
 });
 
 test("an unchanged digest returns the recorded Trust decision without a re-prompt after store reopen", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-trust-unchanged-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-trust-unchanged-"));
   const projectPath = join(root, "project");
-  const pluginDirectory = join(projectPath, ".peye", "plugins");
+  const pluginDirectory = join(projectPath, ".popeye", "plugins");
   const storePath = join(root, "settings", "trust.json");
 
   try {
@@ -157,9 +157,9 @@ test("an unchanged digest returns the recorded Trust decision without a re-promp
 });
 
 test("a trusted project can be revoked without supplying its digest", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-trust-revoke-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-trust-revoke-"));
   const projectPath = join(root, "project");
-  const pluginDirectory = join(projectPath, ".peye", "plugins");
+  const pluginDirectory = join(projectPath, ".popeye", "plugins");
 
   try {
     await mkdir(pluginDirectory, { recursive: true });
@@ -187,7 +187,7 @@ test("a trusted project can be revoked without supplying its digest", async () =
 });
 
 test("a legacy Trust record without provenance decodes as a user decision", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-trust-legacy-provenance-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-trust-legacy-provenance-"));
   const projectPath = join(root, "project");
   const storePath = join(root, "settings", "trust.json");
 
@@ -238,9 +238,9 @@ test("a legacy Trust record without provenance decodes as a user decision", asyn
 });
 
 test("a changed digest requires a re-prompt with added, removed, and modified Plugin files", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-trust-changed-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-trust-changed-"));
   const projectPath = join(root, "project");
-  const pluginDirectory = join(projectPath, ".peye", "plugins");
+  const pluginDirectory = join(projectPath, ".popeye", "plugins");
 
   try {
     await mkdir(pluginDirectory, { recursive: true });
@@ -267,9 +267,9 @@ test("a changed digest requires a re-prompt with added, removed, and modified Pl
 
     expect(result).toEqual({
       changeSummary: {
-        added: [".peye/plugins/added.ts"],
-        modified: [".peye/plugins/modified.ts"],
-        removed: [".peye/plugins/removed.ts"],
+        added: [".popeye/plugins/added.ts"],
+        modified: [".popeye/plugins/modified.ts"],
+        removed: [".popeye/plugins/removed.ts"],
       },
       currentDigest: expect.stringMatching(/^[a-f\d]{64}$/),
       decidedBy: "user",
@@ -281,9 +281,9 @@ test("a changed digest requires a re-prompt with added, removed, and modified Pl
 });
 
 test("a phase-1 Trust hook can replace a prompt result with a digest-bound decision", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-trust-hook-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-trust-hook-"));
   const projectPath = join(root, "project");
-  const pluginDirectory = join(projectPath, ".peye", "plugins");
+  const pluginDirectory = join(projectPath, ".popeye", "plugins");
   const registryLayer = ContributionRegistryLive();
   const layer = Layer.mergeAll(
     TrustStoreMemory(),
@@ -347,9 +347,9 @@ test("a phase-1 Trust hook can replace a prompt result with a digest-bound decis
 });
 
 test("Trust checks emit structured diagnostics and a plugins.trust span", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-trust-observability-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-trust-observability-"));
   const projectPath = join(root, "project");
-  const pluginDirectory = join(projectPath, ".peye", "plugins");
+  const pluginDirectory = join(projectPath, ".popeye", "plugins");
   const diagnostics: Array<unknown> = [];
   const spans: Array<CapturedSpan> = [];
 
@@ -380,7 +380,7 @@ test("Trust checks emit structured diagnostics and a plugins.trust span", async 
     const canonicalProjectPath = await realpath(projectPath);
 
     expect(diagnostics.at(-1)).toEqual({
-      changeSummary: { added: [], modified: [".peye/plugins/plugin.ts"], removed: [] },
+      changeSummary: { added: [], modified: [".popeye/plugins/plugin.ts"], removed: [] },
       decidedBy: "user",
       decision: "reprompt_required",
       digest: result.currentDigest,
@@ -392,7 +392,7 @@ test("Trust checks emit structured diagnostics and a plugins.trust span", async 
     expect(Object.fromEntries(spans.at(-1)?.attributes ?? [])).toMatchObject({
       changeSummary: JSON.stringify({
         added: [],
-        modified: [".peye/plugins/plugin.ts"],
+        modified: [".popeye/plugins/plugin.ts"],
         removed: [],
       }),
       decidedBy: "user",
@@ -408,9 +408,9 @@ test("Trust checks emit structured diagnostics and a plugins.trust span", async 
 });
 
 test("a nested project Plugin symlink escape fails typed and names the link", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-trust-symlink-escape-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-trust-symlink-escape-"));
   const projectPath = join(root, "project");
-  const pluginDirectory = join(projectPath, ".peye", "plugins");
+  const pluginDirectory = join(projectPath, ".popeye", "plugins");
   const nestedDirectory = join(pluginDirectory, "nested");
   const inTreeTarget = join(projectPath, "in-tree-plugin.ts");
   const outsideTarget = join(root, "outside-plugin.ts");
@@ -461,7 +461,7 @@ test("a nested project Plugin symlink escape fails typed and names the link", as
 });
 
 test("a corrupt JSON Trust store recovers as no decisions and preserves the corrupt bytes", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-trust-corrupt-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-trust-corrupt-"));
   const projectPath = join(root, "project");
   const storePath = join(root, "trust.json");
 
@@ -483,9 +483,9 @@ test("a corrupt JSON Trust store recovers as no decisions and preserves the corr
 });
 
 test("the digest walk memoizes real subtrees across sibling symlink fanout and fails its file budget", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-trust-fanout-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-trust-fanout-"));
   const projectPath = join(root, "project");
-  const pluginDirectory = join(projectPath, ".peye", "plugins");
+  const pluginDirectory = join(projectPath, ".popeye", "plugins");
   const sharedRoot = join(projectPath, "shared");
 
   try {
@@ -523,9 +523,9 @@ test("the digest walk memoizes real subtrees across sibling symlink fanout and f
 });
 
 test("the digest walk fails typed when the total-byte budget is exceeded", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-trust-byte-budget-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-trust-byte-budget-"));
   const projectPath = join(root, "project");
-  const pluginDirectory = join(projectPath, ".peye", "plugins");
+  const pluginDirectory = join(projectPath, ".popeye", "plugins");
 
   try {
     await mkdir(pluginDirectory, { recursive: true });
@@ -550,7 +550,7 @@ test("the digest walk fails typed when the total-byte budget is exceeded", async
 });
 
 test("editing a project-local CLI Plugin requires a new Trust decision", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-trust-cli-digest-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-trust-cli-digest-"));
   const projectPath = join(root, "project");
   const cliPluginPath = join(projectPath, "cli-plugin.mjs");
   const config = trustConfig(projectPath, [cliPluginPath]);
@@ -581,7 +581,7 @@ test("editing a project-local CLI Plugin requires a new Trust decision", async (
 });
 
 test("a project-local Trust hook cannot approve its own project", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-trust-local-hook-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-trust-local-hook-"));
   const projectPath = join(root, "project");
   const registryLayer = ContributionRegistryLive();
   const layer = Layer.mergeAll(
@@ -632,7 +632,7 @@ test("a project-local Trust hook cannot approve its own project", async () => {
 });
 
 test("interleaved Trust store writes cannot resurrect a revoked decision", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-trust-interleaved-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-trust-interleaved-"));
   const storePath = join(root, "settings", "trust.json");
   const firstProjectPath = join(root, "first-project");
   const secondProjectPath = join(root, "second-project");
@@ -687,7 +687,7 @@ test("interleaved Trust store writes cannot resurrect a revoked decision", async
 });
 
 test("Trust store writes use a private directory and a unique exclusive temporary file", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-trust-atomic-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-trust-atomic-"));
   const projectPath = join(root, "project");
   const settingsPath = join(root, "settings");
   const storePath = join(settingsPath, "trust.json");
@@ -718,9 +718,9 @@ test("Trust store writes use a private directory and a unique exclusive temporar
 });
 
 test("an auto-record digest mismatch emits the re-prompt diagnostic before it fails", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-trust-auto-record-race-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-trust-auto-record-race-"));
   const projectPath = join(root, "project");
-  const pluginDirectory = join(projectPath, ".peye", "plugins");
+  const pluginDirectory = join(projectPath, ".popeye", "plugins");
   const pluginPath = join(pluginDirectory, "plugin.mjs");
   const diagnostics: Array<unknown> = [];
   const registryLayer = ContributionRegistryLive();
@@ -774,7 +774,7 @@ test("an auto-record digest mismatch emits the re-prompt diagnostic before it fa
     expect(diagnostics.at(-1)).toMatchObject({
       changeSummary: {
         added: [],
-        modified: [".peye/plugins/plugin.mjs"],
+        modified: [".popeye/plugins/plugin.mjs"],
         removed: [],
       },
       decision: "reprompt_required",
@@ -786,7 +786,7 @@ test("an auto-record digest mismatch emits the re-prompt diagnostic before it fa
 });
 
 test("a blocking Trust hook fails closed without recording a replacement decision", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-trust-block-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-trust-block-"));
   const projectPath = join(root, "project");
   const registryLayer = ContributionRegistryLive();
   const layer = Layer.mergeAll(

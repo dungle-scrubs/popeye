@@ -23,8 +23,8 @@
 import { readFile } from "node:fs/promises";
 import type { Readable, Writable } from "node:stream";
 
-import { JournalStore, type JournalStoreEnv, SessionIdSchema } from "@pop-eye/journal";
-import { type PluginInteractions, PluginInteractionsNullLive } from "@pop-eye/plugins";
+import { JournalStore, type JournalStoreEnv, SessionIdSchema } from "@popeye/journal";
+import { type PluginInteractions, PluginInteractionsNullLive } from "@popeye/plugins";
 import { Cause, Data, Effect, Exit, Layer, Logger, Schema, Stream } from "effect";
 
 import type { AssistantItem, Driver, ProviderService } from "../compose.js";
@@ -110,26 +110,26 @@ const runError = (reason: CliRunError["reason"], message: string, cause?: unknow
 // ---------------------------------------------------------------------------
 
 const CLI_USAGE = `Usage:
-  peye -p "<prompt>"
-  peye -p --mode json "<prompt>"
-  peye -p --mode rpc
-  peye "<prompt>"
-  echo "<prompt>" | peye -p
+  popeye -p "<prompt>"
+  popeye -p --mode json "<prompt>"
+  popeye -p --mode rpc
+  popeye "<prompt>"
+  echo "<prompt>" | popeye -p
 
 Options:
-  --base-url <url>         Set the OpenAI-compatible endpoint. Env: PEYE_BASE_URL.
+  --base-url <url>         Set the OpenAI-compatible endpoint. Env: POPEYE_BASE_URL.
   -p, --headless           Run headless.
   --help                   Print this usage text.
   --mode <print|json|rpc>  Select the Head. Default: print.
-  --model <model>          Select the Provider model. Env: PEYE_MODEL.
+  --model <model>          Select the Provider model. Env: POPEYE_MODEL.
   --no-project-plugins     Do not load project-local Plugins.
   --plugin <path>          Add a Plugin path. Repeatable.
   --resume <sessionId>     Resume a Session.
-  --session-dir <dir>      Set the Journal directory. Default: .peye/sessions.
-  --version                Print the @pop-eye/cli version.
+  --session-dir <dir>      Set the Journal directory. Default: .popeye/sessions.
+  --version                Print the @popeye/cli version.
 
 Loopback endpoints need no API key; the CLI supplies its local placeholder automatically.
-Hosted endpoints require PEYE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.
+Hosted endpoints require POPEYE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.
 
 Exit status:
   0  Turn completed or truncated.
@@ -146,7 +146,7 @@ Read stderr to distinguish exit 2 causes.
 // ---------------------------------------------------------------------------
 
 export const selectJournalLayer = (sessionDir: string, env: CliEnvironment) => {
-  const explicit = env.PEYE_JOURNAL_LAYER;
+  const explicit = env.POPEYE_JOURNAL_LAYER;
   if (
     explicit !== undefined &&
     explicit.length > 0 &&
@@ -154,7 +154,7 @@ export const selectJournalLayer = (sessionDir: string, env: CliEnvironment) => {
     explicit !== "jsonl"
   ) {
     Effect.runSync(
-      Effect.logWarning(`PEYE_JOURNAL_LAYER=${explicit} unknown, using file-detection`),
+      Effect.logWarning(`POPEYE_JOURNAL_LAYER=${explicit} unknown, using file-detection`),
     );
   }
   return JournalStore.selectLayer(sessionDir, env as JournalStoreEnv);
@@ -197,7 +197,7 @@ const packageVersion = (): Effect.Effect<string, CliEntryError> =>
       catch: (cause) =>
         entryError(
           "package_metadata_invalid",
-          "Could not read @pop-eye/cli package metadata.",
+          "Could not read @popeye/cli package metadata.",
           cause,
         ),
       try: () => readFile(new URL("../../package.json", import.meta.url), "utf8"),
@@ -206,7 +206,7 @@ const packageVersion = (): Effect.Effect<string, CliEntryError> =>
       catch: (cause) =>
         entryError(
           "package_metadata_invalid",
-          "@pop-eye/cli package metadata is not valid JSON.",
+          "@popeye/cli package metadata is not valid JSON.",
           cause,
         ),
       try: () => JSON.parse(source) as unknown,
@@ -219,7 +219,7 @@ const packageVersion = (): Effect.Effect<string, CliEntryError> =>
     ) {
       return yield* entryError(
         "package_metadata_invalid",
-        "@pop-eye/cli package metadata has no version.",
+        "@popeye/cli package metadata has no version.",
       );
     }
     return metadata.version;

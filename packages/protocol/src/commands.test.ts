@@ -61,7 +61,7 @@ test("Schema frames exist for every kernel primitive and invoke-command", () => 
       args: { retainedTailCount: 8 },
       expectedRevision: 7,
       id: "invoke-1",
-      name: "peye/compact",
+      name: "popeye/compact",
       sessionId,
     },
   ] as const;

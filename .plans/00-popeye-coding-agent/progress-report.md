@@ -1,4 +1,4 @@
-# peye v1 - Progress Report
+# popeye v1 - Progress Report
 
 > Auto-generated from implementation plan. This is the canonical
 > source of truth for what is done and what remains. Update this
@@ -12,7 +12,7 @@
 ### M1: Workspace scaffold
 Source: `implementation.md` (M1); D-023, D-008
 
-- [x] pnpm workspace builds five packages (`@peye/journal`, `@peye/kernel`, `@peye/plugins`, `@peye/protocol`, `@peye/cli`) via tsc project references
+- [x] pnpm workspace builds five packages (`@popeye/journal`, `@popeye/kernel`, `@popeye/plugins`, `@popeye/protocol`, `@popeye/cli`) via tsc project references
 - [x] `pnpm lint` runs Biome across all packages
 - [x] `pnpm test` runs vitest across all packages
 - [x] Lefthook pre-commit runs lint + typecheck
@@ -297,7 +297,7 @@ Source: `implementation.md` (M25)
 - [x] ai-seam contract suite published as a package export
 - [x] Recorded-journal fixture harness documented
 - [x] Plugin-author guide covers manifest, contributions, hooks, capabilities, prohibited syntax, reload semantics
-- [x] README opens with the problem peye solves
+- [x] README opens with the problem popeye solves
 - [x] Clean-room `pnpm add` consumer runs both published suites green
 
 ## Deferred follow-up

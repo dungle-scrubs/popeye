@@ -2,15 +2,15 @@
  * Runs the built CLI against real OpenAI-compatible Providers.
  *
  * Run the full local set with:
- * PEYE_LIVE_ENDPOINT=http://127.0.0.1:1234/v1 \
- * PEYE_LIVE_MODEL=lmstudio-community/qwen3.6-27b-mlx \
- * PEYE_LIVE_MODEL_ALT=openai/gpt-oss-20b \
- * pnpm vitest run --project @pop-eye/cli src/entry/live.test.ts
+ * POPEYE_LIVE_ENDPOINT=http://127.0.0.1:1234/v1 \
+ * POPEYE_LIVE_MODEL=lmstudio-community/qwen3.6-27b-mlx \
+ * POPEYE_LIVE_MODEL_ALT=openai/gpt-oss-20b \
+ * pnpm vitest run --project @popeye/cli src/entry/live.test.ts
  *
- * The local suite is skipped unless PEYE_LIVE_ENDPOINT and PEYE_LIVE_MODEL are set. Spawned local
+ * The local suite is skipped unless POPEYE_LIVE_ENDPOINT and POPEYE_LIVE_MODEL are set. Spawned local
  * processes have every supported API-key variable removed, so they exercise keyless loopback.
- * The hosted case has a separate PEYE_LIVE_HOSTED_ENDPOINT, PEYE_LIVE_HOSTED_MODEL, and
- * PEYE_LIVE_HOSTED_API_KEY gate. A supported CLI API-key variable can supply the hosted key too.
+ * The hosted case has a separate POPEYE_LIVE_HOSTED_ENDPOINT, POPEYE_LIVE_HOSTED_MODEL, and
+ * POPEYE_LIVE_HOSTED_API_KEY gate. A supported CLI API-key variable can supply the hosted key too.
  */
 
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -19,8 +19,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import type { Progress, Snapshot } from "@pop-eye/protocol";
-import { decodeProgress, decodeSnapshot } from "@pop-eye/protocol";
+import type { Progress, Snapshot } from "@popeye/protocol";
+import { decodeProgress, decodeSnapshot } from "@popeye/protocol";
 import { Effect } from "effect";
 import { afterEach, beforeAll, expect, test } from "vitest";
 
@@ -57,11 +57,11 @@ const providerConfig = (
   };
 };
 
-const liveConfig = providerConfig(process.env.PEYE_LIVE_ENDPOINT, process.env.PEYE_LIVE_MODEL);
-const liveModelAlt = configured(process.env.PEYE_LIVE_MODEL_ALT);
+const liveConfig = providerConfig(process.env.POPEYE_LIVE_ENDPOINT, process.env.POPEYE_LIVE_MODEL);
+const liveModelAlt = configured(process.env.POPEYE_LIVE_MODEL_ALT);
 const hostedApiKey = configured(
-  process.env.PEYE_LIVE_HOSTED_API_KEY ??
-    process.env.PEYE_API_KEY ??
+  process.env.POPEYE_LIVE_HOSTED_API_KEY ??
+    process.env.POPEYE_API_KEY ??
     process.env.OPENAI_API_KEY ??
     process.env.ANTHROPIC_API_KEY,
 );
@@ -69,8 +69,8 @@ const hostedConfig =
   hostedApiKey === undefined
     ? undefined
     : providerConfig(
-        process.env.PEYE_LIVE_HOSTED_ENDPOINT,
-        process.env.PEYE_LIVE_HOSTED_MODEL,
+        process.env.POPEYE_LIVE_HOSTED_ENDPOINT,
+        process.env.POPEYE_LIVE_HOSTED_MODEL,
         hostedApiKey,
       );
 
@@ -105,7 +105,7 @@ interface LiveProcessOptions {
 }
 
 const sessionDirectory = (): string => {
-  const directory = mkdtempSync(join(tmpdir(), "peye-cli-live-"));
+  const directory = mkdtempSync(join(tmpdir(), "popeye-cli-live-"));
   temporaryDirectories.push(directory);
   return directory;
 };
@@ -119,9 +119,9 @@ const requireLiveConfig = (): LiveProviderConfig => {
 
 const liveEnvironment = (config: LiveProviderConfig): NodeJS.ProcessEnv => ({
   ...cleanCliEnvironment(),
-  ...(config.apiKey === undefined ? {} : { PEYE_API_KEY: config.apiKey }),
-  PEYE_BASE_URL: config.endpoint,
-  PEYE_MODEL: config.model,
+  ...(config.apiKey === undefined ? {} : { POPEYE_API_KEY: config.apiKey }),
+  POPEYE_BASE_URL: config.endpoint,
+  POPEYE_MODEL: config.model,
 });
 
 const spawnLiveBin = (
@@ -583,7 +583,7 @@ test.skipIf(liveConfig === undefined)(
   "live CLI: project Plugin Tool calling emits Progress and settles the final Snapshot",
   async () => {
     const projectPath = sessionDirectory();
-    const projectPluginDir = join(projectPath, ".peye", "plugins");
+    const projectPluginDir = join(projectPath, ".popeye", "plugins");
     const sessionDir = join(projectPath, "sessions");
     const userPluginDir = join(projectPath, "user-plugins");
     const marker = "LIVE-TOOL-MARKER-7C91";
@@ -618,7 +618,7 @@ test.skipIf(liveConfig === undefined)(
       requireLiveConfig(),
       {
         cwd: projectPath,
-        environment: { PEYE_USER_PLUGIN_DIR: userPluginDir },
+        environment: { POPEYE_USER_PLUGIN_DIR: userPluginDir },
       },
     );
 

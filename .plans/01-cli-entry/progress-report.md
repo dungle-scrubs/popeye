@@ -14,7 +14,7 @@ Source: implementation.md (M1); D-001, D-002, D-004, D-005
 - [x] positional prompt parsed
 - [x] stdin used as prompt when no prompt arg and stdin is piped
 - [x] --model / --base-url / --resume / --session-dir parsed
-- [x] flags override env; PEYE_MODEL/PEYE_BASE_URL/PEYE_API_KEY read
+- [x] flags override env; POPEYE_MODEL/POPEYE_BASE_URL/POPEYE_API_KEY read
 - [x] OPENAI_API_KEY / ANTHROPIC_API_KEY fallback for the key
 - [x] --version prints the cli package version and exits 0
 - [x] --help prints usage and exits 0
@@ -25,7 +25,7 @@ Source: implementation.md (M1); D-001, D-002, D-004, D-005
 ### M2: spawnable bin + head wiring
 Source: implementation.md (M2); D-003, D-006
 
-- [x] bin/peye.ts shebang entrypoint added; bin field in package.json
+- [x] bin/popeye.ts shebang entrypoint added; bin field in package.json
 - [x] version bumped 0.0.0 -> 0.1.0
 - [x] run() composes the Driver with PiAiProviderLive from config
 - [x] print head dispatch: final text + stop-reason exit code
@@ -41,9 +41,9 @@ Source: implementation.md (M3); D-007
 
 - [x] env-gated deterministic provider runs the CLI end-to-end without
       a network/model
-- [x] peye -p --mode json against it captured as
+- [x] popeye -p --mode json against it captured as
       test-fixtures/cli-json-stream.jsonl
-- [x] committed stream decodes through @peye/protocol decoders
+- [x] committed stream decodes through @popeye/protocol decoders
 - [x] fixture stable across two runs
 
 ## Deferred follow-up

@@ -8,7 +8,7 @@ import {
   JournalJsonl,
   type JournalService,
   type SessionId,
-} from "@pop-eye/journal";
+} from "@popeye/journal";
 import { Effect, Exit, Layer, Schema, Stream } from "effect";
 import { expect, test } from "vitest";
 
@@ -100,7 +100,7 @@ const doneProvider: ProviderService = {
 };
 
 test("JSONL kill after operation_started reopens to an interrupted assistant and finished Record", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m11-operation-started-"));
+  const directory = await mkdtemp(join(tmpdir(), "popeye-kernel-m11-operation-started-"));
   let sessionId: SessionId | undefined;
   try {
     const crashed = await Effect.runPromiseExit(
@@ -155,7 +155,7 @@ test("JSONL kill after operation_started reopens to an interrupted assistant and
 });
 
 test("JSONL kill after the user Entry closes the orphaned trailing prompt on resume", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m11-orphaned-prompt-"));
+  const directory = await mkdtemp(join(tmpdir(), "popeye-kernel-m11-orphaned-prompt-"));
   let sessionId: SessionId | undefined;
   try {
     const crashed = await Effect.runPromiseExit(
@@ -203,7 +203,7 @@ test("JSONL kill after the user Entry closes the orphaned trailing prompt on res
 });
 
 test("JSONL kill after the assistant Tool-call Entry synthesizes its missing Tool result", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m11-assistant-entry-"));
+  const directory = await mkdtemp(join(tmpdir(), "popeye-kernel-m11-assistant-entry-"));
   let sessionId: SessionId | undefined;
   let requests = 0;
   const provider: ProviderService = {
@@ -291,7 +291,7 @@ test("JSONL kill after the assistant Tool-call Entry synthesizes its missing Too
 
 test("JSONL kill after tool_started recovers according to never and safe replay policies", async () => {
   for (const replay of ["never", "safe"] as const) {
-    const directory = await mkdtemp(join(tmpdir(), `peye-kernel-m11-tool-started-${replay}-`));
+    const directory = await mkdtemp(join(tmpdir(), `popeye-kernel-m11-tool-started-${replay}-`));
     let sessionId: SessionId | undefined;
     let requests = 0;
     const provider: ProviderService = {
@@ -385,7 +385,7 @@ test("JSONL kill after tool_started recovers according to never and safe replay 
 });
 
 test("safe-replay recovery closes before another crashed Turn and leaves no dangling Context call", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m11-safe-replay-twice-"));
+  const directory = await mkdtemp(join(tmpdir(), "popeye-kernel-m11-safe-replay-twice-"));
   let sessionId: SessionId | undefined;
   const readFile = defineTool({
     description: "Would read a file.",
@@ -516,7 +516,7 @@ test("JSONL kills after partial and complete Tool results recover without duplic
     { failAfter: 7, label: "partial", synthesized: 1 },
     { failAfter: 8, label: "complete", synthesized: 0 },
   ] as const) {
-    const directory = await mkdtemp(join(tmpdir(), `peye-kernel-m11-results-${scenario.label}-`));
+    const directory = await mkdtemp(join(tmpdir(), `popeye-kernel-m11-results-${scenario.label}-`));
     let sessionId: SessionId | undefined;
     let requests = 0;
     const provider: ProviderService = {
@@ -607,7 +607,7 @@ test("JSONL kills after partial and complete Tool results recover without duplic
 });
 
 test("recovery dedupes by operationId and toolCallId after a kill during application", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m11-application-kill-"));
+  const directory = await mkdtemp(join(tmpdir(), "popeye-kernel-m11-application-kill-"));
   let sessionId: SessionId | undefined;
   let promptId: string | undefined;
   try {

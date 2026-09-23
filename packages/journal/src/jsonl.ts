@@ -36,7 +36,7 @@ import { createLineCodec, type LineCodec } from "./line-codec.js";
 import { type JournalLine, JournalLineSchema, type SessionId, SessionIdSchema } from "./shapes.js";
 
 const JournalHeaderSchema = Schema.Struct({
-  format: Schema.Literal("peye_journal"),
+  format: Schema.Literal("popeye_journal"),
   sessionId: SessionIdSchema,
   type: Schema.Literal("journal_header"),
   version: Schema.Literal(1),
@@ -348,7 +348,7 @@ const jsonlPersistence = (backing: JsonlJournalBacking): JournalPersistence => (
     Effect.gen(function* () {
       const file = sessionFile(backing.directory, sessionId);
       const header: JournalHeader = {
-        format: "peye_journal",
+        format: "popeye_journal",
         sessionId,
         type: "journal_header",
         version: 1,

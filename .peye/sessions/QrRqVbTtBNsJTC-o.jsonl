@@ -1,6 +1,0 @@
-{"payload":{"format":"peye_journal","sessionId":"QrRqVbTtBNsJTC-o","type":"journal_header","version":1},"v":1}
-{"payload":{"item":{"id":"sPG_efz-UclQU4eD","kind":"session_root","parentId":null,"payload":{}},"sessionId":"QrRqVbTtBNsJTC-o","type":"entry"},"v":1}
-{"payload":{"item":{"id":"bdyjNSKxtI1vQisQ","kind":"message","parentId":"sPG_efz-UclQU4eD","payload":{"content":"Write a haiku about append-only logs.","role":"user"}},"sessionId":"QrRqVbTtBNsJTC-o","type":"entry"},"v":1}
-{"payload":{"item":{"id":"DrsrRSU8tWi9Uv1C","kind":"operation_started","payload":{"intent":"turn","operationId":"d4b38eb9-40fc-4c80-a0d0-63e82729a5ef","promptEntryId":"bdyjNSKxtI1vQisQ","turnOrdinal":1}},"sessionId":"QrRqVbTtBNsJTC-o","type":"record"},"v":1}
-{"payload":{"item":{"id":"ys_0FHW5GEOzDDBX","kind":"message","parentId":"bdyjNSKxtI1vQisQ","payload":{"content":"\n\nWords stack upon words,\nNothing fades from the record;\nTime moves only forward.","role":"assistant","stopReason":"done"}},"sessionId":"QrRqVbTtBNsJTC-o","type":"entry"},"v":1}
-{"payload":{"item":{"id":"vgIfX1a9mLmF_UXc","kind":"operation_finished","payload":{"operationId":"d4b38eb9-40fc-4c80-a0d0-63e82729a5ef","outcome":"done"}},"sessionId":"QrRqVbTtBNsJTC-o","type":"record"},"v":1}

@@ -1,10 +1,10 @@
 # 01-cli-entry - Implementation Plan
 
-Wire a spawnable `peye` command over the existing heads so peye is
+Wire a spawnable `popeye` command over the existing heads so popeye is
 runnable from a shell AND spawnable as a harness by the normalizer
 (same pattern as `claude -p` / `pi -p --mode json`). Ledger: D-001..D-007
 in `.plans/01-cli-entry/plan.db`. Builds on the complete
-00-peye-coding-agent (Driver, heads, pi-ai seam all merged).
+00-popeye-coding-agent (Driver, heads, pi-ai seam all merged).
 
 ## Architecture
 
@@ -14,7 +14,7 @@ contract from M21/M22. The gap is purely the entrypoint: argv/env/stdin
 -> a composed Driver (with the pi-ai provider layer from the ai seam)
 -> the selected head. No kernel/journal/plugins/protocol changes.
 
-- New: `packages/cli/src/bin/peye.ts` (shebang entrypoint) + a `bin`
+- New: `packages/cli/src/bin/popeye.ts` (shebang entrypoint) + a `bin`
   field on `packages/cli/package.json`.
 - New: `packages/cli/src/entry/{args,config,run}.ts` - arg parsing
   (util.parseArgs), env/flag config resolution, and the compose+run
@@ -25,7 +25,7 @@ contract from M21/M22. The gap is purely the entrypoint: argv/env/stdin
 
 ### Boundaries
 
-- bin/entry live in @peye/cli; they import the composed Driver via
+- bin/entry live in @popeye/cli; they import the composed Driver via
   compose.ts and the public head functions - no new deep imports, the
   existing boundary rules stand.
 - Secrets: apiKey from env only, never logged, never in the journal or
@@ -48,8 +48,8 @@ exit non-zero with a clear stderr message naming the flag/env to fix.
   `resolveConfig(parsed, env)`.
   RED/GREEN: -p headless flag; --mode print|json|rpc (default print);
   positional prompt AND stdin-as-prompt; --model/--base-url/--resume/
-  --session-dir; flags override env (PEYE_MODEL/PEYE_BASE_URL/
-  PEYE_API_KEY with OPENAI_API_KEY/ANTHROPIC_API_KEY fallback);
+  --session-dir; flags override env (POPEYE_MODEL/POPEYE_BASE_URL/
+  POPEYE_API_KEY with OPENAI_API_KEY/ANTHROPIC_API_KEY fallback);
   --version prints the cli package version and exits 0; --help;
   missing model or endpoint -> typed error naming the env/flag; an
   --api-key flag is rejected (secrets via env only). rpc mode takes no
@@ -60,33 +60,33 @@ exit non-zero with a clear stderr message naming the flag/env to fix.
   golden output + exit codes)
 - **Observability:** required (the spawned process's stderr startup +
   error lines asserted)
-- Tasks: `bin/peye.ts` shebang entrypoint calls the entry run();
+- Tasks: `bin/popeye.ts` shebang entrypoint calls the entry run();
   `bin` field added to package.json; version bumped 0.0.0 -> 0.1.0.
   run() composes the Driver with `PiAiProviderLive` from resolved
   config and dispatches: print head (text + exit code), json head
   (wire stream + exit code), rpc head (persistent stdio server).
   Spawn-per-turn semantics for print/json: one prompt -> settlement ->
   exit. A subprocess test drives the built bin over real pipes:
-  peye --version; peye -p "..." (needs a provider - use the fake
-  provider seam, below); peye -p --mode json "..."; a bad-args exit;
+  popeye --version; popeye -p "..." (needs a provider - use the fake
+  provider seam, below); popeye -p --mode json "..."; a bad-args exit;
   a missing-config exit. Uniformity check: the flag surface matches
   the documented pi-style shape.
 
 ### M3: fake-provider seam + captured wire fixture
 - **Testing:** test-after (fixture capture + golden)
-- Tasks: an env-gated deterministic provider (PEYE_FAKE_PROVIDER with a
+- Tasks: an env-gated deterministic provider (POPEYE_FAKE_PROVIDER with a
   scripted-response file, or reuse the recorded-fixture provider) so
   the CLI runs end-to-end WITHOUT a network/model - both for CI tests
-  and to capture output. Run `peye -p --mode json` against it and
+  and to capture output. Run `popeye -p --mode json` against it and
   commit the real stdout as
   `packages/cli/test-fixtures/cli-json-stream.jsonl`; a test asserts
-  the committed stream decodes through @peye/protocol
+  the committed stream decodes through @popeye/protocol
   decodeProgress/decodeSnapshot (closing the normalizer's decoder-
   fixture blocker) and is stable across two runs.
 
 ### Gate 1 -> complete
-- [ ] peye --version, peye -p "...", peye -p --mode json "...",
-      peye -p --mode rpc all work over a real spawned process
+- [ ] popeye --version, popeye -p "...", popeye -p --mode json "...",
+      popeye -p --mode rpc all work over a real spawned process
 - [ ] the committed cli-json-stream.jsonl decodes through the protocol
       schemas and is stable
 - [ ] flag surface documented (README quickstart updated) and matches

@@ -8,7 +8,7 @@ import { expect, test } from "vitest";
 import { loadPluginModule } from "./loader.js";
 
 test("native import loads annotations, import type, generics, host imports, and relative siblings", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-loader-native-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-fixture-loader-native-"));
   const pluginPath = join(root, "plugin.ts");
 
   try {
@@ -67,7 +67,7 @@ test("native import loads annotations, import type, generics, host imports, and 
 });
 
 test("enum and namespace syntax fail with a clear diagnostic naming the file and construct", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-loader-syntax-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-fixture-loader-syntax-"));
   const enumPath = join(root, "enum-plugin.ts");
   const namespacePath = join(root, "namespace-plugin.ts");
 
@@ -100,9 +100,9 @@ test("enum and namespace syntax fail with a clear diagnostic naming the file and
 });
 
 test("distinct reload keys evaluate fresh entries while each Node registry entry stays cached", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-loader-state-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-fixture-loader-state-"));
   const pluginPath = join(root, "plugin.ts");
-  const stateKey = `peye-loader-${root}`;
+  const stateKey = `popeye-loader-${root}`;
 
   try {
     await writeFile(
@@ -139,7 +139,7 @@ test("distinct reload keys evaluate fresh entries while each Node registry entry
 });
 
 test("reload cache busting does not reload relative sibling modules", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-loader-sibling-cache-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-fixture-loader-sibling-cache-"));
   const pluginPath = join(root, "plugin.ts");
   const siblingPath = join(root, "sibling.ts");
 
@@ -174,7 +174,7 @@ test("reload cache busting does not reload relative sibling modules", async () =
 });
 
 test("module-evaluation and factory throws fail as build_failed and name the Plugin file", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-loader-build-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-fixture-loader-build-"));
   const importFailurePath = join(root, "import-failure.ts");
   const factoryFailurePath = join(root, "factory-failure.ts");
 
@@ -202,7 +202,7 @@ test("module-evaluation and factory throws fail as build_failed and name the Plu
 });
 
 test("Plugin error text cannot impersonate Node's unsupported TypeScript syntax code", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-fixture-loader-error-text-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-fixture-loader-error-text-"));
   const pluginPath = join(root, "plugin.ts");
 
   try {

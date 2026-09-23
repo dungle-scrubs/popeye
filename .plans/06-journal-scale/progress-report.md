@@ -38,8 +38,8 @@ Source: `implementation.md` (M2)
 Source: `implementation.md` (M3); D-006
 
 - [x] SQLite layer passes the exported `conformance` suite via `describeSqlite(makeSqlite)` alongside memory/JSONL - all M3/M4 behaviors green
-- [x] CLI selection - env `PEYE_JOURNAL_LAYER=sqlite` or existence of `journal.sqlite` in `--session-dir` selects SQLite; otherwise JSONL; no auto-migration <!-- D-006 -->
-- [x] `peye migrate` (or documented script) bulk-imports acknowledged JSONL lines into `journal.sqlite` when explicitly invoked; existing JSONL dirs untouched by default open
+- [x] CLI selection - env `POPEYE_JOURNAL_LAYER=sqlite` or existence of `journal.sqlite` in `--session-dir` selects SQLite; otherwise JSONL; no auto-migration <!-- D-006 -->
+- [x] `popeye migrate` (or documented script) bulk-imports acknowledged JSONL lines into `journal.sqlite` when explicitly invoked; existing JSONL dirs untouched by default open
 - [x] `pnpm test`, `pnpm typecheck`, `pnpm lint`, `pnpm check-boundaries` green; 10x flake on SQLite conformance + fencing tests
 
 ## Phase 2: Bounded Snapshot Pagination
@@ -48,10 +48,10 @@ Source: `implementation.md` (M3); D-006
 
 Source: `implementation.md` (M4); D-002, D-003, D-004, D-005, D-007
 
-- [x] `SessionStore.getSnapshot` (or driver snapshot fold) enforces encoded byte bound - default `1,048,576` bytes <!-- D-002 --> configurable via `PEYE_SNAPSHOT_PAGE_BYTES` <!-- D-003 --> with validation as positive integer
+- [x] `SessionStore.getSnapshot` (or driver snapshot fold) enforces encoded byte bound - default `1,048,576` bytes <!-- D-002 --> configurable via `POPEYE_SNAPSHOT_PAGE_BYTES` <!-- D-003 --> with validation as positive integer
 - [x] Size strategy is estimate-then-verify <!-- D-007 --> - `entryCount * ~511` picks leaf-anchored suffix candidate, then `JSON.stringify(SnapshotSchema.encode(snapshot))` UTF-8 size verifies under bound
 - [x] When bound exceeded, emitted Snapshot is leaf-anchored suffix window under bound with `entryRange { afterEntryId, hasMoreBefore:true, ... }`, true `leafEntryId` and `revision` preserved
-- [x] Configurable threshold harness - `PEYE_SNAPSHOT_PAGE_BYTES=10240` makes 10-turn workload paginate early; invalid env value fails typed
+- [x] Configurable threshold harness - `POPEYE_SNAPSHOT_PAGE_BYTES=10240` makes 10-turn workload paginate early; invalid env value fails typed
 - [x] Single large Entry over bound delivered as one-entry Snapshot exceeding bound, with diagnostic naming the oversized entry <!-- D-004 -->
 - [x] 256 KiB warning path - at ~563 KiB (500 turns fixture) Snapshot emits span attribute `snapshot.bytes` and structured diagnostic `snapshotWarning` but does not paginate <!-- D-005 -->
 - [x] Pagination and warning logic lives in `snapshot/pagination.ts` or co-located module with owns/why/not-responsible comment; spans carry `revision`, `leafEntryId`, `entryCount`, `encodedBytes`, `isPaginated`, `entryRange`

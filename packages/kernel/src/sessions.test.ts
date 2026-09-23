@@ -9,7 +9,7 @@ import {
   JournalMemory,
   RecordDraftSchema,
   SessionIdSchema,
-} from "@pop-eye/journal";
+} from "@popeye/journal";
 import { Effect, type Exit, Layer, Schema, Tracer } from "effect";
 import { expect, test } from "vitest";
 
@@ -243,7 +243,7 @@ test("resume rejects a corrupt payload in the active recovery Record slice", asy
 });
 
 test("JSONL lifecycle derives revision after appends and removes its temporary directory", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m7-"));
+  const directory = await mkdtemp(join(tmpdir(), "popeye-kernel-m7-"));
   const makeLayer = () =>
     SessionsLive().pipe(
       Layer.provide(ToolRegistryLive([])),
@@ -518,7 +518,7 @@ test("resume traces recovery with session, operation, action, append, and safe-r
 });
 
 test("resume ignores a corrupt payload in an operation closed before the recovery slice", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m11-bounded-corruption-"));
+  const directory = await mkdtemp(join(tmpdir(), "popeye-kernel-m11-bounded-corruption-"));
   try {
     const session = await Effect.runPromise(
       Effect.gen(function* () {

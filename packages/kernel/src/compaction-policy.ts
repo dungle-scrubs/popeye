@@ -14,7 +14,7 @@ import {
   type JournalFailure,
   type JournalService,
   type SessionId,
-} from "@pop-eye/journal";
+} from "@popeye/journal";
 import { Context, Effect, Layer, Schema, Stream } from "effect";
 
 import { CompactionDisabled, NothingToCompact, ProviderError } from "./errors.js";
@@ -89,7 +89,7 @@ export type CompactionFailure =
   | NothingToCompact
   | ProviderError;
 
-export class Compaction extends Context.Tag("@pop-eye/kernel/Compaction")<
+export class Compaction extends Context.Tag("@popeye/kernel/Compaction")<
   Compaction,
   CompactionService
 >() {}

@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import { PassThrough, Readable } from "node:stream";
 
-import { createMemoryJournalBacking, JournalMemory } from "@pop-eye/journal";
-import { InteractionTimeout, ProtocolError } from "@pop-eye/protocol";
+import { createMemoryJournalBacking, JournalMemory } from "@popeye/journal";
+import { InteractionTimeout, ProtocolError } from "@popeye/protocol";
 import { Deferred, Effect, Either, Fiber, Layer, Stream, Tracer } from "effect";
 import { expect, test } from "vitest";
 

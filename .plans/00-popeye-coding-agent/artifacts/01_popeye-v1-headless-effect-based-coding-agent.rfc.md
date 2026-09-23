@@ -1,19 +1,19 @@
 ---
 number: 01
-title: "peye v1: Headless Effect-Based Coding Agent"
+title: "popeye v1: Headless Effect-Based Coding Agent"
 type: feature
 status: Accepted
 author: Kevin Frilot
 date: 2026-08-10
 ---
 
-# RFC-01: peye v1: Headless Effect-Based Coding Agent
+# RFC-01: popeye v1: Headless Effect-Based Coding Agent
 
 ## Abstract
 
-peye is a coding agent whose core is an append-only journal and whose only
+popeye is a coding agent whose core is an append-only journal and whose only
 mechanism for adding behavior is a plugin system expressive enough that
-peye's own features are built with it. v1 is headless: the kernel, journal,
+popeye's own features are built with it. v1 is headless: the kernel, journal,
 context fold, plugin system, and three wire heads (print, JSON, RPC), with
 `@earendil-works/pi-ai` as the provider layer and Effect v3 as the
 implementation substrate. The design adopts what the pi source analysis
@@ -48,7 +48,7 @@ In scope for v1:
 - The **context** fold: branch entries + budget to model-visible messages.
 - The **plugin system**: manifests, contributions (tools, commands, hooks,
   instruction fragments per <!-- D-019 --> D-019), capabilities, trust,
-  hot reload; peye's own commands ship as plugins.
+  hot reload; popeye's own commands ship as plugins.
 - The **protocol**, an in-process driver head (from Phase 2), and three
   wire heads: print, JSON, RPC (<!-- D-006 --> D-006).
 - The **ai seam**: the single module importing pi-ai (<!-- D-001 -->
@@ -88,7 +88,7 @@ Domain terms (Session, Journal, Entry, Record, Branch, Leaf, Compaction,
 Snapshot, Context, Progress, Kernel, Turn, Steering, Follow-up, Provider,
 Plugin, Contribution, Hook, Capability, Tool, Command, Trust, Head,
 Protocol) are defined in `CONTEXT.md`, which is normative
-(<!-- D-010 --> D-010..D-013). The word "event" MUST NOT appear in peye
+(<!-- D-010 --> D-010..D-013). The word "event" MUST NOT appear in popeye
 code, documentation, or type names; pi's and pi-ai's own names are exempt
 when quoting or interfacing with those systems.
 
@@ -128,8 +128,8 @@ to pi:
    (<!-- D-014 --> D-014).
 3. **An enforceable dogfood rule.** pi's plugin-like API is proven
    expressive (its examples implement plan mode, subagents, sandboxing)
-   but pi core does not use it, so nothing prevents divergence. peye
-   inverts this: the plugin API is load-bearing for peye's own features
+   but pi core does not use it, so nothing prevents divergence. popeye
+   inverts this: the plugin API is load-bearing for popeye's own features
    from day one (<!-- D-005 --> D-005).
 
 ## Design
@@ -282,7 +282,7 @@ The only module that knows pi-ai exists.
   and is acknowledged; it is confined to this seam and maintained
   upstream. No pi-ai type crosses the seam.
 - Model listing, thinking-level clamping, cache retention, and auth
-  resolution delegate to pi-ai; peye adds no provider logic. Plugins do
+  resolution delegate to pi-ai; popeye adds no provider logic. Plugins do
   not contribute providers (D-019); custom endpoints are pi-ai model
   configuration.
 - The dependency is pinned to an exact version of `@earendil-works/pi-ai`
@@ -338,7 +338,7 @@ function returning contributions.
   resolving inside the project tree is project-local, loads only in
   phase 2, and MUST NOT answer trust - a project cannot approve itself.
   The trust decision records a content digest of the project's plugin
-  files; on change, peye re-prompts with a summary of what changed.
+  files; on change, popeye re-prompts with a summary of what changed.
   Project-local plugin code MUST NOT execute before the trust decision.
 - **Hot reload**: the current generation lives behind a `Ref`. Reload
   builds the new generation, swaps the ref for subsequent work, and
@@ -349,7 +349,7 @@ function returning contributions.
   scope closure, not assertion stubs.
 - **State**: plugins persist state as entries (session-tree residency,
   pi's design, kept) so branch switches yield correct per-branch state.
-- **Discovery**: project (`.peye/plugins/`), user-global, and explicit
+- **Discovery**: project (`.popeye/plugins/`), user-global, and explicit
   paths (D-018). pi's five surfaces do not exist: a skill, theme, or
   template is a plugin whose contributions are of one kind.
 - **Loading** (<!-- D-027 --> D-027): plugin modules load through native
@@ -493,14 +493,14 @@ InteractionTimeout (interaction request expired; resolved by the
   residual risk for a local agent (pi's stated position, adopted),
   mitigated by capability-gated tool availability and gate hooks, not by
   claimed in-process sandboxing.
-- **Isolation is an OS concern.** peye MUST NOT claim an in-process
+- **Isolation is an OS concern.** popeye MUST NOT claim an in-process
   permission sandbox. Real isolation (containers, micro-VMs) is
-  established around the peye process from outside. A plugin MAY
+  established around the popeye process from outside. A plugin MAY
   integrate an external isolation boundary (as pi's gondolin does), but
   the boundary lives outside the process, and the integrating plugin
   itself runs with process authority before that boundary exists -
   which is why trust, not capability declarations, gates its loading.
-- **Secrets.** Provider auth is pi-ai's concern; peye MUST NOT persist
+- **Secrets.** Provider auth is pi-ai's concern; popeye MUST NOT persist
   credentials in the journal and MUST NOT write request headers to any
   diagnostic output. Journal files contain conversation content and code;
   they are as sensitive as the repository itself.
@@ -516,7 +516,7 @@ InteractionTimeout (interaction request expired; resolved by the
 
 ## Alternatives Considered
 
-1. **Contribute harness-v2 to pi instead of building peye.** Attractive:
+1. **Contribute harness-v2 to pi instead of building popeye.** Attractive:
    the diagnosis and design doc already exist there. Rejected: the goals
    include Effect as substrate and a single plugin primitive - rewrites
    of pi's core contracts, not contributions - and pi's contribution
@@ -610,7 +610,7 @@ five packages; <!-- D-024 --> D-024 explicit-only fragments in v1.)
 - [@earendil-works/pi-ai on npm](https://www.npmjs.com/package/@earendil-works/pi-ai) -
   the provider dependency (exact-pinned, 0.84.x at time of writing)
 - Plan ledger decisions D-001..D-027
-  (`.plans/00-peye-coding-agent/plan.db`)
+  (`.plans/00-popeye-coding-agent/plan.db`)
 - Review round 1 report
-  (`.plans/00-peye-coding-agent/artifacts/rfc-01-review-round-1.md`)
-- Spike report (`.plans/00-peye-coding-agent/spike-report.md`)
+  (`.plans/00-popeye-coding-agent/artifacts/rfc-01-review-round-1.md`)
+- Spike report (`.plans/00-popeye-coding-agent/spike-report.md`)

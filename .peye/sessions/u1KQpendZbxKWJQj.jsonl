@@ -1,6 +1,0 @@
-{"payload":{"format":"peye_journal","sessionId":"u1KQpendZbxKWJQj","type":"journal_header","version":1},"v":1}
-{"payload":{"item":{"id":"Ds47Ws2oN2ZlZONN","kind":"session_root","parentId":null,"payload":{}},"sessionId":"u1KQpendZbxKWJQj","type":"entry"},"v":1}
-{"payload":{"item":{"id":"xqBS-3_Yy99wADdm","kind":"message","parentId":"Ds47Ws2oN2ZlZONN","payload":{"content":"Capture the CLI JSON stream.","role":"user"}},"sessionId":"u1KQpendZbxKWJQj","type":"entry"},"v":1}
-{"payload":{"item":{"id":"CQcJVoJGbTOf5dvI","kind":"operation_started","payload":{"intent":"turn","operationId":"9a08e984-493e-4411-8a12-281956e15f95","promptEntryId":"xqBS-3_Yy99wADdm","turnOrdinal":1}},"sessionId":"u1KQpendZbxKWJQj","type":"record"},"v":1}
-{"payload":{"item":{"id":"mKxhJueurCodAniZ","kind":"message","parentId":"xqBS-3_Yy99wADdm","payload":{"content":"Fake provider answer.","role":"assistant","stopReason":"done"}},"sessionId":"u1KQpendZbxKWJQj","type":"entry"},"v":1}
-{"payload":{"item":{"id":"H17DXO0_-In1uAQX","kind":"operation_finished","payload":{"operationId":"9a08e984-493e-4411-8a12-281956e15f95","outcome":"done"}},"sessionId":"u1KQpendZbxKWJQj","type":"record"},"v":1}

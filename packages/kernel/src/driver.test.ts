@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { JournalError } from "@pop-eye/journal";
+import type { JournalError } from "@popeye/journal";
 import {
   type ContextBudgetExceeded,
   createMemoryJournalBacking,
@@ -11,7 +11,7 @@ import {
   JournalJsonl,
   JournalMemory,
   type SessionId,
-} from "@pop-eye/journal";
+} from "@popeye/journal";
 import { Chunk, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect";
 import { expect, test } from "vitest";
 
@@ -424,7 +424,7 @@ test("settings resolve inside turn command order", async () => {
 });
 
 test("durable Branch settings survive a JSONL layer restart", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-settings-"));
+  const directory = await mkdtemp(join(tmpdir(), "popeye-kernel-settings-"));
   const provider: ProviderService = {
     streamAssistant: () =>
       Stream.fromIterable([
@@ -721,13 +721,13 @@ test("progress subscription delivers items during the scripted session", async (
 });
 
 test("scripted session is captured as the canonical recorded-journal fixture", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m14-"));
+  const directory = await mkdtemp(join(tmpdir(), "popeye-kernel-m14-"));
   try {
     const result = await runCanonicalScript(JournalJsonl(directory));
     const recorded = await readFile(join(directory, `${result.sessionId}.jsonl`), "utf8");
     const normalized = normalizeJournalText(recorded);
     const fixtureUrl = new URL("../test-fixtures/canonical-driver-session.jsonl", import.meta.url);
-    if (process.env.PEYE_UPDATE_RECORDED_FIXTURES === "1") {
+    if (process.env.POPEYE_UPDATE_RECORDED_FIXTURES === "1") {
       await writeFile(fixtureUrl, normalized);
     }
     const golden = await readFile(fixtureUrl, "utf8");

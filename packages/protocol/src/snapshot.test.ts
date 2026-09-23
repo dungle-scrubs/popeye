@@ -27,7 +27,7 @@ test("Snapshot schema carries the full transcript and inspection fields", () => 
     leafEntryId: "entry-user",
     loadedGeneration: {
       id: "generation-20",
-      plugins: ["peye-compact", "peye-session-name"],
+      plugins: ["popeye-compact", "popeye-session-name"],
     },
     model: "provider/model",
     phase: "STREAMING",

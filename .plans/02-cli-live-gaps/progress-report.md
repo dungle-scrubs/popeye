@@ -16,17 +16,17 @@ Source: `implementation.md` (M1); D-013, D-014
 - [x] A `--plugin` path resolving inside the project tree is classified project-local
 - [x] `--no-project-plugins` flag parses
 - [x] `--help` documents both new flags
-- [x] User-global plugin directory resolves to `~/.peye/plugins` (test override via `PEYE_USER_PLUGIN_DIR`, undocumented surface)
+- [x] User-global plugin directory resolves to `~/.popeye/plugins` (test override via `POPEYE_USER_PLUGIN_DIR`, undocumented surface)
 - [x] No trust-related flag exists; an attempted `--trust` is rejected as unknown
 
 ### M2: Generation composition
 Source: `implementation.md` (M2); D-002, D-008, D-010, D-011, D-014
 
 - [x] Empty project: first-party plugins load through the generation registry; `compact` and `session-name` commands invoke
-- [x] A fixture project plugin in `.peye/plugins` loads and its command invokes
+- [x] A fixture project plugin in `.popeye/plugins` loads and its command invokes
 - [x] A user-global fixture plugin loads in phase 1, before any project code
 - [x] An out-of-tree `--plugin` path loads phase-1; an in-tree `--plugin` path loads phase-2
-- [x] `--no-project-plugins` skips `.peye/plugins` AND project-local `--plugin` paths; user-global and out-of-tree sources still load
+- [x] `--no-project-plugins` skips `.popeye/plugins` AND project-local `--plugin` paths; user-global and out-of-tree sources still load
 - [x] `loadGeneration` composes `trust: "trusted"` over `TrustStoreMemory`; a fresh store re-resolves (nothing durably recorded)
 - [x] A phase-2 plugin whose manifest name matches a loaded phase-1 plugin fails registration with a diagnostic naming both paths; the run fails closed
 - [x] A plugin that throws at import fails the run as `CliRunError` `composition_failed` naming file and cause; the bin exits 2
@@ -40,7 +40,7 @@ Source: `implementation.md` (M2); D-002, D-008, D-010, D-011, D-014
 ### M3: Tool adapter
 Source: `implementation.md` (M3); D-003, D-006, D-007, D-009, D-015
 
-- [x] `PluginGeneration` exposes each loaded plugin's manifest via an additive accessor (D-022), test-covered in `@pop-eye/plugins`, existing tests unchanged
+- [x] `PluginGeneration` exposes each loaded plugin's manifest via an additive accessor (D-022), test-covered in `@popeye/plugins`, existing tests unchanged
 - [x] A fixture tool contribution adapts with every field intact (name, description, parameters schema, execute, executionMode, replay, requiredCapabilities)
 - [x] Session grants are the union of loaded manifests' capabilities
 - [x] A tool requiring a capability its own plugin does not declare is skipped with a diagnostic naming the plugin and the missing declaration, even when another plugin declares that capability
@@ -61,7 +61,7 @@ Source: `implementation.md` (M4); D-012
 ### M5: End-to-end tool proof
 Source: `implementation.md` (M5)
 
-- [x] A fake-provider toolCall turn completes through the spawned bin (`--mode json`); the captured stream decodes through `@pop-eye/protocol`
+- [x] A fake-provider toolCall turn completes through the spawned bin (`--mode json`); the captured stream decodes through `@popeye/protocol`
 - [x] The captured fixture is stable across two consecutive runs
 - [x] Live harness: a real model turn calls the fixture tool through the shipped bin (env-gated)
 - [x] `01-cli-entry` ledger finding 2 (tool loading) resolved with harness evidence
@@ -105,7 +105,7 @@ Source: `implementation.md` (M8)
 Source: `implementation.md` (Deferred follow-up); D-006, D-010
 
 - [ ] Per-Session tool visibility (kernel seam change) - D-006
-- [ ] Plugin import timeout in `@pop-eye/plugins` - D-010 known limitation
+- [ ] Plugin import timeout in `@popeye/plugins` - D-010 known limitation
 - [ ] Opinionated trust-gate and tool-vetting first-party plugins over the existing `trust` / `tool-call-gate` hook points
 - [ ] CLI hot-reload trigger for generations
 

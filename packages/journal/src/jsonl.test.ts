@@ -13,13 +13,13 @@ import { EntryDraftSchema, SessionIdSchema } from "./shapes.js";
 const directories: Array<string> = [];
 
 const makeDirectory = async (): Promise<string> => {
-  const directory = await mkdtemp(join(tmpdir(), "peye-journal-"));
+  const directory = await mkdtemp(join(tmpdir(), "popeye-journal-"));
   directories.push(directory);
   return directory;
 };
 
 const makeDirectorySync = (): string => {
-  const directory = mkdtempSync(join(tmpdir(), "peye-journal-"));
+  const directory = mkdtempSync(join(tmpdir(), "popeye-journal-"));
   directories.push(directory);
   return directory;
 };

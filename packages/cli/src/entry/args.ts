@@ -1,5 +1,5 @@
 /**
- * Owns the command-line argument interface for the peye executable.
+ * Owns the command-line argument interface for the popeye executable.
  * It exists so argument syntax and typed failures stay independent from process I/O.
  */
 import { parseArgs as parseNodeArgs } from "node:util";
@@ -42,11 +42,12 @@ const invalidArguments = (message: string, cause?: unknown): CliArgsError =>
     reason: "invalid_arguments",
   });
 
-const promptRequired = (): CliArgsError => invalidArguments('Use peye -p "<prompt>".');
+const promptRequired = (): CliArgsError => invalidArguments('Use popeye -p "<prompt>".');
 
 const secretFlagError = (): CliArgsError =>
   new CliArgsError({
-    message: "--api-key is not supported. Set PEYE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.",
+    message:
+      "--api-key is not supported. Set POPEYE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.",
     reason: "secret_flag",
   });
 
@@ -103,7 +104,7 @@ export const parseArgs = (argv: ReadonlyArray<string>): Effect.Effect<ParsedArgs
       const prompt = positionals[0];
       if (mode === "rpc" && prompt !== undefined) {
         return Effect.fail(
-          invalidArguments("RPC mode does not accept a prompt. Use peye -p --mode rpc."),
+          invalidArguments("RPC mode does not accept a prompt. Use popeye -p --mode rpc."),
         );
       }
       if (prompt === undefined && mode !== "rpc" && values.headless !== true) {

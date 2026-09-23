@@ -22,7 +22,7 @@ const pluginSource = (name: string, content: string): string =>
   ].join("\n");
 
 test("checkout/drain/busy/view via one Ref and isReloading flag with no pendingOlds", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-gen-runtime-ref-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-gen-runtime-ref-"));
   const projectPath = join(root, "project");
   const pluginPath = join(root, "external-plugin.ts");
 
@@ -98,7 +98,7 @@ test("checkout/drain/busy/view via one Ref and isReloading flag with no pendingO
 });
 
 test("FakeClock drain with stalled fake provider in-flight as single GenerationRuntime spec", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-gen-runtime-fakeclock-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-gen-runtime-fakeclock-"));
   const projectPath = join(root, "project");
   const pluginPath = join(root, "external-plugin.ts");
 
@@ -153,7 +153,7 @@ test("FakeClock drain with stalled fake provider in-flight as single GenerationR
 });
 
 test("isReloading single flag prevents concurrent reload with GenerationBusyError", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-gen-runtime-busy-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-gen-runtime-busy-"));
   const projectPath = join(root, "project");
   const pluginPath = join(root, "external-plugin.ts");
 

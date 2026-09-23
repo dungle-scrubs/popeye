@@ -25,22 +25,22 @@ lists every user-facing feature for every milestone as a checkbox.
 
 ## 0. Hard Dependencies
 
-None. Plans `00-peye-coding-agent` and `01-cli-entry` are complete and merged;
+None. Plans `00-popeye-coding-agent` and `01-cli-entry` are complete and merged;
 every library API this plan composes already exists on `main`.
 
 ## Architecture
 
-The plan closes two composition gaps in `@pop-eye/cli`; no other package
+The plan closes two composition gaps in `@popeye/cli`; no other package
 changes. This document plus the decisions ledger in `plan.db` are canonical
 and sufficient to execute; the archived RFC
 (`artifacts/01_cli-plugin-tool-loading-and-concurrent-rpc-dispatch.rfc.md`)
 is background rationale only.
 
 ```
-peye bin
+popeye bin
   └─ run.ts
        ├─ Plugin pipeline (NEW composition)          Phase 1
-       │    discovery config (~/.peye/plugins, --plugin, --no-project-plugins)
+       │    discovery config (~/.popeye/plugins, --plugin, --no-project-plugins)
        │    loadGeneration(trust: "trusted", TrustStoreMemory)   D-002 D-008
        │    first-party plugins via same registry (dogfood)
        │    phase-1 displacement guard                            D-011
@@ -70,9 +70,9 @@ peye bin
 
 ### Boundaries
 
-- All new code lives in `@pop-eye/cli`, with one exception recorded by
+- All new code lives in `@popeye/cli`, with one exception recorded by
   D-022: an additive, behavior-preserving manifest accessor on
-  `PluginGeneration` in `@pop-eye/plugins` (test-covered there). Import-
+  `PluginGeneration` in `@popeye/plugins` (test-covered there). Import-
   boundary CI rules are unchanged and must stay green: no kernel internals,
   no pi-ai outside the seam.
 - New module seams (each gets a module comment stating what it owns and why
@@ -121,7 +121,7 @@ feature (D-012):
 
 ### Phase 1: Plugin pipeline in the CLI
 
-**Goal:** `peye` discovers, trusts (constant), and loads user-global,
+**Goal:** `popeye` discovers, trusts (constant), and loads user-global,
 CLI-passed, and project-local plugins through one generation, fail-closed,
 fully diagnosed - with commands and hooks served from that generation.
 
@@ -139,8 +139,8 @@ fully diagnosed - with commands and hooks served from that generation.
      absent → empty. GREEN: implement.
   3. RED: `--no-project-plugins` parses; `--help` documents both flags.
      GREEN: implement.
-  4. RED: config resolves user-global plugin dir to `~/.peye/plugins`
-     <!-- D-013 --> (overridable for tests via env `PEYE_USER_PLUGIN_DIR`;
+  4. RED: config resolves user-global plugin dir to `~/.popeye/plugins`
+     <!-- D-013 --> (overridable for tests via env `POPEYE_USER_PLUGIN_DIR`;
      env var is test-support, not documented surface). GREEN: implement.
   5. REFACTOR: keep the flag table alphabetical; update bin help fixture.
 
@@ -160,9 +160,9 @@ fully diagnosed - with commands and hooks served from that generation.
      registry. GREEN: compose `loadGeneration` with `trust: "trusted"`
      <!-- D-002 --> over `TrustStoreMemory` <!-- D-008 -->, register
      first-party plugins through the same registry.
-  3. RED: a fixture project plugin in `.peye/plugins` loads; its command is
+  3. RED: a fixture project plugin in `.popeye/plugins` loads; its command is
      invokable. GREEN: phase-2 wiring.
-  4. RED: `--no-project-plugins` skips `.peye/plugins` AND a project-local
+  4. RED: `--no-project-plugins` skips `.popeye/plugins` AND a project-local
      `--plugin` path <!-- D-014 -->; user-global and out-of-tree `--plugin`
      paths still load. GREEN: implement.
   5. RED: a phase-2 plugin whose manifest name matches a loaded phase-1
@@ -203,7 +203,7 @@ report what loaded.
   skipped-tool diagnostics naming plugin + missing declaration; adapted
   tool count in startup line)
 - **Tasks:**
-  0. RED (in `@pop-eye/plugins`): `PluginGeneration` exposes each loaded
+  0. RED (in `@popeye/plugins`): `PluginGeneration` exposes each loaded
      plugin's manifest via an additive accessor <!-- D-022 -->; existing
      plugins tests stay green (behavior-preserving). GREEN: expose it.
   1. Seams under test: new `packages/cli/src/plugins/tool-adapter.ts`
@@ -252,8 +252,8 @@ report what loaded.
   behavior; verification is the named harness runs)
 - **Tasks:**
   1. Fixture: a project plugin contributing one tool; fake-provider script
-     issuing a toolCall; spawned `peye -p --mode json` completes the tool
-     turn; captured stream decodes through `@pop-eye/protocol`.
+     issuing a toolCall; spawned `popeye -p --mode json` completes the tool
+     turn; captured stream decodes through `@popeye/protocol`.
   2. Live harness: a real model turn calls the fixture tool through the
      shipped bin (env-gated like the existing live tests).
   3. Verify: both harnesses green twice consecutively (fixture stability),
@@ -431,7 +431,7 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm test && pnpm check-boundaries
 ## Deferred follow-up (named, out of scope)
 
 - Per-Session Tool visibility (kernel seam change) - D-006.
-- Plugin import timeout in `@pop-eye/plugins` - D-010 known limitation.
+- Plugin import timeout in `@popeye/plugins` - D-010 known limitation.
 - Opinionated trust-gate and tool-vetting first-party plugins over the
   existing `trust` / `tool-call-gate` hook points.
 - CLI hot-reload trigger for generations.
@@ -451,6 +451,6 @@ Key decisions referenced here: D-002 (auto-trust), D-003 (union grants),
 D-005 (per-session dispatch; supersedes D-004), D-006 (per-process
 registry), D-007 (shadowing), D-008 (memory trust store), D-009
 (self-declaration), D-010 (fail-closed load), D-011 (displacement guard),
-D-012 (audit fields), D-013 (`~/.peye/plugins`), D-014
+D-012 (audit fields), D-013 (`~/.popeye/plugins`), D-014
 (`--no-project-plugins` scope), D-015 (empty tool set), D-016..D-018
 (landing).

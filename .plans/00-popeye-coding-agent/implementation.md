@@ -1,4 +1,4 @@
-# peye v1 - Implementation Plan
+# popeye v1 - Implementation Plan
 
 Vocabulary: `CONTEXT.md` (normative). Ledger: D-001..D-027. Design
 rationale and alternatives: archived RFC-01
@@ -8,13 +8,13 @@ this document is self-contained for execution.
 ## ⚠️ Execution Protocol
 
 A progress report exists at
-`.plans/00-peye-coding-agent/progress-report.md`. It lists every
+`.plans/00-popeye-coding-agent/progress-report.md`. It lists every
 verifiable behavior for every milestone as a checkbox.
 
 **Mandatory rules for all agents working on this plan:**
 
 1. Before starting a milestone, run `plan-db check-progress --plan
-   "00-peye-coding-agent"` and read its section in the progress
+   "00-popeye-coding-agent"` and read its section in the progress
    report - those current-cutoff checkboxes are your spec
 2. Check each box as you complete the feature, not at the end
 3. A milestone is NOT done until every current-cutoff checkbox under
@@ -41,7 +41,7 @@ overflow recovery compose around it. One **ai seam** imports
 `@earendil-works/pi-ai` (exact-pinned) <!-- D-001 --> and maps its prose
 failures into `ProviderError` via pi-ai's own exported classifier
 <!-- D-014 -->. A single **plugin** primitive <!-- D-003 --> carries all
-behavior additions - including peye's own features <!-- D-005 --> - as
+behavior additions - including popeye's own features <!-- D-005 --> - as
 contributions (tools, commands, hooks, instruction fragments
 <!-- D-019 -->) with declared hook merge semantics and failure policies
 <!-- D-020 -->. Heads consume a snapshot-authoritative **protocol**
@@ -68,22 +68,22 @@ heads: driver · print · json · rpc     (TUI later, pi-tui, D-007)
 | Only the ai seam imports pi-ai | Enforced by package graph <!-- D-023 --> + CI import lint |
 | Dogfood rule <!-- D-005 --> | compact + session naming ship as plugins in Phase 3; CI fails on feature imports of kernel internals |
 | Effect v3 stable only <!-- D-002 --> | No `@effect/platform` pre-stable deps in core packages; `Schema` from `effect` |
-| Node 24+, pnpm workspace <!-- D-023 --> | Five packages: `@peye/journal`, `@peye/kernel`, `@peye/plugins`, `@peye/protocol`, `@peye/cli` |
+| Node 24+, pnpm workspace <!-- D-023 --> | Five packages: `@popeye/journal`, `@popeye/kernel`, `@popeye/plugins`, `@popeye/protocol`, `@popeye/cli` |
 | Instruction fragments explicit-only in v1 <!-- D-024 --> | Fold composition has no model-requestable discovery surface yet |
 
 ### Boundaries
 
-- `@peye/journal`: entries, records, tree, folds' input surface, JSONL +
+- `@popeye/journal`: entries, records, tree, folds' input surface, JSONL +
   in-memory layers, conformance suite. Owns schema versions/migrations.
-- `@peye/kernel`: mailbox, turn execution, tool running, steering/
+- `@popeye/kernel`: mailbox, turn execution, tool running, steering/
   follow-up/abort, retry/compaction/overflow policies, crash recovery,
   context fold, ai seam (sole pi-ai importer), driver head (test/SDK
   surface).
-- `@peye/plugins`: manifests, registries, generic hook emitter,
+- `@popeye/plugins`: manifests, registries, generic hook emitter,
   capabilities, trust, generations/hot reload, plugin loading.
-- `@peye/protocol`: frame schemas, snapshot/progress types, command
+- `@popeye/protocol`: frame schemas, snapshot/progress types, command
   unions, interaction requests. No runtime deps on kernel.
-- `@peye/cli`: wire heads (print, json, rpc), config, entry point.
+- `@popeye/cli`: wire heads (print, json, rpc), config, entry point.
   Depends on protocol (and kernel only for in-process hosting, via a
   single composition module).
 
@@ -564,7 +564,7 @@ session naming are plugins; trust and reload work.
 
 ### Phase 4: Wire protocol and heads
 
-**Goal:** External processes drive peye: print, json, rpc.
+**Goal:** External processes drive popeye: print, json, rpc.
 
 **Gate from previous:** Gate 3→4.
 
@@ -734,9 +734,9 @@ suites join `pnpm test` from Phase 1/2 milestones onward.)
 
 ## Decisions
 
-Canonical decisions live in `.plans/00-peye-coding-agent/plan.db`
+Canonical decisions live in `.plans/00-popeye-coding-agent/plan.db`
 (D-001..D-025). Query:
 
 ```bash
-npx tsx <planner-skill-dir>/scripts/plan-db.ts query-decisions --plan "00-peye-coding-agent"
+npx tsx <planner-skill-dir>/scripts/plan-db.ts query-decisions --plan "00-popeye-coding-agent"
 ```

@@ -25,7 +25,7 @@ Normalization is idempotent. The test applies it twice and requires the same res
 Regenerate only after an intentional change to the durable contract or canonical Driver script:
 
 ```sh
-PEYE_UPDATE_RECORDED_FIXTURES=1 pnpm exec vitest run packages/kernel/src/driver.test.ts \
+POPEYE_UPDATE_RECORDED_FIXTURES=1 pnpm exec vitest run packages/kernel/src/driver.test.ts \
   -t "scripted session is captured as the canonical recorded-journal fixture"
 git diff -- packages/kernel/test-fixtures/canonical-driver-session.jsonl
 pnpm exec vitest run packages/kernel/src/driver.test.ts
@@ -45,12 +45,12 @@ import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Journal, JournalJsonl, SessionIdSchema } from "@pop-eye/journal";
+import { Journal, JournalJsonl, SessionIdSchema } from "@popeye/journal";
 import { Effect } from "effect";
 import { expect, test } from "vitest";
 
 test("replays the recorded Session", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "peye-recorded-"));
+  const directory = await mkdtemp(join(tmpdir(), "popeye-recorded-"));
   const sessionId = SessionIdSchema.make("<session-1>");
   try {
     await copyFile(

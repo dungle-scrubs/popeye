@@ -1,4 +1,4 @@
-# peye v1 - Spike Report
+# popeye v1 - Spike Report
 
 Executed 2026-08-10 by Codex (gpt-5.6, workspace-write sandbox, offline)
 against `effect@3.22.1` and `@earendil-works/pi-ai@0.84.1` on Node

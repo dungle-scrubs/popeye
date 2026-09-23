@@ -9,7 +9,7 @@
  * (tool-batch owns that); this module only owns declarations and lookup.
  */
 
-import type { SessionId } from "@pop-eye/journal";
+import type { SessionId } from "@popeye/journal";
 import type { Scope } from "effect";
 import { Context, Effect, Layer, type Schema } from "effect";
 
@@ -90,7 +90,7 @@ export interface ToolRegistryService {
   readonly list: () => ReadonlyArray<RegisteredTool>;
 }
 
-export class ToolRegistry extends Context.Tag("@pop-eye/kernel/ToolRegistry")<
+export class ToolRegistry extends Context.Tag("@popeye/kernel/ToolRegistry")<
   ToolRegistry,
   ToolRegistryService
 >() {}

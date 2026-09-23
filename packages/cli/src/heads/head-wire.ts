@@ -16,7 +16,7 @@ import {
   type Snapshot,
   SnapshotSchema,
   snapshotView,
-} from "@pop-eye/protocol";
+} from "@popeye/protocol";
 import { Cause, Chunk, Data, Effect, Exit, Logger, Option, Schema } from "effect";
 
 import type { DriverSnapshot, TurnResult } from "../compose.js";

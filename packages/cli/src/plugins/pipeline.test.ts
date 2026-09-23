@@ -3,14 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { SessionIdSchema } from "@pop-eye/journal";
+import { SessionIdSchema } from "@popeye/journal";
 import {
   CommandContributionKind,
   type CommandDeclaration,
   type CommandExecutionContext,
   createCapabilityGrants,
   type RegisteredContribution,
-} from "@pop-eye/plugins";
+} from "@popeye/plugins";
 import { Effect, Logger, Schema } from "effect";
 import { expect, test } from "vitest";
 
@@ -71,7 +71,7 @@ const commandPluginSource = (name: string, result: string): string =>
   ].join("\n");
 
 test("first-party Plugin generation entries expose the same manifest accessor", async () => {
-  const projectPath = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-manifest-"));
+  const projectPath = await mkdtemp(join(tmpdir(), "popeye-cli-plugin-pipeline-manifest-"));
   const userPluginDir = join(projectPath, "user-plugins");
 
   try {
@@ -102,7 +102,7 @@ test("first-party Plugin generation entries expose the same manifest accessor", 
 });
 
 test("an empty project exposes only the invokable first-party commands", async () => {
-  const projectPath = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-empty-"));
+  const projectPath = await mkdtemp(join(tmpdir(), "popeye-cli-plugin-pipeline-empty-"));
   const userPluginDir = join(projectPath, "user-plugins");
 
   try {
@@ -161,8 +161,8 @@ test("an empty project exposes only the invokable first-party commands", async (
 });
 
 test("a project Plugin loads in phase 2 and its command is invokable", async () => {
-  const projectPath = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-project-"));
-  const projectPluginDir = join(projectPath, ".peye", "plugins");
+  const projectPath = await mkdtemp(join(tmpdir(), "popeye-cli-plugin-pipeline-project-"));
+  const projectPluginDir = join(projectPath, ".popeye", "plugins");
   const userPluginDir = join(projectPath, "user-plugins");
   const pluginPath = join(projectPluginDir, "project-command.ts");
 
@@ -208,7 +208,7 @@ test("a project Plugin loads in phase 2 and its command is invokable", async () 
 });
 
 test("a user-global Plugin loads in phase 1", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-user-global-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-cli-plugin-pipeline-user-global-"));
   const projectPath = join(root, "project");
   const userPluginDir = join(root, "user-plugins");
   const pluginPath = join(userPluginDir, "user-command.ts");
@@ -265,7 +265,7 @@ test("a user-global Plugin loads in phase 1", async () => {
 });
 
 test("a user-global Plugin cannot reuse a first-party manifest name", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-first-party-collision-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-cli-plugin-pipeline-first-party-collision-"));
   const projectPath = join(root, "project");
   const userPluginDir = join(root, "user-plugins");
   const pluginPath = join(userPluginDir, "compact.ts");
@@ -302,7 +302,7 @@ test("a user-global Plugin cannot reuse a first-party manifest name", async () =
 });
 
 test("two external Plugins cannot share a manifest name", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-external-collision-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-cli-plugin-pipeline-external-collision-"));
   const projectPath = join(root, "project");
   const userPluginDir = join(root, "user-plugins");
   const userPluginPath = join(userPluginDir, "shared-user.ts");
@@ -338,7 +338,7 @@ test("two external Plugins cannot share a manifest name", async () => {
 });
 
 test("CLI Plugin paths use package classification for phase 1 outside and phase 2 inside the project", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-cli-paths-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-cli-plugin-pipeline-cli-paths-"));
   const projectPath = join(root, "project");
   const userPluginDir = join(root, "user-plugins");
   const externalPath = join(root, "external-command.ts");
@@ -388,9 +388,9 @@ test("CLI Plugin paths use package classification for phase 1 outside and phase 
 });
 
 test("noProjectPlugins skips discovered and CLI project-local Plugins but keeps phase-1 Plugins", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-no-project-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-cli-plugin-pipeline-no-project-"));
   const projectPath = join(root, "project");
-  const projectPluginDir = join(projectPath, ".peye", "plugins");
+  const projectPluginDir = join(projectPath, ".popeye", "plugins");
   const userPluginDir = join(root, "user-plugins");
   const externalPath = join(root, "external-command.ts");
   const projectCliPath = join(projectPath, "local-cli-command.ts");
@@ -437,7 +437,7 @@ test("noProjectPlugins skips discovered and CLI project-local Plugins but keeps 
 });
 
 test("a user Plugin directory path that is a file fails as a pipeline config error", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-user-file-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-cli-plugin-pipeline-user-file-"));
   const projectPath = join(root, "project");
   const userPluginDir = join(root, "user-plugins");
 
@@ -468,8 +468,8 @@ test("a user Plugin directory path that is a file fails as a pipeline config err
 });
 
 test("trusted composition uses fresh memory stores and never writes Trust state", async () => {
-  const projectPath = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-trust-memory-"));
-  const projectPluginDir = join(projectPath, ".peye", "plugins");
+  const projectPath = await mkdtemp(join(tmpdir(), "popeye-cli-plugin-pipeline-trust-memory-"));
+  const projectPluginDir = join(projectPath, ".popeye", "plugins");
   const userPluginDir = join(projectPath, "user-plugins");
 
   try {
@@ -503,7 +503,7 @@ test("trusted composition uses fresh memory stores and never writes Trust state"
       ["compact", "reload", "session-name", "trusted-command"],
     ]);
     expect(projectFiles.filter((path) => path.toLowerCase().includes("trust"))).toEqual([
-      ".peye/plugins/trusted-command.ts",
+      ".popeye/plugins/trusted-command.ts",
     ]);
   } finally {
     await rm(projectPath, { force: true, recursive: true });
@@ -511,11 +511,11 @@ test("trusted composition uses fresh memory stores and never writes Trust state"
 });
 
 test("phase-2 Plugins cannot displace phase-1 or first-party Plugin names", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-displacement-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-cli-plugin-pipeline-displacement-"));
   const externalProjectPath = join(root, "external-project");
-  const externalProjectPluginDir = join(externalProjectPath, ".peye", "plugins");
+  const externalProjectPluginDir = join(externalProjectPath, ".popeye", "plugins");
   const firstPartyProjectPath = join(root, "first-party-project");
-  const firstPartyProjectPluginDir = join(firstPartyProjectPath, ".peye", "plugins");
+  const firstPartyProjectPluginDir = join(firstPartyProjectPath, ".popeye", "plugins");
   const userPluginDir = join(root, "user-plugins");
   const externalPath = join(root, "shared-external.ts");
   const projectPath = join(externalProjectPluginDir, "shared-project.ts");
@@ -572,7 +572,7 @@ test("phase-2 Plugins cannot displace phase-1 or first-party Plugin names", asyn
 });
 
 test("Plugin diagnostics are routed through the Effect logger with their sink family", async () => {
-  const projectPath = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-diagnostics-"));
+  const projectPath = await mkdtemp(join(tmpdir(), "popeye-cli-plugin-pipeline-diagnostics-"));
   const userPluginDir = join(projectPath, "user-plugins");
   const logs: Array<string> = [];
   const logger = Logger.make<unknown, void>(({ message }) => logs.push(String(message)));
@@ -599,7 +599,7 @@ test("Plugin diagnostics are routed through the Effect logger with their sink fa
 });
 
 test("the generation-backed PluginHost invokes a discovered command", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-host-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-cli-plugin-pipeline-host-"));
   const projectPath = join(root, "project");
   const userPluginDir = join(root, "user-plugins");
   const pluginPath = join(root, "host-command.ts");

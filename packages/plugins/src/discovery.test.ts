@@ -9,16 +9,16 @@ import { classifyResolvedPluginSource, phase1Sources, phase2Sources } from "./di
 import { computeProjectPluginDigest } from "./trust-digest.js";
 
 test("CLI paths use real-path classification and an in-tree target cannot enter phase 1", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-discovery-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-discovery-"));
   const projectPath = join(root, "project");
   const outsidePath = join(root, "outside");
-  const projectPluginPath = join(projectPath, ".peye", "plugins", "project-plugin.ts");
+  const projectPluginPath = join(projectPath, ".popeye", "plugins", "project-plugin.ts");
   const outsidePluginPath = join(outsidePath, "outside-plugin.ts");
   const outsideLinkIntoProject = join(outsidePath, "link-into-project.ts");
-  const projectLinkOutside = join(projectPath, ".peye", "plugins", "link-outside.ts");
+  const projectLinkOutside = join(projectPath, ".popeye", "plugins", "link-outside.ts");
 
   try {
-    await mkdir(join(projectPath, ".peye", "plugins"), { recursive: true });
+    await mkdir(join(projectPath, ".popeye", "plugins"), { recursive: true });
     await mkdir(outsidePath, { recursive: true });
     await writeFile(projectPluginPath, "export const source = 'project';\n");
     await writeFile(outsidePluginPath, "export const source = 'outside';\n");
@@ -53,9 +53,9 @@ test("CLI paths use real-path classification and an in-tree target cannot enter 
 });
 
 test("an untrusted project executes no project-local Plugin code", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-untrusted-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-untrusted-"));
   const projectPath = join(root, "project");
-  const projectPluginDirectory = join(projectPath, ".peye", "plugins");
+  const projectPluginDirectory = join(projectPath, ".popeye", "plugins");
 
   try {
     await mkdir(projectPluginDirectory, { recursive: true });
@@ -81,9 +81,9 @@ test("an untrusted project executes no project-local Plugin code", async () => {
 });
 
 test("a project awaiting a Trust decision executes no project-local Plugin code", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-awaiting-trust-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-awaiting-trust-"));
   const projectPath = join(root, "project");
-  const projectPluginDirectory = join(projectPath, ".peye", "plugins");
+  const projectPluginDirectory = join(projectPath, ".popeye", "plugins");
   const decisions = [{ kind: "prompt_required" as const }, { kind: "reprompt_required" as const }];
 
   try {
@@ -108,9 +108,9 @@ test("a project awaiting a Trust decision executes no project-local Plugin code"
 });
 
 test("two-phase source discovery is stable and idempotent for phase-1 instance reuse", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-phases-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-phases-"));
   const projectPath = join(root, "project");
-  const projectPluginDirectory = join(projectPath, ".peye", "plugins");
+  const projectPluginDirectory = join(projectPath, ".popeye", "plugins");
   const projectPluginPath = join(projectPluginDirectory, "project-plugin.ts");
   const inTreeCliPath = join(projectPath, "cli-plugin.ts");
   const outsideCliPath = join(root, "outside-cli.ts");
@@ -172,7 +172,7 @@ test("two-phase source discovery is stable and idempotent for phase-1 instance r
 });
 
 test("path-segment classification keeps ..evil in the project and rejects a prefix sibling", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-segments-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-segments-"));
   const projectPath = join(root, "proj");
   const dotDotName = join(projectPath, "..evil.mjs");
   const prefixSibling = join(root, "projsibling", "plugin.mjs");
@@ -203,7 +203,7 @@ test("path-segment classification keeps ..evil in the project and rejects a pref
 });
 
 test("source classification compares canonical real paths", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-canonical-case-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-canonical-case-"));
   const projectPath = join(root, "Project");
   let projectAlias = join(root, "PROJECT");
   const pluginPath = join(projectPath, "plugin.mjs");
@@ -231,13 +231,13 @@ test("source classification compares canonical real paths", async () => {
 });
 
 test("phase 2 fails closed when Plugin content changes after the Trust check", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-load-digest-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-load-digest-"));
   const projectPath = join(root, "project");
-  const pluginPath = join(projectPath, ".peye", "plugins", "plugin.mjs");
+  const pluginPath = join(projectPath, ".popeye", "plugins", "plugin.mjs");
   const config = { cliPaths: [], projectPath, userGlobalDirectories: [] };
 
   try {
-    await mkdir(join(projectPath, ".peye", "plugins"), { recursive: true });
+    await mkdir(join(projectPath, ".popeye", "plugins"), { recursive: true });
     await writeFile(pluginPath, "export const value = 1;\n");
     const trustedDigest = (await Effect.runPromise(computeProjectPluginDigest(config))).digest;
     await writeFile(pluginPath, "export const value = 2;\n");
@@ -257,13 +257,13 @@ test("phase 2 fails closed when Plugin content changes after the Trust check", a
 });
 
 test("an ENOTDIR project Plugin path is an empty phase-2 execution set", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-enotdir-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-enotdir-"));
   const projectPath = join(root, "project");
   const config = { cliPaths: [], projectPath, userGlobalDirectories: [] };
 
   try {
     await mkdir(projectPath, { recursive: true });
-    await writeFile(join(projectPath, ".peye"), "not a directory\n");
+    await writeFile(join(projectPath, ".popeye"), "not a directory\n");
     const trustedDigest = (await Effect.runPromise(computeProjectPluginDigest(config))).digest;
 
     const sources = await Effect.runPromise(
@@ -277,9 +277,9 @@ test("an ENOTDIR project Plugin path is an empty phase-2 execution set", async (
 });
 
 test("an EACCES project Plugin directory is an empty phase-2 execution set", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-plugin-eacces-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-plugin-eacces-"));
   const projectPath = join(root, "project");
-  const pluginDirectory = join(projectPath, ".peye", "plugins");
+  const pluginDirectory = join(projectPath, ".popeye", "plugins");
   const config = { cliPaths: [], projectPath, userGlobalDirectories: [] };
 
   try {

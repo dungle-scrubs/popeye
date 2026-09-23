@@ -2,12 +2,12 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { SessionIdSchema } from "@pop-eye/journal";
+import { SessionIdSchema } from "@popeye/journal";
 import {
   createCapabilityGrants,
   defineToolContribution,
   ToolContributionError,
-} from "@pop-eye/plugins";
+} from "@popeye/plugins";
 import { Effect, Either, Logger, Schema } from "effect";
 import { expect, test } from "vitest";
 
@@ -35,9 +35,9 @@ const toolPluginSource = (pluginName: string, priority: number): string =>
   ].join("\n");
 
 test("Tool shadowing follows scope, contribution priority, and lexical Plugin-name order", async () => {
-  const root = await mkdtemp(join(tmpdir(), "peye-cli-tool-adapter-shadowing-"));
+  const root = await mkdtemp(join(tmpdir(), "popeye-cli-tool-adapter-shadowing-"));
   const projectPath = join(root, "project");
-  const projectPluginDir = join(projectPath, ".peye", "plugins");
+  const projectPluginDir = join(projectPath, ".popeye", "plugins");
   const userPluginDir = join(root, "user-plugins");
   const externalPluginPath = join(root, "external-plugin.ts");
   const logs: Array<string> = [];
@@ -129,7 +129,7 @@ test("Tool shadowing follows scope, contribution priority, and lexical Plugin-na
 });
 
 test("a Tool is skipped when its own Plugin manifest does not declare its Capabilities", async () => {
-  const projectPath = await mkdtemp(join(tmpdir(), "peye-cli-tool-adapter-declaration-rule-"));
+  const projectPath = await mkdtemp(join(tmpdir(), "popeye-cli-tool-adapter-declaration-rule-"));
   const userPluginDir = join(projectPath, "user-plugins");
   const logs: Array<string> = [];
   const logger = Logger.make<unknown, void>(({ message }) => logs.push(String(message)));
@@ -184,7 +184,7 @@ test("a Tool is skipped when its own Plugin manifest does not declare its Capabi
 });
 
 test("generation Capability union is sorted and deduplicated across Plugin manifests", async () => {
-  const projectPath = await mkdtemp(join(tmpdir(), "peye-cli-tool-adapter-grants-"));
+  const projectPath = await mkdtemp(join(tmpdir(), "popeye-cli-tool-adapter-grants-"));
   const userPluginDir = join(projectPath, "user-plugins");
 
   try {
@@ -224,7 +224,7 @@ test("generation Capability union is sorted and deduplicated across Plugin manif
 });
 
 test("a grant-visible Plugin tool preserves its declaration and execution outcomes", async () => {
-  const projectPath = await mkdtemp(join(tmpdir(), "peye-cli-tool-adapter-declaration-"));
+  const projectPath = await mkdtemp(join(tmpdir(), "popeye-cli-tool-adapter-declaration-"));
   const userPluginDir = join(projectPath, "user-plugins");
   const parameters = Schema.Struct({ value: Schema.String });
   const plugin = {

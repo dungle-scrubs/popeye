@@ -174,7 +174,7 @@ per-Session per-request; nothing observable changes for a default run.
 
 ### Phase 2: Composition root and reload
 
-**Goal:** `peye` composes through `makePluginRuntime`; `/reload` swaps
+**Goal:** `popeye` composes through `makePluginRuntime`; `/reload` swaps
 generations safely mid-session.
 
 **Gate from previous:** Gate 1→2.
@@ -397,7 +397,7 @@ implementation or declaring convergence.
 
 ```bash
 pnpm build && pnpm typecheck && pnpm lint && pnpm test && pnpm check-boundaries
-# live harness (env-gated): PEYE_LIVE_ENDPOINT/PEYE_LIVE_MODEL per live.test.ts
+# live harness (env-gated): POPEYE_LIVE_ENDPOINT/POPEYE_LIVE_MODEL per live.test.ts
 ```
 
 ---

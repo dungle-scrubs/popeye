@@ -59,7 +59,7 @@ test("empty piped stdin is a typed no-prompt error", async () => {
 
   expect(error).toMatchObject({
     _tag: "CliArgsError",
-    message: expect.stringContaining("Use peye -p"),
+    message: expect.stringContaining("Use popeye -p"),
     reason: "invalid_arguments",
   });
 });
@@ -74,7 +74,7 @@ test("provider and Session flags are parsed", async () => {
     "--resume",
     "session-1",
     "--session-dir",
-    "/tmp/peye-sessions",
+    "/tmp/popeye-sessions",
     "Continue.",
   ]);
 
@@ -82,7 +82,7 @@ test("provider and Session flags are parsed", async () => {
     baseUrl: "http://127.0.0.1:1234/v1",
     model: "qwen3.6-27b",
     resume: "session-1",
-    sessionDir: "/tmp/peye-sessions",
+    sessionDir: "/tmp/popeye-sessions",
   });
 });
 
@@ -140,7 +140,7 @@ test("--api-key is rejected without copying its value into the typed error", asy
 
   expect(error).toMatchObject({
     _tag: "CliArgsError",
-    message: expect.stringContaining("PEYE_API_KEY"),
+    message: expect.stringContaining("POPEYE_API_KEY"),
     reason: "secret_flag",
   });
   expect(error.message).not.toContain("secret-value");

@@ -134,7 +134,7 @@ From `snapshot-size-report.md`:
 * soft warning 262,144 bytes (256 KiB) - monitoring only, does not activate pagination <!-- D-005 --> D-005
 * hard concern 1,048,576 bytes (1 MiB) - activation threshold for one encoded `Snapshot` <!-- D-002 --> D-002 <!-- D-003 --> D-003
 
-Byte count is UTF-8 size of `JSON.stringify` on `SnapshotSchema.encode`. The layer that enforces the bound MUST measure the same encoding; `Bytes/entry` is ~511 for the fixed-content harness, so entry count is a useful early estimate but the bound is on encoded bytes. Threshold is configurable via `PEYE_SNAPSHOT_PAGE_BYTES` with default 1,048,576 <!-- D-003 --> D-003; estimate-then-verify is the measurement strategy <!-- D-007 --> D-007.
+Byte count is UTF-8 size of `JSON.stringify` on `SnapshotSchema.encode`. The layer that enforces the bound MUST measure the same encoding; `Bytes/entry` is ~511 for the fixed-content harness, so entry count is a useful early estimate but the bound is on encoded bytes. Threshold is configurable via `POPEYE_SNAPSHOT_PAGE_BYTES` with default 1,048,576 <!-- D-003 --> D-003; estimate-then-verify is the measurement strategy <!-- D-007 --> D-007.
 
 #### Snapshot change
 

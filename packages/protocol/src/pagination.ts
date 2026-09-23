@@ -3,12 +3,12 @@
  * It exists so a 1 MiB wire bound can be enforced without losing snapshot authority.
  *
  * What it owns: leaf-anchored windowing, entryRange flags, byte measurement via SnapshotSchema,
- * and threshold config (default 1,048,576, env PEYE_SNAPSHOT_PAGE_BYTES). <!-- D-002 --><!-- D-003 -->
+ * and threshold config (default 1,048,576, env POPEYE_SNAPSHOT_PAGE_BYTES). <!-- D-002 --><!-- D-003 -->
  * Why: every paginated Snapshot must carry true leafEntryId + revision for its window,
  * with hasMoreBefore/After signaling the branch extends beyond the window. Estimate-then-verify
  * keeps emission under bound without full-branch encode when below threshold. <!-- D-007 -->
  * Private seam of SnapshotView: callers should depend on snapshotView.paginateSnapshot / sliceSnapshotByRange, not on this file directly.
- * What it does not own: Journal persistence or compaction - those live in @pop-eye/journal.
+ * What it does not own: Journal persistence or compaction - those live in @popeye/journal.
  */
 
 import { Schema } from "effect";
@@ -25,7 +25,7 @@ export const resolvePageBytes = (raw: string | undefined): number => {
   const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(
-      `PEYE_SNAPSHOT_PAGE_BYTES must be a positive integer, got ${JSON.stringify(raw)}`,
+      `POPEYE_SNAPSHOT_PAGE_BYTES must be a positive integer, got ${JSON.stringify(raw)}`,
     );
   }
   return parsed;
@@ -83,7 +83,7 @@ const getEnvPageBytes = (): string | undefined => {
     const maybeProcess = globalThis as unknown as {
       process?: { env?: Record<string, string | undefined> };
     };
-    return maybeProcess.process?.env?.PEYE_SNAPSHOT_PAGE_BYTES;
+    return maybeProcess.process?.env?.POPEYE_SNAPSHOT_PAGE_BYTES;
   } catch {
     return undefined;
   }

@@ -7,7 +7,7 @@
  * the Provider seam owns idle timeout enforcement.
  */
 
-import type { SessionId } from "@pop-eye/journal";
+import type { SessionId } from "@popeye/journal";
 import { Effect } from "effect";
 import {
   finalAssistantText,

@@ -261,7 +261,7 @@ export const computeProjectPluginDigest = (
             path: logicalPath(projectPath, source.path),
           }));
           const digest = createHash("sha256")
-            .update("peye-project-plugin-digest-v2\0")
+            .update("popeye-project-plugin-digest-v2\0")
             .update(JSON.stringify({ files, sources: sourceIdentity }))
             .digest("hex");
           return { digest, files, sources };

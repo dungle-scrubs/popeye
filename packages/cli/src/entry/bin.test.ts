@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 const sessionDirectory = (): string => {
-  const directory = mkdtempSync(join(tmpdir(), "peye-cli-bin-"));
+  const directory = mkdtempSync(join(tmpdir(), "popeye-cli-bin-"));
   temporaryDirectories.push(directory);
   return directory;
 };
@@ -41,8 +41,8 @@ test("the built bin reports the package version and help without Provider config
   expect(version.stdout).toBe("0.1.0\n");
   expect(version.stderr).toBe("");
   expect(help.status).toBe(0);
-  expect(help.stdout).toContain('peye -p --mode json "<prompt>"');
-  expect(help.stdout).toContain("peye -p --mode rpc");
+  expect(help.stdout).toContain('popeye -p --mode json "<prompt>"');
+  expect(help.stdout).toContain("popeye -p --mode rpc");
   expect(help.stdout).toContain("2  Invalid arguments, missing configuration, or an aborted turn.");
   expect(help.stdout).toContain("Read stderr to distinguish exit 2 causes.");
   expect(help.stderr).toBe("");
@@ -107,7 +107,7 @@ test("the built print Head accepts positional and piped prompts with pure stdout
 
 test("the built bin reports the adapted project Plugin Tool count", () => {
   const projectPath = sessionDirectory();
-  const projectPluginDir = join(projectPath, ".peye", "plugins");
+  const projectPluginDir = join(projectPath, ".popeye", "plugins");
   const sessionDir = join(projectPath, "sessions");
   const userPluginDir = join(projectPath, "user-plugins");
   mkdirSync(projectPluginDir, { recursive: true });
@@ -136,7 +136,7 @@ test("the built bin reports the adapted project Plugin Tool count", () => {
 
   const result = runBuiltBin(["-p", "--session-dir", sessionDir, FAKE_PROVIDER_PROMPT], {
     cwd: projectPath,
-    env: { ...fakeProviderEnvironment(), PEYE_USER_PLUGIN_DIR: userPluginDir },
+    env: { ...fakeProviderEnvironment(), POPEYE_USER_PLUGIN_DIR: userPluginDir },
   });
 
   expect(result.status).toBe(0);
@@ -145,7 +145,7 @@ test("the built bin reports the adapted project Plugin Tool count", () => {
 
 test("the built RPC Head Snapshot audits the loaded Plugin generation and sorted Capability grants", () => {
   const projectPath = sessionDirectory();
-  const projectPluginDir = join(projectPath, ".peye", "plugins");
+  const projectPluginDir = join(projectPath, ".popeye", "plugins");
   const sessionDir = join(projectPath, "sessions");
   const userPluginDir = join(projectPath, "user-plugins");
   mkdirSync(projectPluginDir, { recursive: true });
@@ -167,7 +167,7 @@ test("the built RPC Head Snapshot audits the loaded Plugin generation and sorted
 
   const result = runBuiltBin(["-p", "--mode", "rpc", "--session-dir", sessionDir], {
     cwd: projectPath,
-    env: { ...fakeProviderEnvironment(), PEYE_USER_PLUGIN_DIR: userPluginDir },
+    env: { ...fakeProviderEnvironment(), POPEYE_USER_PLUGIN_DIR: userPluginDir },
     input: `${JSON.stringify({ _tag: "create", id: "create-audited-session" })}\n`,
   });
 
@@ -269,7 +269,7 @@ test("the built JSON Head Snapshot audits the current process after Session resu
 
 test("the built JSON CLI exposes invalid project Plugin Tool arguments to the Provider", () => {
   const projectPath = sessionDirectory();
-  const projectPluginDir = join(projectPath, ".peye", "plugins");
+  const projectPluginDir = join(projectPath, ".popeye", "plugins");
   const sessionDir = join(projectPath, "sessions");
   const userPluginDir = join(projectPath, "user-plugins");
   const providerScriptPath = join(projectPath, "tool-provider.json");
@@ -328,8 +328,8 @@ test("the built JSON CLI exposes invalid project Plugin Tool arguments to the Pr
     cwd: projectPath,
     env: {
       ...fakeProviderEnvironment(),
-      PEYE_FAKE_PROVIDER_SCRIPT: providerScriptPath,
-      PEYE_USER_PLUGIN_DIR: userPluginDir,
+      POPEYE_FAKE_PROVIDER_SCRIPT: providerScriptPath,
+      POPEYE_USER_PLUGIN_DIR: userPluginDir,
     },
   });
   const frames = result.stdout
@@ -390,7 +390,7 @@ test("the built RPC Head serves LF-delimited commands until stdin closes", () =>
 
 test("the built RPC Head invokes a project Plugin Command", () => {
   const projectPath = sessionDirectory();
-  const projectPluginDir = join(projectPath, ".peye", "plugins");
+  const projectPluginDir = join(projectPath, ".popeye", "plugins");
   const sessionDir = join(projectPath, "sessions");
   const userPluginDir = join(projectPath, "user-plugins");
   mkdirSync(projectPluginDir, { recursive: true });
@@ -416,7 +416,7 @@ test("the built RPC Head invokes a project Plugin Command", () => {
       "",
     ].join("\n"),
   );
-  const env = { ...fakeProviderEnvironment(), PEYE_USER_PLUGIN_DIR: userPluginDir };
+  const env = { ...fakeProviderEnvironment(), POPEYE_USER_PLUGIN_DIR: userPluginDir };
   const create = runBuiltBin(["-p", "--mode", "rpc", "--session-dir", sessionDir], {
     cwd: projectPath,
     env,
@@ -473,11 +473,11 @@ test("the built bin reports bad arguments and missing config on stderr", () => {
   expect(badArguments.status).toBe(2);
   expect(badArguments.stdout).toBe("");
   expect(badArguments.stderr).toContain("ERROR CliArgsError");
-  expect(badArguments.stderr).toContain("PEYE_API_KEY");
+  expect(badArguments.stderr).toContain("POPEYE_API_KEY");
   expect(badArguments.stderr).not.toContain("secret-value");
   expect(missingConfig.status).toBe(2);
   expect(missingConfig.stdout).toBe("");
-  expect(missingConfig.stderr).toContain("--model <model> or PEYE_MODEL");
+  expect(missingConfig.stderr).toContain("--model <model> or POPEYE_MODEL");
 });
 
 test("the built bin rejects empty stdin and explicit empty provider flags", () => {
@@ -495,7 +495,7 @@ test("the built bin rejects empty stdin and explicit empty provider flags", () =
   );
 
   for (const [result, flag] of [
-    [whitespacePrompt, "Use peye -p"],
+    [whitespacePrompt, "Use popeye -p"],
     [emptyModel, "--model"],
     [emptyBaseUrl, "--base-url"],
   ] as const) {
@@ -515,7 +515,7 @@ test("the built bin exits 2 when a Plugin throws during composition", () => {
   const result = runBuiltBin(
     ["-p", "--plugin", pluginPath, "--session-dir", join(root, "sessions"), FAKE_PROVIDER_PROMPT],
     {
-      env: { ...fakeProviderEnvironment(), PEYE_USER_PLUGIN_DIR: userPluginDir },
+      env: { ...fakeProviderEnvironment(), POPEYE_USER_PLUGIN_DIR: userPluginDir },
     },
   );
 

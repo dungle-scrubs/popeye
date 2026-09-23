@@ -28,8 +28,8 @@
  * FakeSessionConductor over in-memory branch arrays + fake mailbox.
  */
 
-import type { JournalFailure, SessionId } from "@pop-eye/journal";
-import type { StaleRevision } from "@pop-eye/protocol";
+import type { JournalFailure, SessionId } from "@popeye/journal";
+import type { StaleRevision } from "@popeye/protocol";
 import { Context, Effect, Layer } from "effect";
 import type { MailboxClosed } from "./errors.js";
 import {
@@ -48,7 +48,7 @@ export interface SessionConductorService {
   ) => Effect.Effect<MailboxResult<TValue>, MailboxFailure | TError | StaleRevision>;
 }
 
-export class SessionConductor extends Context.Tag("@pop-eye/kernel/SessionConductor")<
+export class SessionConductor extends Context.Tag("@popeye/kernel/SessionConductor")<
   SessionConductor,
   SessionConductorService
 >() {}

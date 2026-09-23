@@ -14,7 +14,7 @@ import {
   PluginInteractions,
   type ToolCallGateHookInput,
   type ToolCallGateHookOutput,
-} from "@pop-eye/plugins";
+} from "@popeye/plugins";
 import { Effect } from "effect";
 
 import { hasToolSessionMemory, rememberToolForSession } from "../tools/tool-session-memory.js";

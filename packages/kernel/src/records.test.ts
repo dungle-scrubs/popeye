@@ -3,7 +3,7 @@ import {
   EntryDraftSchema,
   Journal,
   JournalMemory,
-} from "@pop-eye/journal";
+} from "@popeye/journal";
 import { Effect } from "effect";
 import { expect, test } from "vitest";
 

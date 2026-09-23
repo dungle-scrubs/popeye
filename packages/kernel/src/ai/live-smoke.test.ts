@@ -3,7 +3,7 @@
  * It exists separately from contract fixtures so normal test runs never require network access.
  */
 
-import { createMemoryJournalBacking, Journal, JournalMemory } from "@pop-eye/journal";
+import { createMemoryJournalBacking, Journal, JournalMemory } from "@popeye/journal";
 import { Effect, Layer } from "effect";
 import { expect, test } from "vitest";
 
@@ -17,12 +17,12 @@ import { TurnOrchestrator, TurnOrchestratorLive } from "../turn-orchestrator.js"
 import { PiAiProviderLive } from "./seam.js";
 
 const liveSmoke =
-  process.env.PEYE_LIVE_SMOKE === "1" &&
-  process.env.PEYE_SMOKE_BASE_URL !== undefined &&
-  process.env.PEYE_SMOKE_MODEL !== undefined
+  process.env.POPEYE_LIVE_SMOKE === "1" &&
+  process.env.POPEYE_SMOKE_BASE_URL !== undefined &&
+  process.env.POPEYE_SMOKE_MODEL !== undefined
     ? {
-        baseUrl: process.env.PEYE_SMOKE_BASE_URL,
-        modelId: process.env.PEYE_SMOKE_MODEL,
+        baseUrl: process.env.POPEYE_SMOKE_BASE_URL,
+        modelId: process.env.POPEYE_SMOKE_MODEL,
       }
     : undefined;
 
@@ -64,7 +64,7 @@ test.skipIf(liveSmoke === undefined)(
         const session = yield* sessions.create();
         const settled = yield* orchestrator.openTurn(
           session.id,
-          "Reply with exactly: peye live smoke",
+          "Reply with exactly: popeye live smoke",
         );
         return { branch: yield* journal.readBranch(session.id), settled };
       }).pipe(Effect.provide(liveLayer)),

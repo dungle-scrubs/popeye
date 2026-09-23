@@ -6,11 +6,11 @@ import { expect, test } from "vitest";
 
 import { selectJournalLayer } from "./cli-entry.js";
 
-const makeDir = (): string => mkdtempSync(join(tmpdir(), "peye-journal-layer-"));
+const makeDir = (): string => mkdtempSync(join(tmpdir(), "popeye-journal-layer-"));
 
 test("selectJournalLayer - env sqlite selects JournalSqlite regardless of file", () => {
   const dir = makeDir();
-  const layer = selectJournalLayer(dir, { PEYE_JOURNAL_LAYER: "sqlite" });
+  const layer = selectJournalLayer(dir, { POPEYE_JOURNAL_LAYER: "sqlite" });
   // We cannot easily inspect layer type, but ensure it doesn't throw and is a Layer
   expect(layer).toBeDefined();
   rmSync(dir, { recursive: true, force: true });
@@ -18,7 +18,7 @@ test("selectJournalLayer - env sqlite selects JournalSqlite regardless of file",
 
 test("selectJournalLayer - env jsonl selects JournalJsonl", () => {
   const dir = makeDir();
-  const layer = selectJournalLayer(dir, { PEYE_JOURNAL_LAYER: "jsonl" });
+  const layer = selectJournalLayer(dir, { POPEYE_JOURNAL_LAYER: "jsonl" });
   expect(layer).toBeDefined();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -42,7 +42,7 @@ test("selectJournalLayer - defaults to jsonl when no env and no file", () => {
 
 test("selectJournalLayer - unknown env falls back to file detection", () => {
   const dir = makeDir();
-  const layer = selectJournalLayer(dir, { PEYE_JOURNAL_LAYER: "unknown" });
+  const layer = selectJournalLayer(dir, { POPEYE_JOURNAL_LAYER: "unknown" });
   expect(layer).toBeDefined();
   rmSync(dir, { recursive: true, force: true });
 });

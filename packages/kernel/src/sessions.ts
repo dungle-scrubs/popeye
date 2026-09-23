@@ -12,7 +12,7 @@ import {
   type JournalFailure,
   type SessionId,
   SessionIdSchema,
-} from "@pop-eye/journal";
+} from "@popeye/journal";
 import { Context, Effect, Layer, Schema } from "effect";
 import { Mailbox, type MailboxFailure } from "./mailbox.js";
 import { type RecoveryReport, RecoveryReportSchema } from "./recovery.js";
@@ -60,10 +60,7 @@ export interface SessionsService {
   ) => Effect.Effect<void, SessionsFailure>;
 }
 
-export class Sessions extends Context.Tag("@pop-eye/kernel/Sessions")<
-  Sessions,
-  SessionsService
->() {}
+export class Sessions extends Context.Tag("@popeye/kernel/Sessions")<Sessions, SessionsService>() {}
 
 const defaultRecoveryDiagnosticSink = (report: RecoveryReport): Effect.Effect<void> =>
   Effect.logInfo(

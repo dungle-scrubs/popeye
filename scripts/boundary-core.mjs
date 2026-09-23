@@ -5,7 +5,7 @@ export const BOUNDARY_CODES = Object.freeze({
   CLI_KERNEL_IMPORT: "CLI_KERNEL_IMPORT",
   FEATURE_DEEP_IMPORT: "FEATURE_DEEP_IMPORT",
   PI_AI_SEAM_IMPORT: "PI_AI_SEAM_IMPORT",
-  PROTOCOL_PEYE_IMPORT: "PROTOCOL_PEYE_IMPORT",
+  PROTOCOL_POPEYE_IMPORT: "PROTOCOL_POPEYE_IMPORT",
 });
 
 /** @typedef {typeof BOUNDARY_CODES[keyof typeof BOUNDARY_CODES]} BoundaryCode */
@@ -15,10 +15,10 @@ const staticImportPattern =
   /\b(?:export|import)\s+(?:type\s+)?(?:[^'";]*?\s+from\s+)?["']([^"']+)["']/g;
 const dynamicImportPattern = /\b(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/g;
 const featurePublicPackages = Object.freeze([
-  "@pop-eye/journal",
-  "@pop-eye/kernel",
-  "@pop-eye/plugins",
-  "@pop-eye/protocol",
+  "@popeye/journal",
+  "@popeye/kernel",
+  "@popeye/plugins",
+  "@popeye/protocol",
 ]);
 
 /** @param {string} path */
@@ -77,16 +77,16 @@ export async function checkBoundaries(rootDirectory) {
 
     for (const specifier of findImportSpecifiers(source)) {
       const importsKernel =
-        specifier === "@pop-eye/kernel" || specifier.startsWith("@pop-eye/kernel/");
+        specifier === "@popeye/kernel" || specifier.startsWith("@popeye/kernel/");
       const importsPiAi =
         specifier === "@earendil-works/pi-ai" || specifier.startsWith("@earendil-works/pi-ai/");
-      const importsPeye = specifier.startsWith("@pop-eye/");
+      const importsPopeye = specifier.startsWith("@popeye/");
 
       if (isCliSource && importsKernel && !isCompositionModule) {
         violations.push({
           code: BOUNDARY_CODES.CLI_KERNEL_IMPORT,
           file: sourcePath,
-          message: "CLI sources may import @pop-eye/kernel only from packages/cli/src/compose.ts.",
+          message: "CLI sources may import @popeye/kernel only from packages/cli/src/compose.ts.",
           specifier,
         });
       }
@@ -105,16 +105,16 @@ export async function checkBoundaries(rootDirectory) {
           code: BOUNDARY_CODES.FEATURE_DEEP_IMPORT,
           file: sourcePath,
           message:
-            "Feature modules may import @pop-eye packages only from package roots and may not escape their own package through relative imports.",
+            "Feature modules may import @popeye packages only from package roots and may not escape their own package through relative imports.",
           specifier,
         });
       }
 
-      if (isProtocolSource && importsPeye) {
+      if (isProtocolSource && importsPopeye) {
         violations.push({
-          code: BOUNDARY_CODES.PROTOCOL_PEYE_IMPORT,
+          code: BOUNDARY_CODES.PROTOCOL_POPEYE_IMPORT,
           file: sourcePath,
-          message: "Protocol sources may not import @pop-eye packages.",
+          message: "Protocol sources may not import @popeye packages.",
           specifier,
         });
       }

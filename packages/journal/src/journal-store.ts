@@ -1,6 +1,6 @@
 /**
  * Owns JournalStore deep module for durable Journal layer selection and migration.
- * It exists so PEYE_JOURNAL_LAYER env vs journal.sqlite file-detection, WAL vs torn-tail,
+ * It exists so POPEYE_JOURNAL_LAYER env vs journal.sqlite file-detection, WAL vs torn-tail,
  * fencing diagnostics, and bulk JSONL→SQLite migration hide behind one deep interface.
  *
  * Why this module: adapter-core.ts already centralizes validation and per-session serialization
@@ -31,14 +31,14 @@ import { type MigrateResult, migrateJsonlToSqlite } from "./migrate.js";
 import { JournalSqlite } from "./sqlite.js";
 
 export interface JournalStoreEnv {
-  readonly PEYE_JOURNAL_LAYER?: string | undefined;
+  readonly POPEYE_JOURNAL_LAYER?: string | undefined;
 }
 
 export const selectJournalLayer = (
   sessionDir: string,
   env: JournalStoreEnv = {},
 ): Layer.Layer<Journal, JournalError, never> => {
-  const explicit = env.PEYE_JOURNAL_LAYER;
+  const explicit = env.POPEYE_JOURNAL_LAYER;
   if (explicit === "sqlite") return JournalSqlite(sessionDir);
   if (explicit === "jsonl") return JournalJsonl(sessionDir);
   if (explicit !== undefined && explicit.length > 0) {

@@ -1,4 +1,4 @@
-# peye v1 - Spike Guide
+# popeye v1 - Spike Guide
 
 Three untested technical assumptions from RFC-01 / implementation.md.
 Each is a small throwaway experiment; learnings merge into the

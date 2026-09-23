@@ -155,5 +155,5 @@ journal (no change this plan — D-006 defers to restructure)
 
 ```bash
 pnpm build && pnpm typecheck && pnpm lint && pnpm test && pnpm check-boundaries
-# flake: for i in 1..10; do pnpm --filter @pop-eye/kernel test src/turn-orchestrator.test.ts; done
+# flake: for i in 1..10; do pnpm --filter @popeye/kernel test src/turn-orchestrator.test.ts; done
 ```

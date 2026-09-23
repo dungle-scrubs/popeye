@@ -26,16 +26,16 @@ importers:
 
   packages/cli:
     dependencies:
-      '@pop-eye/journal':
+      '@popeye/journal':
         specifier: workspace:*
         version: link:../journal
-      '@pop-eye/kernel':
+      '@popeye/kernel':
         specifier: workspace:*
         version: link:../kernel
-      '@pop-eye/plugins':
+      '@popeye/plugins':
         specifier: workspace:*
         version: link:../plugins
-      '@pop-eye/protocol':
+      '@popeye/protocol':
         specifier: workspace:*
         version: link:../protocol
     devDependencies:
@@ -57,10 +57,10 @@ importers:
       '@earendil-works/pi-ai':
         specifier: 0.84.1
         version: 0.84.1(ws@8.21.3)(zod@4.4.3)
-      '@pop-eye/journal':
+      '@popeye/journal':
         specifier: workspace:*
         version: link:../journal
-      '@pop-eye/protocol':
+      '@popeye/protocol':
         specifier: workspace:*
         version: link:../protocol
     devDependencies:
@@ -73,14 +73,14 @@ importers:
 
   packages/plugins:
     dependencies:
-      '@pop-eye/journal':
+      '@popeye/journal':
         specifier: workspace:*
         version: link:../journal
-      '@pop-eye/protocol':
+      '@popeye/protocol':
         specifier: workspace:*
         version: link:../protocol
     devDependencies:
-      '@pop-eye/kernel':
+      '@popeye/kernel':
         specifier: workspace:*
         version: link:../kernel
       effect:
@@ -89,7 +89,7 @@ importers:
 
   packages/protocol:
     dependencies:
-      '@pop-eye/journal':
+      '@popeye/journal':
         specifier: workspace:*
         version: link:../journal
     devDependencies:

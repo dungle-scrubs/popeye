@@ -15,13 +15,13 @@ import { JournalSqlite } from "./sqlite.js";
 const directories: Array<string> = [];
 
 const makeDirectory = async (): Promise<string> => {
-  const dir = await mkdtemp(join(tmpdir(), "peye-migrate-"));
+  const dir = await mkdtemp(join(tmpdir(), "popeye-migrate-"));
   directories.push(dir);
   return dir;
 };
 
 const makeDirectorySync = (): string => {
-  const dir = mkdtempSync(join(tmpdir(), "peye-migrate-"));
+  const dir = mkdtempSync(join(tmpdir(), "popeye-migrate-"));
   directories.push(dir);
   return dir;
 };

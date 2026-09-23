@@ -19,10 +19,10 @@
  * mapping and decode routing (RpcHead owns those).
  */
 
-import type { EntryId, SessionId } from "@pop-eye/journal";
-import { JournalError, JournalNotFound } from "@pop-eye/journal";
-import type { InteractionRequest, InteractionResponse } from "@pop-eye/protocol";
-import { snapshotView } from "@pop-eye/protocol";
+import type { EntryId, SessionId } from "@popeye/journal";
+import { JournalError, JournalNotFound } from "@popeye/journal";
+import type { InteractionRequest, InteractionResponse } from "@popeye/protocol";
+import { snapshotView } from "@popeye/protocol";
 import { Effect, Fiber, Stream } from "effect";
 import type { Driver } from "../compose.js";
 import type { HeadWriteError } from "./head-wire.js";
@@ -234,7 +234,7 @@ export const makeRpcSessionBridge = (options: {
         return driver
           .branch(
             command.sessionId as unknown as SessionId,
-            command.toEntryId as unknown as import("@pop-eye/journal").EntryId,
+            command.toEntryId as unknown as import("@popeye/journal").EntryId,
             command.expectedRevision,
           )
           .pipe(
@@ -253,7 +253,7 @@ export const makeRpcSessionBridge = (options: {
         return driver
           .fork(
             command.sessionId as unknown as SessionId,
-            command.fromEntryId as unknown as import("@pop-eye/journal").EntryId,
+            command.fromEntryId as unknown as import("@popeye/journal").EntryId,
             command.expectedRevision,
           )
           .pipe(Effect.flatMap((snapshot) => writeSnapshot(command.id, snapshot, false)));

@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 
-export const BUILT_BIN_PATH = new URL("../../dist/bin/peye.js", import.meta.url).pathname;
+export const BUILT_BIN_PATH = new URL("../../dist/bin/popeye.js", import.meta.url).pathname;
 export const FAKE_PROVIDER_PROMPT = "Capture the CLI JSON stream.";
 export const FAKE_PROVIDER_SCRIPT_PATH = new URL(
   "../../test-fixtures/cli-fake-provider.json",
@@ -13,12 +13,12 @@ export const cleanCliEnvironment = (): NodeJS.ProcessEnv => {
   for (const key of [
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
-    "PEYE_API_KEY",
-    "PEYE_BASE_URL",
-    "PEYE_FAKE_PROVIDER",
-    "PEYE_FAKE_PROVIDER_SCRIPT",
-    "PEYE_MODEL",
-    "PEYE_USER_PLUGIN_DIR",
+    "POPEYE_API_KEY",
+    "POPEYE_BASE_URL",
+    "POPEYE_FAKE_PROVIDER",
+    "POPEYE_FAKE_PROVIDER_SCRIPT",
+    "POPEYE_MODEL",
+    "POPEYE_USER_PLUGIN_DIR",
   ]) {
     delete env[key];
   }
@@ -27,10 +27,10 @@ export const cleanCliEnvironment = (): NodeJS.ProcessEnv => {
 
 export const fakeProviderEnvironment = (): NodeJS.ProcessEnv => ({
   ...cleanCliEnvironment(),
-  PEYE_BASE_URL: "http://127.0.0.1:1234/v1",
-  PEYE_FAKE_PROVIDER: "1",
-  PEYE_FAKE_PROVIDER_SCRIPT: FAKE_PROVIDER_SCRIPT_PATH,
-  PEYE_MODEL: "fake-model",
+  POPEYE_BASE_URL: "http://127.0.0.1:1234/v1",
+  POPEYE_FAKE_PROVIDER: "1",
+  POPEYE_FAKE_PROVIDER_SCRIPT: FAKE_PROVIDER_SCRIPT_PATH,
+  POPEYE_MODEL: "fake-model",
 });
 
 export const runBuiltBin = (

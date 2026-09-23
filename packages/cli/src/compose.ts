@@ -29,7 +29,7 @@ import {
   ToolRegistryLive,
   type ToolRegistryService,
   type TurnResult,
-} from "@pop-eye/kernel";
+} from "@popeye/kernel";
 import {
   type CapabilityGrants,
   CommandContributionKind,
@@ -37,7 +37,7 @@ import {
   createCapabilityGrants,
   type HookEmitterService,
   type PluginGeneration,
-} from "@pop-eye/plugins";
+} from "@popeye/plugins";
 import { Effect, Layer, Logger, Schema } from "effect";
 
 import { composePluginRuntime, type FirstPartyPlugin } from "./plugins/pipeline.js";

@@ -11,7 +11,7 @@
  * PluginInteractions transport (heads own that); it only decides allow/block/replace.
  */
 
-import type { CapabilityGrants, PluginGeneration } from "@pop-eye/plugins";
+import type { CapabilityGrants, PluginGeneration } from "@popeye/plugins";
 import { Context, Effect, Layer, type Ref } from "effect";
 
 import {
@@ -35,7 +35,7 @@ export interface ToolInvocationPipeline {
   ) => Effect.Effect<GateDecision>;
 }
 
-export class ToolInvocationPipelineTag extends Context.Tag("@pop-eye/cli/ToolInvocationPipeline")<
+export class ToolInvocationPipelineTag extends Context.Tag("@popeye/cli/ToolInvocationPipeline")<
   ToolInvocationPipelineTag,
   ToolInvocationPipeline
 >() {}

@@ -18,7 +18,7 @@ specifies all five as one plan. The load-bearing changes are Turn-level
 generation leasing in the kernel (which makes both Session-scoped Tools and
 hot reload sound) and a Plugin-initiated interaction seam (which the gate
 Plugins need and the protocol already carries on the wire). The default
-`peye` posture is unchanged throughout: the gate Plugins are opt-in installs.
+`popeye` posture is unchanged throughout: the gate Plugins are opt-in installs.
 
 ## Introduction
 
@@ -191,7 +191,7 @@ open and holds the lease until the Turn settles.**
 
 <!-- D-009 -->
 
-- New service in `@pop-eye/plugins`:
+- New service in `@popeye/plugins`:
   `PluginInteractions.request(request) -> Effect<InteractionResolution>`.
   The emitter sets a current-plugin identity (FiberRef) around every
   contribution execution; `request` reads it and stamps the originating
@@ -223,8 +223,8 @@ open and holds the lease until the Turn settles.**
 
 ### 6. Opt-in gate Plugins
 
-- Shipped under `@pop-eye/cli` as linkable modules (documented: symlink or
-  copy into `~/.peye/plugins/`). Never in the default set.
+- Shipped under `@popeye/cli` as linkable modules (documented: symlink or
+  copy into `~/.popeye/plugins/`). Never in the default set.
 - **Trust gate** (contributes to the `trust` Hook point): on
   `prompt_required`/`reprompt_required` raises a confirm interaction
   (project path, digest, change summary; timeout 25s; fallback

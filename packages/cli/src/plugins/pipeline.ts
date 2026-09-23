@@ -30,7 +30,7 @@ import {
   type PluginGeneration,
   phase1Sources,
   TrustStoreMemory,
-} from "@pop-eye/plugins";
+} from "@popeye/plugins";
 import { Data, Effect } from "effect";
 
 import {
@@ -140,7 +140,7 @@ const discoveryConfig = (
           path: tmpdir(),
           reason: "decoy_directory_unavailable",
         }),
-      try: () => mkdtemp(join(tmpdir(), "peye-cli-plugin-pipeline-no-project-")),
+      try: () => mkdtemp(join(tmpdir(), "popeye-cli-plugin-pipeline-no-project-")),
     });
     return {
       cliPaths: sources.filter((source) => source.origin === "cli").map((source) => source.path),

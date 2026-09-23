@@ -46,7 +46,7 @@ test("the canonical journal fixture derives every durable boundary without hardc
 });
 
 test("a second crash during synthesis remains idempotent on the next resume", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m24-double-"));
+  const directory = await mkdtemp(join(tmpdir(), "popeye-kernel-m24-double-"));
   try {
     const cell = await runDoubleRecoveryCell(directory);
 
@@ -66,7 +66,7 @@ test("a second crash during synthesis remains idempotent on the next resume", as
 });
 
 test("orphaned-prompt recovery remains idempotent after its assistant append crashes", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m24-orphaned-double-"));
+  const directory = await mkdtemp(join(tmpdir(), "popeye-kernel-m24-orphaned-double-"));
   try {
     const cell = await runOrphanedPromptDoubleRecoveryCell(directory);
 
@@ -87,7 +87,7 @@ test("orphaned-prompt recovery remains idempotent after its assistant append cra
 });
 
 test("acknowledged impossible Records reject without modifying the journal", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m24-corrupt-"));
+  const directory = await mkdtemp(join(tmpdir(), "popeye-kernel-m24-corrupt-"));
   try {
     const cell = await runCorruptionRejectionCell(directory);
 
@@ -104,7 +104,7 @@ test("acknowledged impossible Records reject without modifying the journal", asy
 });
 
 test("every acknowledged Driver boundary recovers with its expected report and span", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m24-matrix-"));
+  const directory = await mkdtemp(join(tmpdir(), "popeye-kernel-m24-matrix-"));
   try {
     const matrix = await runRecoveryBoundaryMatrix(directory);
 
@@ -139,7 +139,7 @@ test("every acknowledged Driver boundary recovers with its expected report and s
 }, 60_000);
 
 test("Driver scripts record the canonical recovery boundary set", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m24-record-"));
+  const directory = await mkdtemp(join(tmpdir(), "popeye-kernel-m24-record-"));
   try {
     const sessions = await recordCanonicalRecoverySessions(directory);
 
@@ -171,7 +171,7 @@ test("Driver scripts record the canonical recovery boundary set", async () => {
 });
 
 test("torn-tail recovery survives every file-generation swap boundary", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "peye-kernel-m24-torn-tail-"));
+  const directory = await mkdtemp(join(tmpdir(), "popeye-kernel-m24-torn-tail-"));
   try {
     const cells = await runTornTailRecoveryMatrix(directory);
 

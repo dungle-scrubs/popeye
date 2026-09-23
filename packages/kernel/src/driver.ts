@@ -37,8 +37,8 @@ import {
   type JournalFailure,
   type SessionId,
   SessionIdSchema,
-} from "@pop-eye/journal";
-import type { ProtocolError } from "@pop-eye/protocol";
+} from "@popeye/journal";
+import type { ProtocolError } from "@popeye/protocol";
 import { Context, Effect, Layer, Schema, type Stream } from "effect";
 
 import {
@@ -165,7 +165,7 @@ export interface DriverService {
   readonly subscribeProgress: (sessionId: SessionId) => Stream.Stream<Progress>;
 }
 
-export class Driver extends Context.Tag("@pop-eye/kernel/Driver")<Driver, DriverService>() {}
+export class Driver extends Context.Tag("@popeye/kernel/Driver")<Driver, DriverService>() {}
 
 const strict: { readonly onExcessProperty: "error" } = { onExcessProperty: "error" };
 const decodeCompaction = Schema.decodeUnknown(CompactionPayloadSchema, strict);

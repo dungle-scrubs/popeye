@@ -11,7 +11,7 @@ date: 2026-08-11
 
 ## Abstract
 
-The shipped `peye` command cannot expose Tools to the model and cannot process an
+The shipped `popeye` command cannot expose Tools to the model and cannot process an
 `abort` frame while an rpc Turn is running. Both gaps were found by the CLI
 live-integration harness after plan `01-cli-entry` closed; both are composition
 gaps, not missing machinery - discovery, Trust, generation loading, Capabilities,
@@ -74,7 +74,7 @@ Out of scope (unchanged v1 deferrals or separate plans):
 
 The design follows pi-coding-agent's posture: the host does not interpose
 consent ceremony between the user and their project. Security boundaries that
-plan `00-peye-coding-agent` built (Trust prompting, Capability consent) become
+plan `00-popeye-coding-agent` built (Trust prompting, Capability consent) become
 opt-in extension surfaces rather than default friction. See Security
 Considerations for the full inventory.
 
@@ -106,13 +106,13 @@ repository `CONTEXT.md`. Additional terms:
 
 ## Motivation
 
-pop-eye's pitch is durable, extensible coding-agent hosting, and the dogfood
+popeye's pitch is durable, extensible coding-agent hosting, and the dogfood
 rule says all behavior arrives through Plugins. A shipped CLI whose model
 cannot call any Tool delivers neither. The rpc Head is the embedding surface
 every future interactive Head (TUI, SDK, IDE) will sit on; a head contract
 whose `abort` is unreachable mid-Turn is quietly false in the one mode that
 exists to be driven programmatically. Closing both gaps is the difference
-between "the kernel supports it" and "the shipped `peye` command does it."
+between "the kernel supports it" and "the shipped `popeye` command does it."
 
 ## Design
 
@@ -120,12 +120,12 @@ between "the kernel supports it" and "the shipped `peye` command does it."
 
 `run.ts` currently builds `ToolRegistryLive([])` and a static
 `FirstPartyPluginHostLive`. It MUST instead compose the existing
-`@pop-eye/plugins` pipeline at startup, before Head dispatch:
+`@popeye/plugins` pipeline at startup, before Head dispatch:
 
 1. Build `PluginDiscoveryConfig` from the CLI environment: project path is
    the working directory; <!-- D-013 --> the user-global directory is
-   `~/.peye/plugins` (mirroring the hardcoded project-local
-   `.peye/plugins`); CLI-passed Plugin paths come from a new repeatable
+   `~/.popeye/plugins` (mirroring the hardcoded project-local
+   `.popeye/plugins`); CLI-passed Plugin paths come from a new repeatable
    `--plugin <path>` flag (OPTIONAL; absent means no CLI sources).
 2. Call `loadGeneration` with:
    - `trust: "trusted"` <!-- D-002 --> - the do-not-get-in-the-way posture.
@@ -337,10 +337,10 @@ Existing taxonomy only; no new error types.
 
 ### Trust model
 
-<!-- D-002 --> The default posture is pi-coding-agent's: running `peye`
+<!-- D-002 --> The default posture is pi-coding-agent's: running `popeye`
 inside a project executes that project's Plugin code. Trust ceremony is not
 the host's job; it is an extension surface. This is an explicit, recorded
-trade: `cd untrusted-repo && peye -p "..."` runs that repo's Plugins.
+trade: `cd untrusted-repo && popeye -p "..."` runs that repo's Plugins.
 
 What remains structurally enforced (not removable by configuration):
 
@@ -386,7 +386,7 @@ What becomes an opt-in Contribution (the extension surfaces already exist):
 ### Blast radius
 
 Worst case in the default posture: a malicious repository's Plugin executes
-arbitrary code with the user's OS privileges the moment `peye` runs there.
+arbitrary code with the user's OS privileges the moment `popeye` runs there.
 That equals the risk of running that repository's own tooling (npm scripts,
 Makefiles) and matches pi's posture. Mitigations available without changing
 the posture: `--no-project-plugins`, or a user-global Trust-gate Plugin.
@@ -441,7 +441,7 @@ Phased for the follow-on DECOMPOSE stage; order is tool loading first, rpc
 second (independent, but tool loading is the product-defining gap):
 
 1. **Phase 1 - Plugin pipeline in the CLI.** Discovery config
-   (`~/.peye/plugins`, `--plugin`, `--no-project-plugins`),
+   (`~/.popeye/plugins`, `--plugin`, `--no-project-plugins`),
    `loadGeneration` with `trust: "trusted"` over `TrustStoreMemory`,
    first-party Plugins through the same registry, phase-1 displacement
    guard, fail-closed load mapping, diagnostics sinked. Verified by unit
@@ -466,7 +466,7 @@ merge.
 ## Open Questions
 
 None. The three questions raised in the draft were resolved during review:
-user-global directory <!-- D-013 --> `~/.peye/plugins`; `--no-project-plugins`
+user-global directory <!-- D-013 --> `~/.popeye/plugins`; `--no-project-plugins`
 <!-- D-014 --> also skips project-local `--plugin` paths; rpc concurrency
 <!-- D-005 --> is bounded per-Session queues, closing the backpressure
 question.

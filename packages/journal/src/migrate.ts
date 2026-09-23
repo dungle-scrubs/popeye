@@ -1,6 +1,6 @@
 /**
  * Owns JSONL to SQLite migration.
- * It exists so an existing `.peye/sessions` directory can be moved to `journal.sqlite`
+ * It exists so an existing `.popeye/sessions` directory can be moved to `journal.sqlite`
  * via an explicit command, not via auto-migration <!-- D-006 -->.
  *
  * What it owns: reading acknowledged JSONL lines and bulk-inserting them into `journal.sqlite`.
@@ -21,7 +21,7 @@ import { JournalLineSchema, SessionIdSchema } from "./shapes.js";
 import { ensureSchema } from "./sqlite/ddl.js";
 
 const JournalHeaderSchema = Schema.Struct({
-  format: Schema.Literal("peye_journal"),
+  format: Schema.Literal("popeye_journal"),
   sessionId: SessionIdSchema,
   type: Schema.Literal("journal_header"),
   version: Schema.Literal(1),

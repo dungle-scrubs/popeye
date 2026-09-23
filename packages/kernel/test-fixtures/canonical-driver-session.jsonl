@@ -1,4 +1,4 @@
-{"payload":{"format":"peye_journal","sessionId":"<session-1>","type":"journal_header","version":1},"v":1}
+{"payload":{"format":"popeye_journal","sessionId":"<session-1>","type":"journal_header","version":1},"v":1}
 {"payload":{"item":{"id":"<entry-1>","kind":"session_root","parentId":null,"payload":{}},"sessionId":"<session-1>","type":"entry"},"v":1}
 {"payload":{"item":{"id":"<entry-2>","kind":"message","parentId":"<entry-1>","payload":{"content":"Inspect the file.","role":"user"}},"sessionId":"<session-1>","type":"entry"},"v":1}
 {"payload":{"item":{"id":"<record-1>","kind":"operation_started","payload":{"intent":"turn","operationId":"<operation-1>","promptEntryId":"<entry-2>","turnOrdinal":1}},"sessionId":"<session-1>","type":"record"},"v":1}

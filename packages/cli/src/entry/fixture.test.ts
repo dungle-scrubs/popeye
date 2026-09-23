@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { decodeProgress, decodeSnapshot } from "@pop-eye/protocol";
+import { decodeProgress, decodeSnapshot } from "@popeye/protocol";
 import { Effect } from "effect";
 import { expect, test } from "vitest";
 
@@ -28,7 +28,7 @@ const decodeWireStream = async (stream: string): Promise<void> => {
 };
 
 const captureBuiltStream = (): string => {
-  const directory = mkdtempSync(join(tmpdir(), "peye-cli-stream-"));
+  const directory = mkdtempSync(join(tmpdir(), "popeye-cli-stream-"));
   try {
     const result = runBuiltBin(
       ["-p", "--mode", "json", "--session-dir", directory, FAKE_PROVIDER_PROMPT],
@@ -42,8 +42,8 @@ const captureBuiltStream = (): string => {
 };
 
 const captureBuiltToolStream = (): string => {
-  const projectPath = mkdtempSync(join(tmpdir(), "peye-cli-tool-stream-"));
-  const projectPluginDir = join(projectPath, ".peye", "plugins");
+  const projectPath = mkdtempSync(join(tmpdir(), "popeye-cli-tool-stream-"));
+  const projectPluginDir = join(projectPath, ".popeye", "plugins");
   const providerScriptPath = join(projectPath, "tool-provider.json");
   const sessionDir = join(projectPath, "sessions");
   const userPluginDir = join(projectPath, "user-plugins");
@@ -104,8 +104,8 @@ const captureBuiltToolStream = (): string => {
         cwd: projectPath,
         env: {
           ...fakeProviderEnvironment(),
-          PEYE_FAKE_PROVIDER_SCRIPT: providerScriptPath,
-          PEYE_USER_PLUGIN_DIR: userPluginDir,
+          POPEYE_FAKE_PROVIDER_SCRIPT: providerScriptPath,
+          POPEYE_USER_PLUGIN_DIR: userPluginDir,
         },
       },
     );
@@ -170,7 +170,7 @@ test("the normalized CLI JSON Tool stream is stable across 2 built-bin runs", ()
   const second = captureBuiltToolStream();
 
   expect(normalizeJsonStream(first)).toEqual(normalizeJsonStream(second));
-  if (process.env.PEYE_UPDATE_RECORDED_FIXTURES === "1") {
+  if (process.env.POPEYE_UPDATE_RECORDED_FIXTURES === "1") {
     writeFileSync(TOOL_FIXTURE_PATH, normalizeJsonLines(first));
   }
   const fixture = readFileSync(TOOL_FIXTURE_PATH, "utf8");

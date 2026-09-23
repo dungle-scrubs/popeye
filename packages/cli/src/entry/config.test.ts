@@ -1,14 +1,14 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { classifyResolvedPluginSource } from "@pop-eye/plugins";
+import { classifyResolvedPluginSource } from "@popeye/plugins";
 import { Effect } from "effect";
 import { expect, test } from "vitest";
 
 import { parseArgs } from "./args.js";
 import { resolveConfig } from "./config.js";
 
-test("flags override PEYE provider environment values", async () => {
+test("flags override POPEYE provider environment values", async () => {
   const parsed = await Effect.runPromise(
     parseArgs([
       "-p",
@@ -23,15 +23,15 @@ test("flags override PEYE provider environment values", async () => {
   );
   const config = await Effect.runPromise(
     resolveConfig(parsed, {
-      PEYE_API_KEY: "peye-key",
-      PEYE_BASE_URL: "https://env.example/v1",
-      PEYE_MODEL: "env-model",
+      POPEYE_API_KEY: "popeye-key",
+      POPEYE_BASE_URL: "https://env.example/v1",
+      POPEYE_MODEL: "env-model",
     }),
   );
 
   expect(config).toMatchObject({
     action: "run",
-    apiKey: "peye-key",
+    apiKey: "popeye-key",
     baseUrl: "https://flag.example/v1",
     baseUrlHost: "flag.example",
     model: "flag-model",
@@ -53,8 +53,8 @@ test("Plugin arguments are exposed through resolved run configuration", async ()
   );
   const config = await Effect.runPromise(
     resolveConfig(parsed, {
-      PEYE_BASE_URL: "http://127.0.0.1:1234/v1",
-      PEYE_MODEL: "local-model",
+      POPEYE_BASE_URL: "http://127.0.0.1:1234/v1",
+      POPEYE_MODEL: "local-model",
     }),
   );
 
@@ -69,46 +69,46 @@ test("the user Plugin directory defaults below the operating-system home directo
   const parsed = await Effect.runPromise(parseArgs(["-p", "Explain."]));
   const config = await Effect.runPromise(
     resolveConfig(parsed, {
-      PEYE_BASE_URL: "http://127.0.0.1:1234/v1",
-      PEYE_MODEL: "local-model",
+      POPEYE_BASE_URL: "http://127.0.0.1:1234/v1",
+      POPEYE_MODEL: "local-model",
     }),
   );
 
   expect(config).toMatchObject({
     action: "run",
-    userPluginDir: join(homedir(), ".peye", "plugins"),
+    userPluginDir: join(homedir(), ".popeye", "plugins"),
   });
 });
 
-test("an empty PEYE_USER_PLUGIN_DIR falls back to the home-directory default", async () => {
+test("an empty POPEYE_USER_PLUGIN_DIR falls back to the home-directory default", async () => {
   const parsed = await Effect.runPromise(parseArgs(["-p", "Explain."]));
   const config = await Effect.runPromise(
     resolveConfig(parsed, {
-      PEYE_BASE_URL: "http://127.0.0.1:1234/v1",
-      PEYE_MODEL: "local-model",
-      PEYE_USER_PLUGIN_DIR: "",
+      POPEYE_BASE_URL: "http://127.0.0.1:1234/v1",
+      POPEYE_MODEL: "local-model",
+      POPEYE_USER_PLUGIN_DIR: "",
     }),
   );
 
   expect(config).toMatchObject({
     action: "run",
-    userPluginDir: join(homedir(), ".peye", "plugins"),
+    userPluginDir: join(homedir(), ".popeye", "plugins"),
   });
 });
 
-test("PEYE_USER_PLUGIN_DIR overrides the user Plugin directory for tests", async () => {
+test("POPEYE_USER_PLUGIN_DIR overrides the user Plugin directory for tests", async () => {
   const parsed = await Effect.runPromise(parseArgs(["-p", "Explain."]));
   const config = await Effect.runPromise(
     resolveConfig(parsed, {
-      PEYE_BASE_URL: "http://127.0.0.1:1234/v1",
-      PEYE_MODEL: "local-model",
-      PEYE_USER_PLUGIN_DIR: "/tmp/peye-user-plugins",
+      POPEYE_BASE_URL: "http://127.0.0.1:1234/v1",
+      POPEYE_MODEL: "local-model",
+      POPEYE_USER_PLUGIN_DIR: "/tmp/popeye-user-plugins",
     }),
   );
 
   expect(config).toMatchObject({
     action: "run",
-    userPluginDir: "/tmp/peye-user-plugins",
+    userPluginDir: "/tmp/popeye-user-plugins",
   });
 });
 
@@ -119,7 +119,7 @@ test("a CLI Plugin path resolved inside the project tree stays project-local", a
   if (parsed.action !== "run") {
     throw new Error(`Expected run arguments, received ${parsed.action}.`);
   }
-  const projectPath = resolve("/tmp/peye-project");
+  const projectPath = resolve("/tmp/popeye-project");
   const pluginPath = parsed.pluginPaths[0];
   if (pluginPath === undefined) {
     throw new Error("Expected one CLI Plugin path.");
@@ -130,34 +130,34 @@ test("a CLI Plugin path resolved inside the project tree stays project-local", a
   );
 });
 
-test("API keys fall back from PEYE to OpenAI and then Anthropic", async () => {
+test("API keys fall back from POPEYE to OpenAI and then Anthropic", async () => {
   const parsed = await Effect.runPromise(parseArgs(["-p", "Explain."]));
-  const peye = await Effect.runPromise(
+  const popeye = await Effect.runPromise(
     resolveConfig(parsed, {
       ANTHROPIC_API_KEY: "anthropic-key",
       OPENAI_API_KEY: "openai-key",
-      PEYE_API_KEY: "peye-key",
-      PEYE_BASE_URL: "https://gateway.example/v1",
-      PEYE_MODEL: "gateway-model",
+      POPEYE_API_KEY: "popeye-key",
+      POPEYE_BASE_URL: "https://gateway.example/v1",
+      POPEYE_MODEL: "gateway-model",
     }),
   );
   const openAi = await Effect.runPromise(
     resolveConfig(parsed, {
       ANTHROPIC_API_KEY: "anthropic-key",
       OPENAI_API_KEY: "openai-key",
-      PEYE_BASE_URL: "https://gateway.example/v1",
-      PEYE_MODEL: "gateway-model",
+      POPEYE_BASE_URL: "https://gateway.example/v1",
+      POPEYE_MODEL: "gateway-model",
     }),
   );
   const anthropic = await Effect.runPromise(
     resolveConfig(parsed, {
       ANTHROPIC_API_KEY: "anthropic-key",
-      PEYE_BASE_URL: "https://gateway.example/v1",
-      PEYE_MODEL: "gateway-model",
+      POPEYE_BASE_URL: "https://gateway.example/v1",
+      POPEYE_MODEL: "gateway-model",
     }),
   );
 
-  expect(peye).toMatchObject({ action: "run", apiKey: "peye-key" });
+  expect(popeye).toMatchObject({ action: "run", apiKey: "popeye-key" });
   expect(openAi).toMatchObject({ action: "run", apiKey: "openai-key" });
   expect(anthropic).toMatchObject({ action: "run", apiKey: "anthropic-key" });
 });
@@ -165,20 +165,20 @@ test("API keys fall back from PEYE to OpenAI and then Anthropic", async () => {
 test("missing model and endpoint failures name the exact flag and environment variable", async () => {
   const parsed = await Effect.runPromise(parseArgs(["-p", "Explain."]));
   const missingModel = await Effect.runPromise(
-    Effect.flip(resolveConfig(parsed, { PEYE_BASE_URL: "http://127.0.0.1:1234/v1" })),
+    Effect.flip(resolveConfig(parsed, { POPEYE_BASE_URL: "http://127.0.0.1:1234/v1" })),
   );
   const missingEndpoint = await Effect.runPromise(
-    Effect.flip(resolveConfig(parsed, { PEYE_MODEL: "local-model" })),
+    Effect.flip(resolveConfig(parsed, { POPEYE_MODEL: "local-model" })),
   );
 
   expect(missingModel).toMatchObject({
     _tag: "CliConfigError",
-    message: expect.stringContaining("--model <model> or PEYE_MODEL"),
+    message: expect.stringContaining("--model <model> or POPEYE_MODEL"),
     reason: "missing_model",
   });
   expect(missingEndpoint).toMatchObject({
     _tag: "CliConfigError",
-    message: expect.stringContaining("--base-url <url> or PEYE_BASE_URL"),
+    message: expect.stringContaining("--base-url <url> or POPEYE_BASE_URL"),
     reason: "missing_base_url",
   });
 });
@@ -191,8 +191,8 @@ test("explicit empty provider flags do not fall through to environment values", 
     parseArgs(["-p", "--model", "flag-model", "--base-url", "", "Explain."]),
   );
   const env = {
-    PEYE_BASE_URL: "https://env.example/v1",
-    PEYE_MODEL: "env-model",
+    POPEYE_BASE_URL: "https://env.example/v1",
+    POPEYE_MODEL: "env-model",
   };
   const modelError = await Effect.runPromise(Effect.flip(resolveConfig(emptyModel, env)));
   const baseUrlError = await Effect.runPromise(Effect.flip(resolveConfig(emptyBaseUrl, env)));
@@ -213,15 +213,15 @@ test("loopback endpoints get a provider placeholder while hosted endpoints requi
   const parsed = await Effect.runPromise(parseArgs(["-p", "Explain."]));
   const local = await Effect.runPromise(
     resolveConfig(parsed, {
-      PEYE_BASE_URL: "http://127.0.0.1:1234/v1",
-      PEYE_MODEL: "local-model",
+      POPEYE_BASE_URL: "http://127.0.0.1:1234/v1",
+      POPEYE_MODEL: "local-model",
     }),
   );
   const hosted = await Effect.runPromise(
     Effect.flip(
       resolveConfig(parsed, {
-        PEYE_BASE_URL: "https://gateway.example/v1",
-        PEYE_MODEL: "hosted-model",
+        POPEYE_BASE_URL: "https://gateway.example/v1",
+        POPEYE_MODEL: "hosted-model",
       }),
     ),
   );
@@ -232,7 +232,7 @@ test("loopback endpoints get a provider placeholder while hosted endpoints requi
   });
   expect(hosted).toMatchObject({
     _tag: "CliConfigError",
-    message: expect.stringMatching(/PEYE_API_KEY.*OPENAI_API_KEY.*ANTHROPIC_API_KEY/u),
+    message: expect.stringMatching(/POPEYE_API_KEY.*OPENAI_API_KEY.*ANTHROPIC_API_KEY/u),
     reason: "missing_api_key",
   });
 });
@@ -242,8 +242,8 @@ test("hostnames that only start with 127 are still hosted endpoints", async () =
   const error = await Effect.runPromise(
     Effect.flip(
       resolveConfig(parsed, {
-        PEYE_BASE_URL: "https://127.example.com/v1",
-        PEYE_MODEL: "hosted-model",
+        POPEYE_BASE_URL: "https://127.example.com/v1",
+        POPEYE_MODEL: "hosted-model",
       }),
     ),
   );
