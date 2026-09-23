@@ -8,13 +8,14 @@
  * timeout enforcement.
  */
 
-import type { SessionId } from "@popeye/journal";
-import { Effect } from "effect";
+import { type SessionId, SessionIdSchema } from "@popeye/journal";
+import { Effect, Schema } from "effect";
 
 import type { DriverSnapshot } from "../compose.js";
 import {
   encodeProgressLine,
   encodeSnapshotLine,
+  exitCodeForStopReason,
   type HeadWriter,
   runHeadBoundary,
   type SnapshotAuditFields,
@@ -34,15 +35,30 @@ const encodeSnapshotLineForHead = (
   snapshotAudit: SnapshotAuditFields | undefined,
 ) => encodeSnapshotLine(snapshot, snapshotAudit);
 
+export const SessionIdLineSchema = Schema.Struct({
+  _tag: Schema.Literal("sessionId"),
+  sessionId: SessionIdSchema,
+});
+
+/**
+ * RFC-02 P1 item 1: the json head emits a session-id line on stdout before
+ * any Progress line, so out-of-process mappers can bind the stream without
+ * parsing the STARTUP stderr line.
+ */
+export const sessionIdLine = (sessionId: SessionId): string =>
+  `${JSON.stringify(Schema.encodeSync(SessionIdLineSchema)({ _tag: "sessionId", sessionId }))}\n`;
+
 export const runJsonHead = (options: JsonHeadOptions) =>
   runHeadBoundary(
     Effect.gen(function* () {
       const writer = options.writer ?? stdoutHeadWriter;
       return yield* runSessionLoop({
         onProgress: (progress) => encodeProgressLine(progress).pipe(Effect.flatMap(writer.write)),
-        onSnapshot: (snapshot) =>
-          encodeSnapshotLineForHead(snapshot, options.snapshotAudit).pipe(
+        onSession: (sessionId) => writer.write(sessionIdLine(sessionId)),
+        onTurnSettled: (turn) =>
+          encodeSnapshotLineForHead(turn.snapshot, options.snapshotAudit).pipe(
             Effect.flatMap(writer.write),
+            Effect.as(exitCodeForStopReason(turn.stopReason)),
           ),
         prompts: options.prompts,
         ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),

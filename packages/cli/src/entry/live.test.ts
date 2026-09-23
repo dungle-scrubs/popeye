@@ -96,6 +96,7 @@ interface LiveRpcProcess extends LiveProcess {
 
 interface JsonHeadOutput {
   readonly progress: ReadonlyArray<Progress>;
+  readonly sessionId: string;
   readonly snapshot: Snapshot;
 }
 
@@ -190,11 +191,17 @@ const record = (value: unknown): Readonly<Record<string, unknown>> => {
 
 const parseJsonHeadOutput = async (stdout: string): Promise<JsonHeadOutput> => {
   const frames = lines(stdout).map((line) => JSON.parse(line) as unknown);
-  const snapshot = await Effect.runPromise(decodeSnapshot(frames.at(-1)));
+  const [sessionFrame, ...rest] = frames;
+  const first = record(sessionFrame);
+  if (first._tag !== "sessionId" || typeof first.sessionId !== "string") {
+    throw new TypeError("Expected a sessionId first line.");
+  }
+  const sessionId = first.sessionId;
+  const snapshot = await Effect.runPromise(decodeSnapshot(rest.at(-1)));
   const progress = await Promise.all(
-    frames.slice(0, -1).map((frame) => Effect.runPromise(decodeProgress(frame))),
+    rest.slice(0, -1).map((frame) => Effect.runPromise(decodeProgress(frame))),
   );
-  return { progress, snapshot };
+  return { progress, sessionId, snapshot };
 };
 
 const messagePayload = (
@@ -350,6 +357,7 @@ test.skipIf(liveConfig === undefined)(
     expect(result.code, result.stderr).toBe(0);
     const output = await parseJsonHeadOutput(result.stdout);
     expect(output.snapshot.sessionId).not.toBe("");
+    expect(output.sessionId).toBe(output.snapshot.sessionId);
     expect(hasAssistantMessage(output.snapshot)).toBe(true);
   },
   LIVE_TEST_TIMEOUT_MS,

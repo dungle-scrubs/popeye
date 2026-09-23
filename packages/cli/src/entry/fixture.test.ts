@@ -10,6 +10,8 @@ import { FAKE_PROVIDER_PROMPT, fakeProviderEnvironment, runBuiltBin } from "../t
 import { normalizeJsonLines, normalizeJsonStream } from "../test-support/json.js";
 
 const FIXTURE_PATH = new URL("../../test-fixtures/cli-json-stream.jsonl", import.meta.url).pathname;
+const HCN_FIXTURE_PATH = new URL("../../test-fixtures/cli-hcn-stream.jsonl", import.meta.url)
+  .pathname;
 const TOOL_FIXTURE_PATH = new URL("../../test-fixtures/cli-json-tool-stream.jsonl", import.meta.url)
   .pathname;
 const TOOL_FIXTURE_PROMPT = "Call project-echo once with the fixture value.";
@@ -17,7 +19,10 @@ const TOOL_FIXTURE_PROMPT = "Call project-echo once with the fixture value.";
 const lines = (stream: string): ReadonlyArray<string> => stream.trimEnd().split("\n");
 
 const decodeWireStream = async (stream: string): Promise<void> => {
-  for (const line of lines(stream)) {
+  const [sessionLine, ...rest] = lines(stream);
+  const sessionFrame = JSON.parse(sessionLine ?? "null") as unknown;
+  expect(sessionFrame).toMatchObject({ _tag: "sessionId", sessionId: expect.any(String) });
+  for (const line of rest) {
     const frame = JSON.parse(line) as unknown;
     if (typeof frame === "object" && frame !== null && "_tag" in frame) {
       await Effect.runPromise(decodeProgress(frame));
@@ -27,11 +32,11 @@ const decodeWireStream = async (stream: string): Promise<void> => {
   }
 };
 
-const captureBuiltStream = (): string => {
-  const directory = mkdtempSync(join(tmpdir(), "popeye-cli-stream-"));
+const captureBuiltStream = (mode: "hcn" | "json" = "json"): string => {
+  const directory = mkdtempSync(join(tmpdir(), `popeye-cli-${mode}-stream-`));
   try {
     const result = runBuiltBin(
-      ["-p", "--mode", "json", "--session-dir", directory, FAKE_PROVIDER_PROMPT],
+      ["-p", "--mode", mode, "--session-dir", directory, FAKE_PROVIDER_PROMPT],
       { env: fakeProviderEnvironment() },
     );
     expect(result.status, result.stderr).toBe(0);
@@ -39,6 +44,18 @@ const captureBuiltStream = (): string => {
   } finally {
     rmSync(directory, { force: true, recursive: true });
   }
+};
+
+const expectStableRecordedFixture = (capture: () => string, fixturePath: string): void => {
+  const first = capture();
+  const second = capture();
+
+  expect(normalizeJsonStream(first)).toEqual(normalizeJsonStream(second));
+  if (process.env.POPEYE_UPDATE_RECORDED_FIXTURES === "1") {
+    writeFileSync(fixturePath, normalizeJsonLines(first));
+  }
+  const fixture = readFileSync(fixturePath, "utf8");
+  expect(normalizeJsonStream(first)).toEqual(normalizeJsonStream(fixture));
 };
 
 const captureBuiltToolStream = (): string => {
@@ -132,12 +149,28 @@ test("the committed CLI JSON stream decodes as Progress followed by a Snapshot",
 });
 
 test("the normalized CLI JSON stream is stable across 2 built-bin runs", () => {
-  const fixture = readFileSync(FIXTURE_PATH, "utf8");
-  const first = captureBuiltStream();
-  const second = captureBuiltStream();
+  expectStableRecordedFixture(() => captureBuiltStream("json"), FIXTURE_PATH);
+}, 15_000);
 
-  expect(normalizeJsonStream(first)).toEqual(normalizeJsonStream(second));
-  expect(normalizeJsonStream(first)).toEqual(normalizeJsonStream(fixture));
+test("the committed CLI HCN stream carries identity-first HarnessEvents", () => {
+  const fixture = readFileSync(HCN_FIXTURE_PATH, "utf8");
+  const [identity, _token, message, done] = lines(fixture).map(
+    (line) => JSON.parse(line) as Record<string, unknown>,
+  );
+  const kinds = [identity, _token, message, done].map((event) => event?.kind);
+
+  expect(kinds).toEqual(["identity", "token", "message", "done"]);
+  expect(identity).toMatchObject({ kind: "identity", authority: "harness-minted" });
+  expect(message).toMatchObject({
+    kind: "message",
+    role: "assistant",
+    text: "Fake provider answer.",
+  });
+  expect(done).toMatchObject({ kind: "done", exitCode: 0, cause: "clean" });
+});
+
+test("the normalized CLI HCN stream is stable across 2 built-bin runs", () => {
+  expectStableRecordedFixture(() => captureBuiltStream("hcn"), HCN_FIXTURE_PATH);
 }, 15_000);
 
 test("the committed CLI JSON Tool stream decodes as Progress followed by a Snapshot", async () => {

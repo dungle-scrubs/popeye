@@ -8,10 +8,13 @@ const IDENTIFIER_FIELDS: ReadonlySet<string> = new Set([
 
 const lines = (stream: string): ReadonlyArray<string> => stream.trimEnd().split("\n");
 
-export const normalizeJsonStream = (stream: string): ReadonlyArray<unknown> => {
+export const normalizeJsonStream = (
+  stream: string,
+  identifierFields: ReadonlySet<string> = IDENTIFIER_FIELDS,
+): ReadonlyArray<unknown> => {
   const identifiers = new Map<string, string>();
   const normalize = (value: unknown, field: string | undefined): unknown => {
-    if (field !== undefined && IDENTIFIER_FIELDS.has(field) && typeof value === "string") {
+    if (field !== undefined && identifierFields.has(field) && typeof value === "string") {
       const existing = identifiers.get(value);
       if (existing !== undefined) {
         return existing;
@@ -34,7 +37,12 @@ export const normalizeJsonStream = (stream: string): ReadonlyArray<unknown> => {
   return lines(stream).map((line) => normalize(JSON.parse(line) as unknown, undefined));
 };
 
-export const normalizeJsonLines = (stream: string): string =>
-  `${normalizeJsonStream(stream)
+export const normalizeJsonLines = (
+  stream: string,
+  identifierFields: ReadonlySet<string> = IDENTIFIER_FIELDS,
+): string =>
+  `${normalizeJsonStream(stream, identifierFields)
     .map((value) => JSON.stringify(value))
     .join("\n")}\n`;
+
+export const SESSION_ID_FIELDS: ReadonlySet<string> = new Set(["sessionId"]);

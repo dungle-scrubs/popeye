@@ -240,14 +240,27 @@ export const runHeadBoundary = <TFailure, TRequirements>(
 export const reassembleFullSnapshot = (windows: ReadonlyArray<Snapshot>): Snapshot =>
   reassembleSnapshots(windows);
 
-export const finalAssistantText = (snapshot: DriverSnapshot): string => {
-  for (let index = snapshot.entries.length - 1; index >= 0; index -= 1) {
+/** Newest-first assistant message entries at or after the floor index. */
+export function* lastAssistantEntries(
+  snapshot: DriverSnapshot,
+  floorIndex = 0,
+): Generator<DriverSnapshot["entries"][number]> {
+  for (let index = snapshot.entries.length - 1; index >= floorIndex; index -= 1) {
     const entry = snapshot.entries[index];
     if (entry?.kind !== "message" || typeof entry.payload !== "object" || entry.payload === null) {
       continue;
     }
-    const payload = entry.payload as { readonly content?: unknown; readonly role?: unknown };
-    if (payload.role === "assistant" && typeof payload.content === "string") {
+    if ((entry.payload as { readonly role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    yield entry;
+  }
+}
+
+export const finalAssistantText = (snapshot: DriverSnapshot): string => {
+  for (const entry of lastAssistantEntries(snapshot)) {
+    const payload = entry.payload as { readonly content?: unknown };
+    if (typeof payload.content === "string") {
       return payload.content;
     }
   }

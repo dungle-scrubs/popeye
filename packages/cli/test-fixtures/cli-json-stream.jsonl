@@ -1,7 +1,8 @@
+{"_tag":"sessionId","sessionId":"<id-1>"}
 {"_tag":"phaseChanged","phase":"IDLE"}
 {"_tag":"phaseChanged","phase":"ASSEMBLING"}
 {"_tag":"phaseChanged","phase":"STREAMING"}
 {"_tag":"assistantText","text":"Fake provider answer."}
 {"_tag":"phaseChanged","phase":"SETTLING"}
 {"_tag":"turnSettled","revision":5,"stopReason":"done"}
-{"capabilityGrants":[],"entries":[{"id":"<id-1>","kind":"session_root","parentId":null,"payload":{}},{"id":"<id-2>","kind":"message","parentId":"<id-1>","payload":{"content":"Capture the CLI JSON stream.","role":"user"}},{"id":"<id-3>","kind":"message","parentId":"<id-2>","payload":{"content":"Fake provider answer.","role":"assistant","stopReason":"done"}}],"leafEntryId":"<id-3>","loadedGeneration":{"id":"<id-4>","plugins":["compact","reload","session-name"]},"phase":"IDLE","revision":5,"sessionId":"<id-5>"}
+{"capabilityGrants":[],"entries":[{"id":"<id-2>","kind":"session_root","parentId":null,"payload":{}},{"id":"<id-3>","kind":"message","parentId":"<id-2>","payload":{"content":"Capture the CLI JSON stream.","role":"user"}},{"id":"<id-4>","kind":"message","parentId":"<id-3>","payload":{"content":"Fake provider answer.","role":"assistant","stopReason":"done"}}],"leafEntryId":"<id-4>","loadedGeneration":{"id":"<id-5>","plugins":["compact","reload","session-name"]},"phase":"IDLE","revision":5,"sessionId":"<id-1>"}
