@@ -2,7 +2,7 @@
 number: 02
 title: "Popeye HCN Route"
 type: feature
-status: Draft
+status: Accepted
 author: "kevin"
 date: 2026-09-23
 ---
