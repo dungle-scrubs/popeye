@@ -29,6 +29,10 @@ export {
   DriverSnapshotSchema,
 } from "./driver.js";
 export {
+  type AssistantDiagnostic,
+  AssistantDiagnosticSchema,
+} from "./entry-payloads.js";
+export {
   BudgetExceeded,
   CompactionDisabled,
   DuplicateToolName,

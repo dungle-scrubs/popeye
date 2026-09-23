@@ -1064,6 +1064,10 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                                   attempts: attemptCount,
                                   detail: withUsageDetail(failure.message, usage),
                                   reason: "provider_error",
+                                  ...(failure.status === undefined
+                                    ? {}
+                                    : { status: failure.status }),
+                                  transient: failure.transient,
                                 }),
                               ),
                             ),

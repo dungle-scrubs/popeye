@@ -37,6 +37,17 @@ export const SessionNamePayloadSchema = Schema.Struct({
 
 export type SessionNamePayload = Schema.Schema.Type<typeof SessionNamePayloadSchema>;
 
+/**
+ * C2 diagnostic extension (RFC-02 P1): ProviderError transient and status
+ * ride the settled assistant diagnostic so the HCN run mapper can classify
+ * failures in-process, before the head boundary. Fields are optional so
+ * older journal lines still decode.
+ */
+export const ProviderDiagnosticFieldsSchema = Schema.Struct({
+  status: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.nonNegative())),
+  transient: Schema.optional(Schema.Boolean),
+});
+
 export const AssistantDiagnosticSchema = Schema.Union(
   Schema.Struct({
     compactionApplied: Schema.optional(EntryIdSchema),
@@ -47,11 +58,14 @@ export const AssistantDiagnosticSchema = Schema.Union(
     detail: Schema.String,
     reason: Schema.Literal("journal_failure", "turn_failure"),
   }),
-  Schema.Struct({
-    attempts: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
-    detail: Schema.String,
-    reason: Schema.Literal("provider_error"),
-  }),
+  Schema.extend(
+    Schema.Struct({
+      attempts: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
+      detail: Schema.String,
+      reason: Schema.Literal("provider_error"),
+    }),
+    ProviderDiagnosticFieldsSchema,
+  ),
 );
 
 export type AssistantDiagnostic = Schema.Schema.Type<typeof AssistantDiagnosticSchema>;
