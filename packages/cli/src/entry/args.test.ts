@@ -172,3 +172,56 @@ test("rpc mode rejects a positional prompt with a clear typed error", async () =
     reason: "invalid_arguments",
   });
 });
+
+test("HCN grant flags parse into lists with effort validated", async () => {
+  const parsed = await parseRunArgs([
+    "-p",
+    "--tools",
+    "read,native:bash",
+    "--exclude-tools",
+    "write-file",
+    "--access",
+    "read",
+    "--effort",
+    "medium-high",
+    "--context-window",
+    "128000",
+    "--skills",
+    "compact,reload",
+    "--isolation",
+    "tool-free",
+    "--questions",
+    "ask",
+    "--memory",
+    "--system-prompt",
+    "Custom instructions.",
+    "--append-system-prompt",
+    "Extra context.",
+    "Run it.",
+  ]);
+
+  expect(parsed).toMatchObject({
+    access: "read",
+    appendSystemPrompt: "Extra context.",
+    contextWindow: 128000,
+    effort: "medium-high",
+    excludeTools: ["write-file"],
+    isolation: "tool-free",
+    memory: true,
+    questions: "ask",
+    skills: ["compact", "reload"],
+    systemPrompt: "Custom instructions.",
+    tools: ["read", "native:bash"],
+  });
+});
+
+test("grant lists default to empty and effort rejects unknown words", async () => {
+  const parsed = await parseRunArgs(["-p", "Run it."]);
+  expect(parsed.tools).toEqual([]);
+  expect(parsed.excludeTools).toEqual([]);
+  expect(parsed.skills).toEqual([]);
+  expect(parsed.effort).toBeUndefined();
+
+  const failure = await Effect.runPromiseExit(parseArgs(["-p", "--effort", "ultra", "Run it."]));
+  expect(Exit.isFailure(failure)).toBe(true);
+});

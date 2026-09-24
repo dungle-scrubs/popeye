@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { classifyResolvedPluginSource } from "@popeye/plugins";
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 import { expect, test } from "vitest";
 
 import { parseArgs } from "./args.js";
@@ -252,4 +252,28 @@ test("hostnames that only start with 127 are still hosted endpoints", async () =
     _tag: "CliConfigError",
     reason: "missing_api_key",
   });
+});
+
+test("--resume-last is refused as unexpressible", async () => {
+  const parsed = await Effect.runPromise(parseArgs(["-p", "--resume-last", "Explain."]));
+  const exit = await Effect.runPromiseExit(
+    resolveConfig(parsed, { POPEYE_BASE_URL: "http://127.0.0.1:1234/v1" }),
+  );
+  expect(Exit.isFailure(exit)).toBe(true);
+  if (Exit.isFailure(exit)) {
+    expect(String(exit.cause)).toContain("--resume-last is not supported");
+  }
+});
+
+test("memory and questions flags are accepted as declared divergences", async () => {
+  const parsed = await Effect.runPromise(
+    parseArgs(["-p", "--memory", "--questions", "ask", "Explain."]),
+  );
+  const config = await Effect.runPromise(
+    resolveConfig(parsed, {
+      POPEYE_BASE_URL: "http://127.0.0.1:1234/v1",
+      POPEYE_MODEL: "test-model",
+    }),
+  );
+  expect(config).toMatchObject({ memory: true, questions: "ask" });
 });

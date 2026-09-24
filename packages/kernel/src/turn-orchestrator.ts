@@ -80,11 +80,45 @@ export const TurnOptionsSchema = Schema.Struct({
   maxToolRounds: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
   model: Schema.optional(Schema.NonEmptyString),
   retryBaseDelayMs: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.nonNegative())),
+  /** RFC-02 P4 replace: fragments-off plus this text as the system block. */
+  systemPrompt: Schema.optional(Schema.NonEmptyString),
+  /** RFC-02 P4 append: one extra system item after the system block. */
+  appendSystemPrompt: Schema.optional(Schema.NonEmptyString),
   thinkingLevel: Schema.optional(ThinkingLevelSchema),
   toolConcurrency: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
 });
 
 export type TurnOptions = Schema.Schema.Type<typeof TurnOptionsSchema>;
+
+/**
+ * Owns RFC-02 P4 system-prompt composition over folded context items.
+ * Replace swaps the leading system block for the given text (fragments
+ * live there; the audit in D2 found none, so today this is vacuously
+ * fragments-off). Append adds one system item after the leading block.
+ */
+export const composeSystemPrompt = (
+  items: ReadonlyArray<ContextItem>,
+  options: Pick<TurnOptions, "appendSystemPrompt" | "systemPrompt">,
+): ReadonlyArray<ContextItem> => {
+  const prefixLength = items.findIndex((item) => item.role !== "system");
+  const tail = prefixLength === -1 ? [] : items.slice(prefixLength);
+  const replaced =
+    options.systemPrompt === undefined
+      ? items
+      : [{ content: options.systemPrompt, role: "system" } as ContextItem, ...tail];
+  if (options.appendSystemPrompt === undefined) {
+    return replaced;
+  }
+  const appendAt = replaced.findIndex((item) => item.role !== "system");
+  const appended: ContextItem = {
+    content: options.appendSystemPrompt,
+    role: "system",
+  } as ContextItem;
+  if (appendAt === -1) {
+    return [...replaced, appended];
+  }
+  return [...replaced.slice(0, appendAt), appended, ...replaced.slice(appendAt)];
+};
 
 export const TurnResultSchema = Schema.Struct({
   stopReason: AssistantStopReasonSchema,
@@ -918,7 +952,7 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                   ),
                 );
                 yield* phaseChanged(progress, sessionId, "STREAMING");
-                yield* consume(context.items);
+                yield* consume(composeSystemPrompt(context.items, options));
                 const reason = yield* Ref.get(stopReason);
                 if (reason !== "toolCalls") {
                   return reason;

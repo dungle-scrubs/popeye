@@ -356,18 +356,22 @@ const runWithConfig = (
         ? undefined
         : yield* loadFakeProvider(config.fakeProviderScript);
     const cliRuntime = yield* makeCliRuntime({
+      ...(config.isolation === undefined ? {} : { isolation: config.isolation }),
       noProjectPlugins: config.noProjectPlugins,
       pluginPaths: config.pluginPaths,
       projectPath: process.cwd(),
+      ...(config.skills.length === 0 ? {} : { skills: config.skills }),
       ...(config.access === undefined &&
       config.tools.length === 0 &&
-      config.excludeTools.length === 0
+      config.excludeTools.length === 0 &&
+      config.isolation === undefined
         ? {}
         : {
             toolGrants: {
               access: config.access,
               excludeTools: config.excludeTools,
               tools: config.tools,
+              ...(config.isolation === "tool-free" ? { toolsOff: true } : {}),
             },
           }),
       userPluginDir: config.userPluginDir,
@@ -431,12 +435,19 @@ const runWithConfig = (
       // RFC-02 P4: effort onto thinkingLevel, context-window as the trusted
       // override replacing the fabricated default for HCN runs.
       const turnOptions =
-        config.effort === undefined && config.contextWindow === undefined
+        config.effort === undefined &&
+        config.contextWindow === undefined &&
+        config.systemPrompt === undefined &&
+        config.appendSystemPrompt === undefined
           ? undefined
           : {
+              ...(config.appendSystemPrompt === undefined
+                ? {}
+                : { appendSystemPrompt: config.appendSystemPrompt }),
               ...(config.contextWindow === undefined
                 ? {}
                 : { contextBudget: config.contextWindow }),
+              ...(config.systemPrompt === undefined ? {} : { systemPrompt: config.systemPrompt }),
               ...(config.effort === undefined
                 ? {}
                 : { thinkingLevel: HCN_EFFORT_TO_THINKING_LEVEL[config.effort] }),

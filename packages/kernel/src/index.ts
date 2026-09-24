@@ -184,6 +184,7 @@ export {
 export {
   type AbortTurnResult,
   AbortTurnResultSchema,
+  composeSystemPrompt,
   DEFAULT_RETRY_BASE_DELAY_MS,
   TURN_INPUT_QUEUE_CAPACITY,
   type TurnFailure,

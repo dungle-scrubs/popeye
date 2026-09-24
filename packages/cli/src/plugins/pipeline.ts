@@ -45,9 +45,13 @@ export type { FirstPartyPlugin } from "../features/first-party-suite.js";
 
 export interface ComposePluginRuntimeOptions {
   readonly firstPartyPlugins?: ReadonlyArray<FirstPartyPlugin>;
+  /** HCN tool-free isolation: first-party plugins only, no tools. */
+  readonly isolation?: string;
   readonly noProjectPlugins: boolean;
   readonly pluginPaths: ReadonlyArray<string>;
   readonly projectPath: string;
+  /** HCN skills allowlist: plugin names to keep; absent keeps all. */
+  readonly skills?: ReadonlyArray<string>;
   /** HCN tool-grant filter; absent means every trusted tool is granted. */
   readonly toolGrants?: ToolGrantFilter;
   readonly userPluginDir?: string;
@@ -102,6 +106,25 @@ const discoveryConfig = (
   options: ComposePluginRuntimeOptions,
 ): Effect.Effect<PluginDiscoveryConfig, GenerationLoadError | PluginPipelineConfigError> =>
   Effect.gen(function* () {
+    // HCN tool-free isolation: first-party plugins only. External sources
+    // never load, so untrusted contributions cannot reach the grant filter.
+    if (options.isolation === "tool-free") {
+      const decoyProjectPath = yield* Effect.tryPromise({
+        catch: (cause) =>
+          new PluginPipelineConfigError({
+            cause,
+            message: `Could not create temporary Plugin discovery directory: ${String(cause)}`,
+            path: tmpdir(),
+            reason: "decoy_directory_unavailable",
+          }),
+        try: () => mkdtemp(join(tmpdir(), "popeye-cli-plugin-pipeline-isolated-")),
+      });
+      return {
+        cliPaths: [],
+        projectPath: decoyProjectPath,
+        userGlobalDirectories: [],
+      };
+    }
     const userPluginDir = options.userPluginDir;
     const userGlobalDirectories =
       userPluginDir === undefined
@@ -156,7 +179,7 @@ const removeDecoyProjectPath = (
   options: ComposePluginRuntimeOptions,
   config: PluginDiscoveryConfig,
 ): Effect.Effect<void> =>
-  options.noProjectPlugins
+  options.noProjectPlugins || options.isolation === "tool-free"
     ? Effect.tryPromise({
         catch: (cause) =>
           new PluginPipelineConfigError({
@@ -200,9 +223,26 @@ export const composePluginRuntime = (
               generation.registry.registerPlugin(plugin.manifest, plugin.contributions, "external"),
             { discard: true },
           );
+          // HCN skills allowlist filters plugin names: keep listed plugins,
+          // drop the rest. Unknown names match nothing.
+          if (options.skills !== undefined) {
+            const keep = new Set(options.skills);
+            const drop = [...firstPartyGeneration, ...generation.plugins]
+              .map((plugin) => plugin.name)
+              .filter((name) => !keep.has(name));
+            yield* Effect.forEach(drop, (name) => generation.registry.removePlugin(name), {
+              discard: true,
+            });
+          }
+          const kept =
+            options.skills === undefined
+              ? [...firstPartyGeneration, ...generation.plugins]
+              : [...firstPartyGeneration, ...generation.plugins].filter((plugin) =>
+                  new Set(options.skills).has(plugin.name),
+                );
           return {
             ...generation,
-            plugins: [...firstPartyGeneration, ...generation.plugins],
+            plugins: kept,
           };
         }).pipe(Effect.onError(() => generation.close));
       }),

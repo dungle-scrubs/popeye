@@ -28,12 +28,17 @@ export interface ToolGrantFilter {
   readonly access: string | undefined;
   readonly excludeTools: ReadonlyArray<string>;
   readonly tools: ReadonlyArray<string>;
+  /** Tool-free isolation: no tool is granted. */
+  readonly toolsOff?: boolean;
 }
 
 const stripNative = (name: string): string =>
   name.startsWith(NATIVE_TOOL_PREFIX) ? name.slice(NATIVE_TOOL_PREFIX.length) : name;
 
 export const isToolGranted = (toolName: string, filter: ToolGrantFilter): boolean => {
+  if (filter.toolsOff === true) {
+    return false;
+  }
   const excluded = new Set(filter.excludeTools.map(stripNative));
   if (excluded.has(toolName)) {
     return false;
