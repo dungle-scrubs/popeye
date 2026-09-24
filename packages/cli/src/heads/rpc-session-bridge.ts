@@ -39,6 +39,7 @@ export type RpcInboundTag =
   | "interaction-response"
   | "abort"
   | "branch"
+  | "close"
   | "create"
   | "fork"
   | "get-snapshot"
@@ -242,6 +243,35 @@ export const makeRpcSessionBridge = (options: {
               writeSnapshot(command.id, snapshot, attached.has(command.sessionId as string)),
             ),
           );
+      }
+      if (command._tag === "close") {
+        const sessionId = command.sessionId as string;
+        return driver.closeSession(sessionId as unknown as SessionId).pipe(
+          Effect.flatMap((result) =>
+            writeResponse(transport, command.id, {
+              _tag: "closed" as const,
+              cause: result.drainedWithinGrace ? ("clean" as const) : ("failed" as const),
+              drainedWithinGrace: result.drainedWithinGrace,
+              exitCode: result.drainedWithinGrace ? 0 : 1,
+              sessionId,
+            }),
+          ),
+          Effect.tap(() =>
+            Effect.sync(() => {
+              attached.delete(sessionId);
+              interactiveHeads.delete(sessionId);
+              const subscription = progressSubscriptions.get(sessionId);
+              if (subscription !== undefined) {
+                progressSubscriptions.delete(sessionId);
+              }
+              return subscription;
+            }).pipe(
+              Effect.flatMap((subscription) =>
+                subscription === undefined ? Effect.void : Fiber.interrupt(subscription),
+              ),
+            ),
+          ),
+        );
       }
       if (command._tag === "create") {
         return driver.createSession().pipe(

@@ -11,6 +11,7 @@ import { NonNegativeIntegerSchema } from "./schema-common.js";
 export const COMMAND_TAGS = [
   "abort",
   "branch",
+  "close",
   "create",
   "fork",
   "get-snapshot",
@@ -56,6 +57,7 @@ export const CommandSchema = Schema.Union(
     content: Schema.String,
   }),
   Schema.TaggedStruct("abort", SessionFields),
+  Schema.TaggedStruct("close", SessionFields),
   Schema.TaggedStruct("get-snapshot", {
     ...SessionFields,
     afterEntryId: Schema.optional(EntryIdSchema),

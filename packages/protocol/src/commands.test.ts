@@ -20,6 +20,7 @@ test("Schema frames exist for every kernel primitive and invoke-command", () => 
     },
     { _tag: "steer", content: "Focus on protocol.", id: "steer-1", sessionId },
     { _tag: "abort", id: "abort-1", sessionId },
+    { _tag: "close", id: "close-1", sessionId },
     {
       _tag: "get-snapshot",
       afterEntryId: "entry-1",

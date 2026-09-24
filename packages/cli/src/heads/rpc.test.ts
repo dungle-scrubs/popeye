@@ -996,6 +996,70 @@ test("rpc attach and detach normalize Snapshot attached state per connection", a
   ]);
 });
 
+test("rpc close drains the session and emits the terminal closed shape", async () => {
+  const capture = captureWriter();
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const session = yield* driver.createSession();
+      const input = Readable.from(
+        `${[
+          { _tag: "attach", id: "attach-1", sessionId: session.id },
+          { _tag: "close", id: "close-1", sessionId: session.id },
+        ]
+          .map((frame) => JSON.stringify(frame))
+          .join("\n")}\n`,
+      );
+
+      const exitCode = yield* runRpcHead({ input, writer: capture.writer });
+      expect(exitCode).toBe(0);
+    }).pipe(Effect.provide(rpcDriverLayer)),
+  );
+
+  expect(capture.lines()).toMatchObject([
+    { id: "attach-1", result: { _tag: "snapshot", attached: true } },
+    {
+      id: "close-1",
+      result: {
+        _tag: "closed",
+        cause: "clean",
+        drainedWithinGrace: true,
+        exitCode: 0,
+      },
+    },
+  ]);
+});
+
+test("rpc close leaves detach semantics unchanged", async () => {
+  const capture = captureWriter();
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const session = yield* driver.createSession();
+      const input = Readable.from(
+        `${[
+          { _tag: "attach", id: "attach-1", sessionId: session.id },
+          { _tag: "detach", id: "detach-1", sessionId: session.id },
+          { _tag: "get-snapshot", id: "snapshot-1", sessionId: session.id },
+        ]
+          .map((frame) => JSON.stringify(frame))
+          .join("\n")}\n`,
+      );
+
+      const exitCode = yield* runRpcHead({ input, writer: capture.writer });
+      expect(exitCode).toBe(0);
+    }).pipe(Effect.provide(rpcDriverLayer)),
+  );
+
+  expect(capture.lines()).toMatchObject([
+    { id: "attach-1", result: { _tag: "snapshot", attached: true } },
+    { id: "detach-1", result: { _tag: "snapshot", attached: false } },
+    { id: "snapshot-1", result: { _tag: "snapshot", attached: false } },
+  ]);
+});
+
 test("rpc attach installs its interactive head before writing the response", async () => {
   const input = new PassThrough();
   const attachResponseReached = Promise.withResolvers<void>();
