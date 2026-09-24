@@ -738,3 +738,44 @@ test("scripted session is captured as the canonical recorded-journal fixture", a
     await rm(directory, { force: true, recursive: true });
   }
 });
+
+test("closeSession aborts the open turn, drains within grace, and returns the final snapshot", async () => {
+  const provider: ProviderService = {
+    streamAssistant: () =>
+      Stream.fromIterable([
+        { _tag: "textDelta" as const, text: "Closing answer." },
+        { _tag: "done" as const, stopReason: "done" as const },
+      ]),
+  };
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const session = yield* driver.createSession();
+      yield* driver.prompt(session.id, "Answer before close.");
+      return yield* driver.closeSession(session.id);
+    }).pipe(Effect.provide(driverLayer(provider))),
+  );
+
+  expect(result.drainedWithinGrace).toBe(true);
+  expect(result.snapshot.entries.at(-1)).toMatchObject({
+    payload: { content: "Closing answer.", role: "assistant", stopReason: "done" },
+  });
+  expect(result.snapshot.phase).toBe("IDLE");
+});
+
+test("closeSession on an idle session drains cleanly", async () => {
+  const provider: ProviderService = {
+    streamAssistant: () =>
+      Stream.fromIterable([{ _tag: "done" as const, stopReason: "done" as const }]),
+  };
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const session = yield* driver.createSession();
+      return yield* driver.closeSession(session.id);
+    }).pipe(Effect.provide(driverLayer(provider))),
+  );
+
+  expect(result.drainedWithinGrace).toBe(true);
+  expect(result.snapshot.entries).toHaveLength(1);
+});

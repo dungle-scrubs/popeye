@@ -20,6 +20,8 @@ export {
   resolveCompactionPolicyOptions,
 } from "./compaction-policy.js";
 export {
+  type CloseSessionResult,
+  CloseSessionResultSchema,
   Driver,
   DriverDefault,
   type DriverDefaultOptions,
@@ -46,6 +48,7 @@ export {
   TurnQueueFull,
 } from "./errors.js";
 export {
+  CLOSE_GRACE_MS,
   MAILBOX_CAPACITY,
   Mailbox,
   type MailboxCommand,

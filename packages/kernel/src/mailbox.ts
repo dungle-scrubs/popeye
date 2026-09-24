@@ -18,6 +18,7 @@ import {
   Exit,
   Fiber,
   Layer,
+  Option,
   Queue,
   Ref,
   Scope,
@@ -52,8 +53,16 @@ export type MailboxFailure =
   | MailboxSessionNotFound
   | StaleRevision;
 
+export const CLOSE_GRACE_MS = 5_000;
+
 export interface MailboxService {
   readonly activate: (sessionId: SessionId) => Effect.Effect<void, JournalFailure | MailboxClosed>;
+  /**
+   * RFC-02 P2: drains one session queue. Pending work fails closed;
+   * in-flight work gets CLOSE_GRACE_MS before the caller takes over.
+   * Returns true when the drain settled within grace.
+   */
+  readonly closeSession: (sessionId: SessionId) => Effect.Effect<boolean, JournalFailure>;
   readonly enqueue: <TValue, TError>(
     sessionId: SessionId,
     command: MailboxCommand<TValue, TError>,
@@ -294,8 +303,38 @@ export const MailboxLive = (options: MailboxOptions = {}): Layer.Layer<Mailbox, 
           }
         });
 
+      const closeSession = (sessionId: SessionId): Effect.Effect<boolean, JournalFailure> =>
+        Effect.gen(function* () {
+          const mailbox = yield* Ref.modify(registry, (current) => {
+            const found = current.mailboxes.get(sessionId);
+            if (found === undefined) {
+              return [undefined, current];
+            }
+            const next = new Map(current.mailboxes);
+            next.delete(sessionId);
+            return [found, { ...current, mailboxes: next }];
+          });
+          if (mailbox === undefined) {
+            return true;
+          }
+          const drain = yield* drainMailbox(mailbox);
+          yield* Effect.forEach(drain.pending, (work) => work.close, { discard: true });
+          const settled = yield* Effect.forEach(
+            drain.inFlight,
+            (work) => Deferred.await(work.settled),
+            { discard: true },
+          ).pipe(Effect.timeoutOption(`${CLOSE_GRACE_MS} millis`));
+          yield* Queue.shutdown(mailbox.queue);
+          const consumer = yield* Ref.get(mailbox.consumer);
+          if (consumer !== undefined) {
+            yield* Fiber.interrupt(consumer);
+          }
+          return Option.isSome(settled);
+        }).pipe(Effect.uninterruptible);
+
       return {
         activate,
+        closeSession,
         enqueue: <TValue, TError>(sessionId: SessionId, command: MailboxCommand<TValue, TError>) =>
           Effect.gen(function* () {
             const current = yield* Ref.get(registry);

@@ -96,6 +96,13 @@ export const DriverSnapshotSchema = Schema.Struct({
 
 export type DriverSnapshot = Schema.Schema.Type<typeof DriverSnapshotSchema>;
 
+export const CloseSessionResultSchema = Schema.Struct({
+  drainedWithinGrace: Schema.Boolean,
+  snapshot: DriverSnapshotSchema,
+});
+
+export type CloseSessionResult = Schema.Schema.Type<typeof CloseSessionResultSchema>;
+
 interface DriverSnapshotCore {
   readonly entries: ReadonlyArray<Entry>;
   readonly leaf: Entry;
@@ -124,6 +131,9 @@ export interface DriverService {
     sessionId: SessionId,
     expectedRevision?: number,
   ) => Effect.Effect<CompactionResult, CompactionFailure>;
+  readonly closeSession: (
+    sessionId: SessionId,
+  ) => Effect.Effect<CloseSessionResult, JournalFailure | MailboxFailure>;
   readonly createSession: () => Effect.Effect<SessionInfo, SessionsFailure>;
   readonly fork: (
     sessionId: SessionId,
@@ -427,8 +437,25 @@ export const DriverLive: Layer.Layer<
         Effect.asVoid,
       );
 
+    const closeSession = (
+      sessionId: SessionId,
+    ): Effect.Effect<CloseSessionResult, JournalFailure | MailboxFailure> =>
+      Effect.gen(function* () {
+        yield* orchestrator.abortTurn(sessionId).pipe(Effect.catchAll(() => Effect.succeed(null)));
+        const drainedWithinGrace = yield* mailbox.closeSession(sessionId);
+        const snapshot = yield* readSnapshotCore(sessionId).pipe(
+          Effect.flatMap((core) =>
+            journal
+              .countDurableLines(sessionId)
+              .pipe(Effect.map((revision) => makeSnapshot(core, revision))),
+          ),
+        );
+        return { drainedWithinGrace, snapshot };
+      });
+
     return {
       abortTurn: (sessionId) => orchestrator.abortTurn(sessionId),
+      closeSession,
       branch: (sessionId, toEntryId, expectedRevision) =>
         mailbox
           .enqueue(sessionId, {
