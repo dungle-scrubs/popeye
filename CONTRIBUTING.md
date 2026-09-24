@@ -45,3 +45,11 @@ endpoint and model names.
 - CI must pass. A failing workflow blocks merge.
 - Never commit `.bearings/`, `.scratch/`, or local-only files.
 - Never edit `CHANGELOG.md` by hand; release-please owns it.
+
+## Release versioning
+
+Lockstep: all five packages share one version. release-please tracks
+`packages/*` plus the root; the manifest holds every path. A release
+bumps all five together, even when only one changed. Do not publish
+a single package by hand except to recover a failed release; the
+recovery version becomes the next lockstep base.
