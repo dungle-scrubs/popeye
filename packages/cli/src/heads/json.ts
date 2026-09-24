@@ -11,7 +11,7 @@
 import { type SessionId, SessionIdSchema } from "@popeye/journal";
 import { Effect, Schema } from "effect";
 
-import type { DriverSnapshot } from "../compose.js";
+import type { DriverSnapshot, TurnOptions } from "../compose.js";
 import {
   encodeProgressLine,
   encodeSnapshotLine,
@@ -27,6 +27,7 @@ export interface JsonHeadOptions {
   readonly prompts: ReadonlyArray<string>;
   readonly sessionId?: SessionId;
   readonly snapshotAudit?: SnapshotAuditFields;
+  readonly turnOptions?: TurnOptions;
   readonly writer?: HeadWriter;
 }
 
@@ -62,6 +63,7 @@ export const runJsonHead = (options: JsonHeadOptions) =>
           ),
         prompts: options.prompts,
         ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
+        ...(options.turnOptions === undefined ? {} : { turnOptions: options.turnOptions }),
       });
     }),
     options.writer ?? stdoutHeadWriter,

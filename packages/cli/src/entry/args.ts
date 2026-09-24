@@ -16,6 +16,16 @@ export const HCN_EFFORTS = ["low", "medium-low", "medium", "medium-high", "high"
 
 export type HcnEffort = (typeof HCN_EFFORTS)[number];
 
+/** RFC-02 P4 effort ladder onto kernel thinking levels. */
+export const HCN_EFFORT_TO_THINKING_LEVEL = {
+  high: "xhigh",
+  low: "minimal",
+  medium: "medium",
+  "medium-high": "high",
+  "medium-low": "low",
+  xhigh: "max",
+} as const satisfies Record<HcnEffort, string>;
+
 export interface ParsedRunArgs {
   readonly action: "run";
   /** HCN read/write tool access preset. */

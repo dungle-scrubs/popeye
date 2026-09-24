@@ -53,7 +53,13 @@ import type { RpcInteractions } from "../heads/rpc.js";
 import { PluginInteractionsRpcLive, RpcInteractionsLive, runRpcHead } from "../heads/rpc.js";
 import { makeCliRuntime } from "../plugins/runtime.js";
 
-import { CliArgsError, type ParsedRunArgs, parseArgs, withStdinPrompt } from "./args.js";
+import {
+  CliArgsError,
+  HCN_EFFORT_TO_THINKING_LEVEL,
+  type ParsedRunArgs,
+  parseArgs,
+  withStdinPrompt,
+} from "./args.js";
 import {
   type CliConfig,
   CliConfigError,
@@ -353,6 +359,17 @@ const runWithConfig = (
       noProjectPlugins: config.noProjectPlugins,
       pluginPaths: config.pluginPaths,
       projectPath: process.cwd(),
+      ...(config.access === undefined &&
+      config.tools.length === 0 &&
+      config.excludeTools.length === 0
+        ? {}
+        : {
+            toolGrants: {
+              access: config.access,
+              excludeTools: config.excludeTools,
+              tools: config.tools,
+            },
+          }),
       userPluginDir: config.userPluginDir,
     }).pipe(
       Effect.provide(PluginInteractionsNullLive),
@@ -411,6 +428,19 @@ const runWithConfig = (
         CliRunError | HeadWriteError,
         Driver | RpcInteractions | PluginInteractions
       >;
+      // RFC-02 P4: effort onto thinkingLevel, context-window as the trusted
+      // override replacing the fabricated default for HCN runs.
+      const turnOptions =
+        config.effort === undefined && config.contextWindow === undefined
+          ? undefined
+          : {
+              ...(config.contextWindow === undefined
+                ? {}
+                : { contextBudget: config.contextWindow }),
+              ...(config.effort === undefined
+                ? {}
+                : { thinkingLevel: HCN_EFFORT_TO_THINKING_LEVEL[config.effort] }),
+            };
       if (config.mode === "rpc") {
         head = runRpcHead({
           errorWriter,
@@ -424,18 +454,20 @@ const runWithConfig = (
         head = Effect.fail(
           runError("missing_prompt", "A prompt argument or piped stdin is required."),
         );
-      } else if (config.mode === "json") {
-        head = runJsonHead({
-          prompts: [config.prompt],
-          ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
-          snapshotAudit,
-          writer,
-        });
       } else if (config.mode === "hcn") {
         head = runHcnHead({
           prompts: [config.prompt],
           ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
           snapshotAudit,
+          ...(turnOptions === undefined ? {} : { turnOptions }),
+          writer,
+        });
+      } else if (config.mode === "json") {
+        head = runJsonHead({
+          prompts: [config.prompt],
+          ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
+          snapshotAudit,
+          ...(turnOptions === undefined ? {} : { turnOptions }),
           writer,
         });
       } else {

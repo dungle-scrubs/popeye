@@ -39,6 +39,7 @@ import {
   firstPartyGenerationPlugins,
   pluginNameCollision,
 } from "../features/first-party-suite.js";
+import type { ToolGrantFilter } from "../tools/grants.js";
 
 export type { FirstPartyPlugin } from "../features/first-party-suite.js";
 
@@ -47,6 +48,8 @@ export interface ComposePluginRuntimeOptions {
   readonly noProjectPlugins: boolean;
   readonly pluginPaths: ReadonlyArray<string>;
   readonly projectPath: string;
+  /** HCN tool-grant filter; absent means every trusted tool is granted. */
+  readonly toolGrants?: ToolGrantFilter;
   readonly userPluginDir?: string;
 }
 

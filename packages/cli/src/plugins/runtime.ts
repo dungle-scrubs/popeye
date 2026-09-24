@@ -26,6 +26,8 @@ import {
 } from "../compose.js";
 import type { SnapshotAuditFields } from "../heads/head-wire.js";
 import { adaptTools, generationCapabilityUnion } from "../tools/adapter.js";
+import type { ToolGrantFilter } from "../tools/grants.js";
+import { filterGrantedTools } from "../tools/grants.js";
 import { clearToolSessionMemory } from "../tools/tool-session-memory.js";
 import { type ComposePluginRuntimeOptions, composePluginRuntime } from "./pipeline.js";
 import { ReloadBusyError, ReloadControl } from "./reload.js";
@@ -55,6 +57,7 @@ export const makeCliRuntime = (
   options: ComposePluginRuntimeOptions,
 ): Effect.Effect<CliRuntime, unknown> =>
   Effect.gen(function* () {
+    const grants: ToolGrantFilter | undefined = options.toolGrants;
     const generationRuntime = yield* makeGenerationRuntimeWithLoader(() =>
       composePluginRuntime(options),
     );
@@ -78,7 +81,10 @@ export const makeCliRuntime = (
     const initialToolsForCache = yield* adaptTools(initialGen, initialGrantsForTools).pipe(
       Effect.orElseSucceed(() => [] as unknown as ReadonlyArray<Tool.Any>),
     );
-    let currentToolsCache: ReadonlyArray<Tool.Any> = initialToolsForCache;
+    let currentToolsCache: ReadonlyArray<Tool.Any> =
+      grants === undefined
+        ? initialToolsForCache
+        : filterGrantedTools(initialToolsForCache, grants);
 
     const snapshotAudit: CliRuntime["snapshotAudit"] = Effect.gen(function* () {
       const gen = yield* generationRuntime.currentGeneration;
@@ -99,15 +105,18 @@ export const makeCliRuntime = (
       view: (sessionId) =>
         Effect.gen(function* () {
           const gen = yield* generationRuntime.view(sessionId as unknown as string);
-          const grants = createCapabilityGrants(sessionId, generationCapabilityUnion(gen));
-          const tools = yield* adaptTools(gen as PluginGeneration, grants).pipe(
+          const grantsForAdapt = createCapabilityGrants(sessionId, generationCapabilityUnion(gen));
+          const tools = yield* adaptTools(gen as PluginGeneration, grantsForAdapt).pipe(
             Effect.catchAll(() => Effect.succeed([] as unknown as ReadonlyArray<Tool.Any>)),
           );
-          currentToolsCache = tools;
-          const map = new Map(tools.map((t) => [t.name, t as unknown as RegisteredTool]));
+          // HCN grant filter runs after plugin trust, before model
+          // visibility. Capabilities stay as the author declared them.
+          const granted = grants === undefined ? tools : filterGrantedTools(tools, grants);
+          currentToolsCache = granted;
+          const map = new Map(granted.map((t) => [t.name, t as unknown as RegisteredTool]));
           return {
             get: (name: string) => map.get(name),
-            list: () => tools as unknown as ReadonlyArray<RegisteredTool>,
+            list: () => granted as unknown as ReadonlyArray<RegisteredTool>,
           } satisfies SessionToolView;
         }),
       get: (name: string) => {
