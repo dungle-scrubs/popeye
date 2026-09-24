@@ -30,6 +30,6 @@
   },
   "devDependencies": {
     "effect": "3.22.1",
-    "vitest": "3.2.7"
+    "vitest": "4.1.11"
   }
 }
