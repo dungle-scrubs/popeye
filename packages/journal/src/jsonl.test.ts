@@ -536,3 +536,27 @@ test("bad session files do not prevent healthy sessions from opening", async () 
 });
 
 await describeJournalContract(() => createJsonlJournalHarness(makeDirectorySync()));
+
+test("readExport reports a torn tail without rewriting the file", async () => {
+  const directory = await makeDirectory();
+  const exported = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const initial = yield* journal.createSession();
+      const file = join(directory, `${initial.id}.jsonl`);
+      const acknowledged = yield* Effect.tryPromise(() => readFile(file, "utf8"));
+      // A torn tail lands after the layer opened: the export read must
+      // report it instead of repairing it.
+      yield* Effect.tryPromise(() => appendFile(file, '{"v":1,"payload":'));
+      const read = yield* journal.readExport(initial.id);
+      const after = yield* Effect.tryPromise(() => readFile(file, "utf8"));
+      return { acknowledged, after, read };
+    }).pipe(Effect.provide(JournalJsonl(directory))),
+  );
+
+  expect(exported.read.incompleteTail).toBe(true);
+  expect(exported.read.header.sessionId).toBeDefined();
+  expect(exported.read.lines).toHaveLength(1);
+  expect(exported.read.sizeBytes).toBeGreaterThan(exported.acknowledged.length);
+  expect(exported.after).toBe(`${exported.acknowledged}{"v":1,"payload":`);
+});

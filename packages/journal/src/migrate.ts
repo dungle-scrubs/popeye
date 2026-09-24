@@ -16,16 +16,10 @@ import { DatabaseSync } from "node:sqlite";
 import { Effect, Schema } from "effect";
 
 import { JournalError } from "./errors.js";
+import { JournalHeaderSchema } from "./journal.js";
 import { createLineCodec } from "./line-codec.js";
 import { JournalLineSchema, SessionIdSchema } from "./shapes.js";
 import { ensureSchema } from "./sqlite/ddl.js";
-
-const JournalHeaderSchema = Schema.Struct({
-  format: Schema.Literal("popeye_journal"),
-  sessionId: SessionIdSchema,
-  type: Schema.Literal("journal_header"),
-  version: Schema.Literal(1),
-});
 
 const JournalFileLineSchema = Schema.Union(JournalHeaderSchema, JournalLineSchema);
 

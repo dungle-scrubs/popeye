@@ -11,7 +11,7 @@ import {
   type JournalPersistence,
 } from "./adapter-core.js";
 import { JournalError } from "./errors.js";
-import { deriveSession, Journal } from "./journal.js";
+import { deriveSession, type ExportRead, Journal } from "./journal.js";
 import { EntryLineSchema, type JournalLine, JournalLineSchema, type SessionId } from "./shapes.js";
 
 const memoryJournalBacking = Symbol("MemoryJournalBacking");
@@ -60,6 +60,31 @@ const memoryPersistence = (backing: MemoryJournalBacking): JournalPersistence =>
               }),
             )
           : Effect.succeed(session),
+      ),
+    ),
+  readExport: (sessionId) =>
+    Ref.get(backing[memoryJournalBacking]).pipe(
+      Effect.map((lines) => sessionLinesFor(lines, sessionId)),
+      Effect.flatMap((lines) =>
+        lines.length === 0
+          ? Effect.fail(
+              new JournalError({
+                corruptionClass: "invalid_record_sequence",
+                message: `Session ${sessionId} has no root entry.`,
+              }),
+            )
+          : Effect.succeed<ExportRead>({
+              header: {
+                format: "popeye_journal",
+                sessionId,
+                type: "journal_header",
+                version: 1,
+              },
+              // Memory appends are atomic: no torn tail is possible.
+              incompleteTail: false,
+              lines,
+              sizeBytes: 0,
+            }),
       ),
     ),
   persistLine: (_sessionId, line) =>

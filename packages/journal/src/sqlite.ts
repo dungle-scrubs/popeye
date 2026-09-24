@@ -15,6 +15,7 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -29,7 +30,7 @@ import {
   rejectedSession,
 } from "./adapter-core.js";
 import { JournalError } from "./errors.js";
-import { deriveSession, Journal } from "./journal.js";
+import { deriveSession, type ExportRead, Journal } from "./journal.js";
 import type { Entry, JournalLine, Record as JournalRecord, SessionId } from "./shapes.js";
 import {
   EntryIdSchema,
@@ -160,6 +161,85 @@ const nextGlobalSeq = (backing: SqliteJournalBacking, sessionId: SessionId): num
   return (row?.maxSeq ?? 0) + 1;
 };
 
+const readOrderedLines = (
+  backing: SqliteJournalBacking,
+  sessionId: SessionId,
+): Effect.Effect<ReadonlyArray<JournalLine>, JournalError> =>
+  fileEffect(backing.file, "load session", () => {
+    const entryRows = backing.db
+      .prepare(
+        "SELECT entry_id as id, parent_id as parentId, kind, payload_json as payloadJson, global_seq as globalSeq FROM entries WHERE session_id = ? ORDER BY global_seq ASC",
+      )
+      .all(sessionId) as Array<{
+      globalSeq: number;
+      id: string;
+      kind: string;
+      parentId: string | null;
+      payloadJson: string;
+    }>;
+
+    const recordRows = backing.db
+      .prepare(
+        "SELECT record_id as id, kind, payload_json as payloadJson, global_seq as globalSeq FROM records WHERE session_id = ? ORDER BY global_seq ASC",
+      )
+      .all(sessionId) as Array<{
+      globalSeq: number;
+      id: string;
+      kind: string;
+      payloadJson: string;
+    }>;
+
+    // Merge by global_seq
+    const merged: Array<{ globalSeq: number; line: JournalLine }> = [];
+    for (const row of entryRows) {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(row.payloadJson) as unknown;
+      } catch (cause) {
+        throw new JournalError({
+          cause,
+          corruptionClass: "malformed_json",
+          file: backing.file,
+          message: `Malformed JSON for entry ${row.id} in session ${sessionId}: ${String(cause)}`,
+        });
+      }
+      const entry: Entry = EntrySchema.make({
+        id: EntryIdSchema.make(row.id),
+        kind: row.kind,
+        parentId: row.parentId === null ? null : EntryIdSchema.make(row.parentId),
+        payload,
+      });
+      merged.push({
+        globalSeq: row.globalSeq,
+        line: { item: entry, sessionId, type: "entry" } as JournalLine,
+      });
+    }
+    for (const row of recordRows) {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(row.payloadJson) as unknown;
+      } catch (cause) {
+        throw new JournalError({
+          cause,
+          corruptionClass: "malformed_json",
+          file: backing.file,
+          message: `Malformed JSON for record ${row.id} in session ${sessionId}: ${String(cause)}`,
+        });
+      }
+      const record: JournalRecord = RecordSchema.make({
+        id: RecordIdSchema.make(row.id),
+        kind: row.kind,
+        payload,
+      });
+      merged.push({
+        globalSeq: row.globalSeq,
+        line: { item: record, sessionId, type: "record" } as JournalLine,
+      });
+    }
+    merged.sort((a, b) => a.globalSeq - b.globalSeq);
+    return merged.map((m) => m.line);
+  });
+
 const sqlitePersistence = (backing: SqliteJournalBacking): JournalPersistence => ({
   initializeSession: (sessionId, rootEntry) =>
     Effect.gen(function* () {
@@ -215,80 +295,7 @@ const sqlitePersistence = (backing: SqliteJournalBacking): JournalPersistence =>
 
   loadSession: (sessionId) =>
     Effect.gen(function* () {
-      const lines = yield* fileEffect(backing.file, "load session", () => {
-        const entryRows = backing.db
-          .prepare(
-            "SELECT entry_id as id, parent_id as parentId, kind, payload_json as payloadJson, global_seq as globalSeq FROM entries WHERE session_id = ? ORDER BY global_seq ASC",
-          )
-          .all(sessionId) as Array<{
-          globalSeq: number;
-          id: string;
-          kind: string;
-          parentId: string | null;
-          payloadJson: string;
-        }>;
-
-        const recordRows = backing.db
-          .prepare(
-            "SELECT record_id as id, kind, payload_json as payloadJson, global_seq as globalSeq FROM records WHERE session_id = ? ORDER BY global_seq ASC",
-          )
-          .all(sessionId) as Array<{
-          globalSeq: number;
-          id: string;
-          kind: string;
-          payloadJson: string;
-        }>;
-
-        // Merge by global_seq
-        const merged: Array<{ globalSeq: number; line: JournalLine }> = [];
-        for (const row of entryRows) {
-          let payload: unknown;
-          try {
-            payload = JSON.parse(row.payloadJson) as unknown;
-          } catch (cause) {
-            throw new JournalError({
-              cause,
-              corruptionClass: "malformed_json",
-              file: backing.file,
-              message: `Malformed JSON for entry ${row.id} in session ${sessionId}: ${String(cause)}`,
-            });
-          }
-          const entry: Entry = EntrySchema.make({
-            id: EntryIdSchema.make(row.id),
-            kind: row.kind,
-            parentId: row.parentId === null ? null : EntryIdSchema.make(row.parentId),
-            payload,
-          });
-          merged.push({
-            globalSeq: row.globalSeq,
-            line: { item: entry, sessionId, type: "entry" } as JournalLine,
-          });
-        }
-        for (const row of recordRows) {
-          let payload: unknown;
-          try {
-            payload = JSON.parse(row.payloadJson) as unknown;
-          } catch (cause) {
-            throw new JournalError({
-              cause,
-              corruptionClass: "malformed_json",
-              file: backing.file,
-              message: `Malformed JSON for record ${row.id} in session ${sessionId}: ${String(cause)}`,
-            });
-          }
-          const record: JournalRecord = RecordSchema.make({
-            id: RecordIdSchema.make(row.id),
-            kind: row.kind,
-            payload,
-          });
-          merged.push({
-            globalSeq: row.globalSeq,
-            line: { item: record, sessionId, type: "record" } as JournalLine,
-          });
-        }
-        merged.sort((a, b) => a.globalSeq - b.globalSeq);
-        return merged.map((m) => m.line);
-      });
+      const lines = yield* readOrderedLines(backing, sessionId);
 
       if (lines.length === 0) {
         return yield* Effect.fail(
@@ -323,6 +330,34 @@ const sqlitePersistence = (backing: SqliteJournalBacking): JournalPersistence =>
       }
 
       return derived;
+    }),
+
+  readExport: (sessionId) =>
+    Effect.gen(function* () {
+      const lines = yield* readOrderedLines(backing, sessionId);
+      if (lines.length === 0) {
+        return yield* Effect.fail(
+          new JournalError({
+            corruptionClass: "invalid_record_sequence",
+            file: backing.file,
+            message: `Session ${sessionId} has no root entry.`,
+          }),
+        );
+      }
+      const sizeBytes = yield* fileEffect(backing.file, "stat", () => statSync(backing.file).size);
+      const exportRead: ExportRead = {
+        header: {
+          format: "popeye_journal",
+          sessionId,
+          type: "journal_header",
+          version: 1,
+        },
+        // SQLite appends transactionally: no torn tail is possible.
+        incompleteTail: false,
+        lines,
+        sizeBytes,
+      };
+      return exportRead;
     }),
 
   persistLine: (sessionId, line) =>

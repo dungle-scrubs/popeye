@@ -18,6 +18,7 @@ import {
   type CreatedSession,
   compactionValidationIssue,
   type DerivedSession,
+  type ExportRead,
   Journal,
   type JournalService,
 } from "./journal.js";
@@ -76,6 +77,11 @@ export interface JournalPersistence {
     rootEntry: SessionRootEntry,
   ) => Effect.Effect<void, JournalError>;
   readonly loadSession: (sessionId: SessionId) => Effect.Effect<DerivedSession, JournalError>;
+  /**
+   * Passive export read in durable order. It never writes; adapters with
+   * torn-tail mechanics (JSONL) report the tail instead of repairing it.
+   */
+  readonly readExport: (sessionId: SessionId) => Effect.Effect<ExportRead, JournalError>;
   readonly observe?: (observation: JournalIoObservation) => Effect.Effect<void>;
   readonly persistLine: (
     sessionId: SessionId,
@@ -357,6 +363,7 @@ export const createJournalAdapter = (
         withSession(persistence, stateRef, sessionId, (session) =>
           Effect.succeed(branchToLeaf(session)),
         ),
+      readExport: (sessionId) => persistence.readExport(sessionId),
       readRecords: (sessionId) =>
         withSession(persistence, stateRef, sessionId, (session) => Effect.succeed(session.records)),
     });

@@ -20,6 +20,7 @@ import {
   type Record,
   type RecordDraft,
   type SessionId,
+  SessionIdSchema,
   type SessionRootEntry,
   SessionRootEntrySchema,
 } from "./shapes.js";
@@ -27,6 +28,29 @@ import {
 export interface CreatedSession {
   readonly id: SessionId;
   readonly rootEntry: SessionRootEntry;
+}
+
+export const JournalHeaderSchema = Schema.Struct({
+  format: Schema.Literal("popeye_journal"),
+  sessionId: SessionIdSchema,
+  type: Schema.Literal("journal_header"),
+  version: Schema.Literal(1),
+});
+
+export type JournalHeader = Schema.Schema.Type<typeof JournalHeaderSchema>;
+
+/**
+ * Owns the passive export read of one session: header, acknowledged lines in
+ * durable order, file stat, and whether the tail is torn. It exists so the
+ * HCN transcript reader arm can verify popeye journals without touching the
+ * native read path. The export read MUST NOT write: a torn tail is reported
+ * via incompleteTail, never repaired here.
+ */
+export interface ExportRead {
+  readonly header: JournalHeader;
+  readonly incompleteTail: boolean;
+  readonly lines: ReadonlyArray<JournalLine>;
+  readonly sizeBytes: number;
 }
 
 export interface JournalService {
@@ -54,6 +78,11 @@ export interface JournalService {
   readonly readBranch: (
     sessionId: SessionId,
   ) => Effect.Effect<ReadonlyArray<Entry>, JournalFailure>;
+  /**
+   * Returns the passive export read: acknowledged lines plus torn-tail report.
+   * It never writes, even when the tail is torn; native reads keep repair.
+   */
+  readonly readExport: (sessionId: SessionId) => Effect.Effect<ExportRead, JournalFailure>;
   readonly readRecords: (
     sessionId: SessionId,
   ) => Effect.Effect<ReadonlyArray<Record>, JournalFailure>;

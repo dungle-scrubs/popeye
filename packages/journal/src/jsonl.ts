@@ -17,11 +17,11 @@ import {
   realpath,
   rename,
   rm,
+  stat,
 } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 import { Effect, Layer, Schema } from "effect";
-
 import {
   availableSession,
   createJournalAdapter,
@@ -31,18 +31,17 @@ import {
   rejectedSession,
 } from "./adapter-core.js";
 import { JournalError } from "./errors.js";
-import { type DerivedSession, deriveSession, Journal } from "./journal.js";
+import {
+  type DerivedSession,
+  deriveSession,
+  type ExportRead,
+  Journal,
+  type JournalHeader,
+  JournalHeaderSchema,
+} from "./journal.js";
 import { createLineCodec, type LineCodec } from "./line-codec.js";
 import { type JournalLine, JournalLineSchema, type SessionId, SessionIdSchema } from "./shapes.js";
 
-const JournalHeaderSchema = Schema.Struct({
-  format: Schema.Literal("popeye_journal"),
-  sessionId: SessionIdSchema,
-  type: Schema.Literal("journal_header"),
-  version: Schema.Literal(1),
-});
-
-type JournalHeader = Schema.Schema.Type<typeof JournalHeaderSchema>;
 const JournalFileLineSchema = Schema.Union(JournalHeaderSchema, JournalLineSchema);
 type JournalFileLine = Schema.Schema.Type<typeof JournalFileLineSchema>;
 
@@ -364,6 +363,24 @@ const jsonlPersistence = (backing: JsonlJournalBacking): JournalPersistence => (
     }),
   loadSession: (sessionId) =>
     loadSession(backing, sessionId).pipe(Effect.map((loaded) => loaded.derived)),
+  readExport: (sessionId) =>
+    Effect.gen(function* () {
+      const file = sessionFile(backing.directory, sessionId);
+      // Report-only: decode the acknowledged prefix like a native open,
+      // but never rewrite the file and never emit a recovery diagnostic.
+      const text = yield* fileEffect(file, "read", () => readFile(file, "utf8"));
+      const decoded = yield* decodeStoredLines(backing, file, text);
+      const sizeBytes = yield* fileEffect(file, "stat", () => stat(file)).pipe(
+        Effect.map((info) => info.size),
+      );
+      const exportRead: ExportRead = {
+        header: decoded.header,
+        incompleteTail: decoded.recovered,
+        lines: decoded.lines,
+        sizeBytes,
+      };
+      return exportRead;
+    }),
   observe: ({ operation, sessionId }) =>
     emitIo(backing, { file: sessionFile(backing.directory, sessionId), operation, sessionId }),
   persistLine: (sessionId, line) =>

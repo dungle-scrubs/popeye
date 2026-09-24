@@ -19,7 +19,13 @@ export {
   type JournalFailure,
   JournalNotFound,
 } from "./errors.js";
-export { type CreatedSession, Journal, type JournalService } from "./journal.js";
+export {
+  type CreatedSession,
+  type ExportRead,
+  Journal,
+  JournalHeaderSchema,
+  type JournalService,
+} from "./journal.js";
 export {
   JournalStore,
   type JournalStoreEnv,
