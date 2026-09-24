@@ -9,6 +9,7 @@
 
 import type { SessionId } from "@popeye/journal";
 import { Effect } from "effect";
+import type { TurnOptions } from "../compose.js";
 import {
   exitCodeForStopReason,
   finalAssistantText,
@@ -23,6 +24,7 @@ export interface PrintHeadOptions {
   readonly errorWriter?: HeadWriter;
   readonly prompts: ReadonlyArray<string>;
   readonly sessionId?: SessionId;
+  readonly turnOptions?: TurnOptions;
   readonly writer?: HeadWriter;
 }
 
@@ -37,6 +39,7 @@ export const runPrintHead = (options: PrintHeadOptions) =>
             .pipe(Effect.as(exitCodeForStopReason(turn.stopReason))),
         prompts: options.prompts,
         ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
+        ...(options.turnOptions === undefined ? {} : { turnOptions: options.turnOptions }),
       });
     }),
     options.errorWriter ?? stderrHeadWriter,

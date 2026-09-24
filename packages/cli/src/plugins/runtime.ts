@@ -266,7 +266,8 @@ export const makeCliRuntime = (
       const freshTools = yield* adaptTools(fresh as PluginGeneration, freshGrants).pipe(
         Effect.orElseSucceed(() => [] as unknown as ReadonlyArray<Tool.Any>),
       );
-      currentToolsCache = freshTools;
+      currentToolsCache =
+        grants === undefined ? freshTools : filterGrantedTools(freshTools, grants);
       return diagnostic;
     });
 

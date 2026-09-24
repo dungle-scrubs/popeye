@@ -452,6 +452,14 @@ const runWithConfig = (
                 ? {}
                 : { thinkingLevel: HCN_EFFORT_TO_THINKING_LEVEL[config.effort] }),
             };
+      if (config.mode === "rpc" && turnOptions !== undefined) {
+        return yield* Effect.fail(
+          runError(
+            "composition_failed",
+            "--effort, --context-window, --system-prompt, and --append-system-prompt are per-turn flags with no RPC wire carrier. Use prompt-frame options.",
+          ),
+        );
+      }
       if (config.mode === "rpc") {
         head = runRpcHead({
           errorWriter,
@@ -486,6 +494,7 @@ const runWithConfig = (
           errorWriter,
           prompts: [config.prompt],
           ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
+          ...(turnOptions === undefined ? {} : { turnOptions }),
           writer,
         });
       }

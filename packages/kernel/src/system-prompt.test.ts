@@ -16,7 +16,14 @@ describe("composeSystemPrompt", () => {
     expect(composeSystemPrompt(items, {})).toEqual(items);
   });
 
-  test("replace swaps the leading system block for the given text", () => {
+  test("replace keeps the compaction summary and swaps the rest", () => {
+    const items = [system("Compacted history."), system("frag-1"), user("hello")];
+    expect(
+      composeSystemPrompt(items, { compactionApplied: true, systemPrompt: "Custom." }),
+    ).toEqual([system("Compacted history."), system("Custom."), user("hello")]);
+  });
+
+  test("replace without compaction drops the whole system block", () => {
     const items = [system("frag-1"), system("frag-2"), user("hello")];
     expect(composeSystemPrompt(items, { systemPrompt: "Custom." })).toEqual([
       system("Custom."),

@@ -179,6 +179,22 @@ export const parseArgs = (argv: ReadonlyArray<string>): Effect.Effect<ParsedArgs
           ),
         );
       }
+      // HCN callers are untrusted for tool grants: unrecognized values
+      // refuse instead of widening to a full grant.
+      if (values.access !== undefined && values.access !== "read" && values.access !== "write") {
+        return Effect.fail(
+          invalidArguments(
+            `Invalid --access value ${JSON.stringify(values.access)}. Use read or write.`,
+          ),
+        );
+      }
+      if (values.isolation !== undefined && values.isolation !== "tool-free") {
+        return Effect.fail(
+          invalidArguments(
+            `Invalid --isolation value ${JSON.stringify(values.isolation)}. Use tool-free.`,
+          ),
+        );
+      }
       const contextWindow =
         values["context-window"] === undefined ? undefined : Number(values["context-window"]);
       if (contextWindow !== undefined && !Number.isSafeInteger(contextWindow)) {

@@ -94,18 +94,26 @@ export type TurnOptions = Schema.Schema.Type<typeof TurnOptionsSchema>;
  * Owns RFC-02 P4 system-prompt composition over folded context items.
  * Replace swaps the leading system block for the given text (fragments
  * live there; the audit in D2 found none, so today this is vacuously
- * fragments-off). Append adds one system item after the leading block.
+ * fragments-off), keeping the compaction summary when one applied: it is
+ * conversation state, not instructions. Append adds one system item after
+ * the leading block.
  */
 export const composeSystemPrompt = (
   items: ReadonlyArray<ContextItem>,
-  options: Pick<TurnOptions, "appendSystemPrompt" | "systemPrompt">,
+  options: Pick<TurnOptions, "appendSystemPrompt" | "systemPrompt"> & {
+    readonly compactionApplied?: boolean;
+  },
 ): ReadonlyArray<ContextItem> => {
   const prefixLength = items.findIndex((item) => item.role !== "system");
   const tail = prefixLength === -1 ? [] : items.slice(prefixLength);
+  // The compaction summary rides first in the system block; replace keeps
+  // it and swaps the fragment region behind it.
+  const summaryKept =
+    options.compactionApplied === true && items[0]?.role === "system" ? items.slice(0, 1) : [];
   const replaced =
     options.systemPrompt === undefined
       ? items
-      : [{ content: options.systemPrompt, role: "system" } as ContextItem, ...tail];
+      : [...summaryKept, { content: options.systemPrompt, role: "system" } as ContextItem, ...tail];
   if (options.appendSystemPrompt === undefined) {
     return replaced;
   }
@@ -952,7 +960,13 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                   ),
                 );
                 yield* phaseChanged(progress, sessionId, "STREAMING");
-                yield* consume(composeSystemPrompt(context.items, options));
+                yield* consume(
+                  composeSystemPrompt(context.items, {
+                    appendSystemPrompt: options.appendSystemPrompt,
+                    compactionApplied: context.accounting.compactionApplied !== undefined,
+                    systemPrompt: options.systemPrompt,
+                  }),
+                );
                 const reason = yield* Ref.get(stopReason);
                 if (reason !== "toolCalls") {
                   return reason;

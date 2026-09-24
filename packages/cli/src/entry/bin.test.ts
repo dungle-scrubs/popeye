@@ -576,3 +576,29 @@ test("the built bin exits 2 when a Plugin throws during composition", () => {
   // Contract: STARTUP carries toolCount, so it is written only after composition succeeds.
   expect(startupRecords(result.stderr)).toEqual([]);
 });
+
+test("questions and memory flags are no-op divergences with identical output", () => {
+  const plain = runBuiltBin(["-p", "--session-dir", sessionDirectory(), FAKE_PROVIDER_PROMPT], {
+    env: fakeProviderEnvironment(),
+  });
+  const diverged = runBuiltBin(
+    [
+      "-p",
+      "--session-dir",
+      sessionDirectory(),
+      "--questions",
+      "ask",
+      "--memory",
+      "--effort",
+      "medium",
+      FAKE_PROVIDER_PROMPT,
+    ],
+    { env: fakeProviderEnvironment() },
+  );
+
+  for (const result of [plain, diverged]) {
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("Fake provider answer.\n");
+  }
+  expect(diverged.stdout).toBe(plain.stdout);
+}, 15_000);
