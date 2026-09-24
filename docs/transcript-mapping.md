@@ -23,6 +23,10 @@ Popeye-native reads keep the repair path (`recovered_torn_tail`).
 
 ## Session envelope
 
+The reader emits two HCN shapes from the export read: listing rows
+(`cwd`, `lastWriteAt`, `startedAt`, `mode`, `readable`, `blocked` per
+the HCN listing rules) and the `SourceEnvelope` below.
+
 - `selection`: `{ kind: "file", value: <path> }`. `--id` resolution is out
   of scope: popeye session ids are file stems, not native conversation ids.
 - `conversation.nativeId`: the header sessionId.
@@ -54,8 +58,9 @@ Normalized kind and role:
 `timestamp` is always null: journal lines carry no timestamps.
 `parent-entry` relationship follows `parentId` (`state none` when null).
 Tool-result entries carry a `tool-call` relationship on `toolCallId`.
-Compaction entries carry `first-kept-entry` from the payload's retained
-tail. All other relationships are `unknown`.
+Compaction entries carry `first-kept-entry` from the first retained tail
+id, or `state none` when `retainedTailIds` is empty. All other
+relationships are `unknown`.
 
 Parts: message content maps to one text part with the payload path as
 `originalPath`. Assistant `toolCalls` map to tool-call parts. Compaction
@@ -66,7 +71,7 @@ Parts: message content maps to one text part with the payload path as
 
 - `history`: complete. Every retained entry is in the file.
 - `branches`: limited. `leaf_moved` records mark branch points, but only
-  the current branch prefix is a live view; Pf2 lost branches are unknown.
+  the current branch prefix is a live view; superseded branches are unknown.
 - `original-records`: limited. Entry payloads are preserved verbatim in
   `original`, but there is no native id beyond the popeye id.
 - `embedded-content`: unavailable. Journal payloads are text only.
@@ -80,12 +85,20 @@ Bookmark envelope: base64url JSON
 `{ bookmarkVersion: 1, methodId: "popeye-journal", conversationId,
 digest, offset, entries }`. `offset` is the byte offset of the next
 unread line; `entries` is the count of envelopes returned. `digest` is
-the hex sha256 of the acknowledged prefix bytes. Continuation revalidates
-the digest against the current prefix: mismatch refuses with
+the hex sha256 of the first `offset` bytes of the file. Continuation
+recomputes the digest over the first `offset` bytes of the current file
+and revalidates: mismatch refuses with
 `fresh-read-required`. No digest, no continuation.
 
 ## Torn tail
 
-A torn tail reports `incompleteTail: { position, reason }` with the
+A torn tail reports `incompleteTail` with the
 position of the first torn byte and consistency `method validated-prefix`.
+Popeye's `ExportRead.incompleteTail` is the boolean input to that HCN
+`ResultEnvelope.incompleteTail` object: true means the reader emits the
+object with position and reason, false means null.
 The intact prefix stays in the result. The export never rewrites the file.
+
+A `JournalJsonl` layer built with `suppressRepair: true` skips torn-tail
+repair and temporary-file cleanup at open, so pre-torn tails report
+instead of healing. The default layer keeps native repair.

@@ -78,6 +78,11 @@ export interface JsonlJournalIo {
 export interface JsonlJournalOptions {
   readonly diagnosticSink?: (diagnostic: JournalDiagnostic) => Effect.Effect<void>;
   readonly io?: JsonlJournalIo;
+  /**
+   * Suppresses torn-tail repair and temporary-file cleanup at open.
+   * The export reader uses it so pre-torn tails report instead of healing.
+   */
+  readonly suppressRepair?: boolean;
 }
 
 interface JsonlJournalBacking {
@@ -85,6 +90,7 @@ interface JsonlJournalBacking {
   readonly diagnosticSink: (diagnostic: JournalDiagnostic) => Effect.Effect<void>;
   readonly directory: string;
   readonly io: JsonlJournalIo;
+  readonly suppressRepair: boolean;
 }
 
 interface LoadedSession {
@@ -284,7 +290,7 @@ const loadSession = (
         invalidSequence(file, "A journal file must contain a session_root entry."),
       );
     }
-    if (decoded.recovered) {
+    if (decoded.recovered && !backing.suppressRepair) {
       yield* atomicallyRewrite(backing, file, sessionId, acknowledgedPrefix(text).text);
       yield* emitDiagnostic(backing, {
         action: "recovered_torn_tail",
@@ -314,7 +320,9 @@ const openJournalState = (
   backing: JsonlJournalBacking,
 ): Effect.Effect<JournalAdapterState, JournalError> =>
   Effect.gen(function* () {
-    yield* sweepTemporaryFiles(backing);
+    if (!backing.suppressRepair) {
+      yield* sweepTemporaryFiles(backing);
+    }
     const names = yield* fileEffect(backing.directory, "list directory", () =>
       readdir(backing.directory),
     );
@@ -416,6 +424,7 @@ const acquireBacking = (
       diagnosticSink: options.diagnosticSink ?? defaultDiagnosticSink,
       directory: canonicalDirectory,
       io: options.io ?? {},
+      suppressRepair: options.suppressRepair ?? false,
     };
   });
 

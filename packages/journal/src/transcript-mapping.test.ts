@@ -102,8 +102,29 @@ test("torn transcript fixture reports its tail without repair", async () => {
   expect(torn.startsWith(source)).toBe(true);
 });
 
+test("suppressed repair reports a pre-torn tail through the export path", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "popeye-transcript-"));
+  const torn = await readFile(TORN_FIXTURE, "utf8");
+  const headerLine = torn.split("\n")[0] ?? "";
+  const sessionId = SessionIdSchema.make(
+    (JSON.parse(headerLine) as { payload: { sessionId: string } }).payload.sessionId,
+  );
+  await writeFile(join(directory, `${sessionId}.jsonl`), torn);
+  const exported = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      return yield* journal.readExport(sessionId);
+    }).pipe(Effect.provide(JournalJsonl(directory, { suppressRepair: true }))),
+  );
+  expect(exported.incompleteTail).toBe(true);
+  expect(exported.lines).toHaveLength(23);
+  await expect(readFile(join(directory, `${sessionId}.jsonl`), "utf8")).resolves.toBe(torn);
+});
+
 test("acknowledged prefix digest is stable for bookmark revalidation", async () => {
   const source = await readFile(FIXTURE, "utf8");
+  // The fixture is intact, so offset is the full length and the digest
+  // covers every byte.
   const digest = createHash("sha256").update(source).digest("hex");
   // Pinned so the HCN reader arm detects any byte change in the fixture.
   expect(digest).toBe("0a019f208d132e30e532a1acc80cbc298b97616bd9177a43f686539b37929f49");
