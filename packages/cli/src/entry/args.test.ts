@@ -225,3 +225,19 @@ test("grant lists default to empty and effort rejects unknown words", async () =
   const failure = await Effect.runPromiseExit(parseArgs(["-p", "--effort", "ultra", "Run it."]));
   expect(Exit.isFailure(failure)).toBe(true);
 });
+
+test("empty grant lists and non-positive windows refuse instead of widening", async () => {
+  for (const argv of [
+    ["-p", "--tools", "", "Run it."],
+    ["-p", "--tools", " , ", "Run it."],
+    ["-p", "--exclude-tools", "", "Run it."],
+    ["-p", "--skills", "  ", "Run it."],
+    ["-p", "--access", "all", "Run it."],
+    ["-p", "--isolation", "read-only", "Run it."],
+    ["-p", "--context-window", "0", "Run it."],
+    ["-p", "--context-window", "-100", "Run it."],
+  ]) {
+    const failure = await Effect.runPromiseExit(parseArgs(argv));
+    expect(Exit.isFailure(failure)).toBe(true);
+  }
+});

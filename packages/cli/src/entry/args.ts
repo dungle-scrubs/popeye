@@ -97,12 +97,24 @@ const metaAction = (values: {
 const isHcnEffort = (value: string): value is HcnEffort =>
   (HCN_EFFORTS as ReadonlyArray<string>).includes(value);
 
-const splitList = (raw: string | undefined): ReadonlyArray<string> => {
+const splitListStrict = (
+  flag: string,
+  raw: string | undefined,
+): Effect.Effect<ReadonlyArray<string>, CliArgsError> => {
   if (raw === undefined) {
-    return [];
+    return Effect.succeed([]);
   }
-  const trimmed = raw.trim();
-  return trimmed.length === 0 ? [] : trimmed.split(",").map((name) => name.trim());
+  // An explicit empty list is ambiguous (all tools or no tools) and
+  // fails open downstream, so it refuses instead of widening.
+  if (raw.trim().length === 0) {
+    return Effect.fail(invalidArguments(`${flag} requires a non-empty comma-separated list.`));
+  }
+  const names = raw.split(",").map((name) => name.trim());
+  const blank = names.find((name) => name.length === 0);
+  if (blank !== undefined) {
+    return Effect.fail(invalidArguments(`${flag} contains an empty name.`));
+  }
+  return Effect.succeed(names);
 };
 
 export const parseArgs = (argv: ReadonlyArray<string>): Effect.Effect<ParsedArgs, CliArgsError> => {
@@ -143,91 +155,105 @@ export const parseArgs = (argv: ReadonlyArray<string>): Effect.Effect<ParsedArgs
         strict: true,
       }),
   }).pipe(
-    Effect.flatMap(({ positionals, values }): Effect.Effect<ParsedArgs, CliArgsError> => {
-      const action = metaAction(values);
-      if (action !== undefined) {
-        return Effect.succeed({ action });
-      }
-      const mode = values.mode ?? "print";
-      if (!isCliMode(mode)) {
-        return Effect.fail(
-          invalidArguments(
-            `Invalid --mode value ${JSON.stringify(mode)}. Use print, json, rpc, or hcn.`,
-          ),
-        );
-      }
-      if (values.plugin?.some((path) => path.trim() === "")) {
-        return Effect.fail(invalidArguments("--plugin requires a non-empty path."));
-      }
-      if (positionals.length > 1) {
-        return Effect.fail(promptRequired());
-      }
-      const prompt = positionals[0];
-      if (mode === "rpc" && prompt !== undefined) {
-        return Effect.fail(
-          invalidArguments("RPC mode does not accept a prompt. Use popeye -p --mode rpc."),
-        );
-      }
-      if (prompt === undefined && mode !== "rpc" && values.headless !== true) {
-        return Effect.fail(promptRequired());
-      }
-      const effort = values.effort;
-      if (effort !== undefined && !isHcnEffort(effort)) {
-        return Effect.fail(
-          invalidArguments(
-            `Invalid --effort value ${JSON.stringify(effort)}. Use ${HCN_EFFORTS.join(", ")}.`,
-          ),
-        );
-      }
-      // HCN callers are untrusted for tool grants: unrecognized values
-      // refuse instead of widening to a full grant.
-      if (values.access !== undefined && values.access !== "read" && values.access !== "write") {
-        return Effect.fail(
-          invalidArguments(
-            `Invalid --access value ${JSON.stringify(values.access)}. Use read or write.`,
-          ),
-        );
-      }
-      if (values.isolation !== undefined && values.isolation !== "tool-free") {
-        return Effect.fail(
-          invalidArguments(
-            `Invalid --isolation value ${JSON.stringify(values.isolation)}. Use tool-free.`,
-          ),
-        );
-      }
-      const contextWindow =
-        values["context-window"] === undefined ? undefined : Number(values["context-window"]);
-      if (contextWindow !== undefined && !Number.isSafeInteger(contextWindow)) {
-        return Effect.fail(
-          invalidArguments(
-            `Invalid --context-window value ${JSON.stringify(values["context-window"])}. Use an integer.`,
-          ),
-        );
-      }
-      return Effect.succeed({
-        action: "run" as const,
-        access: values.access,
-        appendSystemPrompt: values["append-system-prompt"],
-        baseUrl: values["base-url"],
-        contextWindow,
-        effort,
-        excludeTools: splitList(values["exclude-tools"]),
-        isolation: values.isolation,
-        memory: values.memory === true ? true : values["no-memory"] === true ? false : undefined,
-        mode,
-        model: values.model,
-        noProjectPlugins: values["no-project-plugins"] ?? false,
-        pluginPaths: values.plugin ?? [],
-        prompt,
-        questions: values.questions,
-        resume: values.resume,
-        resumeLast: values["resume-last"] ?? false,
-        sessionDir: values["session-dir"],
-        skills: splitList(values.skills),
-        systemPrompt: values["system-prompt"],
-        tools: splitList(values.tools),
-      });
-    }),
+    Effect.flatMap(
+      ({ positionals, values }): Effect.Effect<ParsedArgs, CliArgsError> =>
+        Effect.gen(function* () {
+          const action = metaAction(values);
+          if (action !== undefined) {
+            return { action };
+          }
+          const mode = values.mode ?? "print";
+          if (!isCliMode(mode)) {
+            return yield* Effect.fail(
+              invalidArguments(
+                `Invalid --mode value ${JSON.stringify(mode)}. Use print, json, rpc, or hcn.`,
+              ),
+            );
+          }
+          if (values.plugin?.some((path) => path.trim() === "")) {
+            return yield* Effect.fail(invalidArguments("--plugin requires a non-empty path."));
+          }
+          if (positionals.length > 1) {
+            return yield* Effect.fail(promptRequired());
+          }
+          const prompt = positionals[0];
+          if (mode === "rpc" && prompt !== undefined) {
+            return yield* Effect.fail(
+              invalidArguments("RPC mode does not accept a prompt. Use popeye -p --mode rpc."),
+            );
+          }
+          if (prompt === undefined && mode !== "rpc" && values.headless !== true) {
+            return yield* Effect.fail(promptRequired());
+          }
+          const effort = values.effort;
+          if (effort !== undefined && !isHcnEffort(effort)) {
+            return yield* Effect.fail(
+              invalidArguments(
+                `Invalid --effort value ${JSON.stringify(effort)}. Use ${HCN_EFFORTS.join(", ")}.`,
+              ),
+            );
+          }
+          // HCN callers are untrusted for tool grants: unrecognized values
+          // refuse instead of widening to a full grant.
+          if (
+            values.access !== undefined &&
+            values.access !== "read" &&
+            values.access !== "write"
+          ) {
+            return yield* Effect.fail(
+              invalidArguments(
+                `Invalid --access value ${JSON.stringify(values.access)}. Use read or write.`,
+              ),
+            );
+          }
+          if (values.isolation !== undefined && values.isolation !== "tool-free") {
+            return yield* Effect.fail(
+              invalidArguments(
+                `Invalid --isolation value ${JSON.stringify(values.isolation)}. Use tool-free.`,
+              ),
+            );
+          }
+          const contextWindow =
+            values["context-window"] === undefined ? undefined : Number(values["context-window"]);
+          if (
+            contextWindow !== undefined &&
+            (!Number.isSafeInteger(contextWindow) || contextWindow < 1)
+          ) {
+            return yield* Effect.fail(
+              invalidArguments(
+                `Invalid --context-window value ${JSON.stringify(values["context-window"])}. Use a positive integer.`,
+              ),
+            );
+          }
+          const tools = yield* splitListStrict("--tools", values.tools);
+          const excludeTools = yield* splitListStrict("--exclude-tools", values["exclude-tools"]);
+          const skills = yield* splitListStrict("--skills", values.skills);
+          return {
+            action: "run" as const,
+            access: values.access,
+            appendSystemPrompt: values["append-system-prompt"],
+            baseUrl: values["base-url"],
+            contextWindow,
+            effort,
+            excludeTools,
+            isolation: values.isolation,
+            memory:
+              values.memory === true ? true : values["no-memory"] === true ? false : undefined,
+            mode,
+            model: values.model,
+            noProjectPlugins: values["no-project-plugins"] ?? false,
+            pluginPaths: values.plugin ?? [],
+            prompt,
+            questions: values.questions,
+            resume: values.resume,
+            resumeLast: values["resume-last"] ?? false,
+            sessionDir: values["session-dir"],
+            skills,
+            systemPrompt: values["system-prompt"],
+            tools,
+          };
+        }),
+    ),
   );
 };
 

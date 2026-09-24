@@ -411,6 +411,11 @@ const runWithConfig = (
           ? PiAiProviderLive({
               ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
               baseUrl: config.baseUrl,
+              // RFC-02 P4 item 6: trusted window override replaces the
+              // fabricated 128k default for HCN runs.
+              ...(config.contextWindow === undefined
+                ? {}
+                : { contextWindow: config.contextWindow }),
               modelId: config.model,
               provider: "openai",
             }).pipe(Layer.provide(tools))
@@ -432,11 +437,10 @@ const runWithConfig = (
         CliRunError | HeadWriteError,
         Driver | RpcInteractions | PluginInteractions
       >;
-      // RFC-02 P4: effort onto thinkingLevel, context-window as the trusted
-      // override replacing the fabricated default for HCN runs.
+      // RFC-02 P4: effort onto thinkingLevel; system-prompt flags onto
+      // fragment composition. Context-window rides the provider layer.
       const turnOptions =
         config.effort === undefined &&
-        config.contextWindow === undefined &&
         config.systemPrompt === undefined &&
         config.appendSystemPrompt === undefined
           ? undefined
@@ -444,9 +448,6 @@ const runWithConfig = (
               ...(config.appendSystemPrompt === undefined
                 ? {}
                 : { appendSystemPrompt: config.appendSystemPrompt }),
-              ...(config.contextWindow === undefined
-                ? {}
-                : { contextBudget: config.contextWindow }),
               ...(config.systemPrompt === undefined ? {} : { systemPrompt: config.systemPrompt }),
               ...(config.effort === undefined
                 ? {}
@@ -456,7 +457,7 @@ const runWithConfig = (
         return yield* Effect.fail(
           runError(
             "composition_failed",
-            "--effort, --context-window, --system-prompt, and --append-system-prompt are per-turn flags with no RPC wire carrier. Use prompt-frame options.",
+            "--effort, --system-prompt, and --append-system-prompt have no RPC wire carrier: prompt frames carry content only (set-model and set-thinking cover model and thinking level). Omit them in RPC mode.",
           ),
         );
       }

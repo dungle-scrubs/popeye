@@ -97,6 +97,10 @@ export type TurnOptions = Schema.Schema.Type<typeof TurnOptionsSchema>;
  * fragments-off), keeping the compaction summary when one applied: it is
  * conversation state, not instructions. Append adds one system item after
  * the leading block.
+ *
+ * Contract: when compactionApplied is true, items[0] is the fold's
+ * compaction summary (foldContext always leads with it). Callers pass
+ * the flag from FoldResult.accounting.compactionApplied.
  */
 export const composeSystemPrompt = (
   items: ReadonlyArray<ContextItem>,
