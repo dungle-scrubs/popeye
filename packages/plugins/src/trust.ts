@@ -77,7 +77,7 @@ export interface TrustStoreService {
   readonly put: (record: TrustRecord) => Effect.Effect<void, TrustStoreError>;
 }
 
-export class TrustStore extends Context.Tag("@popeye/plugins/TrustStore")<
+export class TrustStore extends Context.Tag("@dungle-scrubs/popeye-plugins/TrustStore")<
   TrustStore,
   TrustStoreService
 >() {}

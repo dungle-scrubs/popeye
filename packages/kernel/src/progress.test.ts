@@ -1,4 +1,4 @@
-import { SessionIdSchema } from "@popeye/journal";
+import { SessionIdSchema } from "@dungle-scrubs/popeye-journal";
 import { Deferred, Effect, Fiber, Stream } from "effect";
 import { expect, test } from "vitest";
 

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { decodeProgress, decodeSnapshot } from "@popeye/protocol";
+import { decodeProgress, decodeSnapshot } from "@dungle-scrubs/popeye-protocol";
 import { Effect } from "effect";
 import { expect, test } from "vitest";
 

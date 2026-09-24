@@ -1,3 +1,11 @@
+pre-push:
+  commands:
+    trufflehog:
+      run: trufflehog git file://. --results=verified --fail 2>/dev/null
+      skip:
+        - merge
+        - rebase
+
 pre-commit:
   parallel: true
   commands:

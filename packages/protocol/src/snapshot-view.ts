@@ -6,7 +6,7 @@
  *
  * This module owns the one Snapshot fold: pagination (private seam: pagination.ts), range slicing (private seam: pagination.sliceSnapshotByRange), and reassembly (private seam: reassembly.ts) behind paginate / slice / reassemble. Callers depend on SnapshotView, not on entryRange flags. Byte accounting lives once via snapshotEncodedBytes.
  *
- * Not responsible for Journal persistence or compaction — those live in @popeye/journal — or for Branch folding (SessionView/Driver own that). The seam is Snapshot bytes: two adapters justify it — LiveSnapshotView over real SnapshotSchema encoding and FakeSnapshotView over fixture Snapshot arrays in tests. Heads never touch entryRange directly.
+ * Not responsible for Journal persistence or compaction — those live in @dungle-scrubs/popeye-journal — or for Branch folding (SessionView/Driver own that). The seam is Snapshot bytes: two adapters justify it — LiveSnapshotView over real SnapshotSchema encoding and FakeSnapshotView over fixture Snapshot arrays in tests. Heads never touch entryRange directly.
  */
 
 import type { EntryId } from "#journal";
@@ -45,7 +45,7 @@ export interface SnapshotViewService {
 }
 
 export class SnapshotView extends globalThis.Object {
-  static readonly Tag = "@popeye/protocol/SnapshotView" as const;
+  static readonly Tag = "@dungle-scrubs/popeye-protocol/SnapshotView" as const;
 }
 
 const viewService: SnapshotViewService = {

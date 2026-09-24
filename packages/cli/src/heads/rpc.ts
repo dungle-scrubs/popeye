@@ -21,12 +21,12 @@
 
 import type { Readable, Writable } from "node:stream";
 
-import type { SessionId } from "@popeye/journal";
+import type { SessionId } from "@dungle-scrubs/popeye-journal";
 import {
   makePluginInteractionsLiveService,
   type PluginInteractionResolution,
   PluginInteractions,
-} from "@popeye/plugins";
+} from "@dungle-scrubs/popeye-plugins";
 import {
   type Command,
   decodeCommand,
@@ -36,7 +36,7 @@ import {
   InteractionTimeout,
   ProtocolError,
   type WireError,
-} from "@popeye/protocol";
+} from "@dungle-scrubs/popeye-protocol";
 import {
   Cause,
   Chunk,
@@ -149,7 +149,7 @@ export interface RpcInteractionsService {
   readonly respond: (response: InteractionResponse) => Effect.Effect<void, ProtocolError>;
 }
 
-export class RpcInteractions extends Context.Tag("@popeye/cli/RpcInteractions")<
+export class RpcInteractions extends Context.Tag("@dungle-scrubs/popeye/RpcInteractions")<
   RpcInteractions,
   RpcInteractionsService
 >() {}

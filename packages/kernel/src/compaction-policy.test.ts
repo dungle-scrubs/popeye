@@ -6,7 +6,7 @@ import {
   type JournalError,
   JournalMemory,
   type JournalService,
-} from "@popeye/journal";
+} from "@dungle-scrubs/popeye-journal";
 import { Effect, type Exit, Fiber, Layer, Option, Stream, Tracer } from "effect";
 import { expect, test } from "vitest";
 

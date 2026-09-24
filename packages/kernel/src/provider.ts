@@ -122,4 +122,7 @@ export interface ProviderService {
   ) => Stream.Stream<AssistantItem, ProviderError>;
 }
 
-export class Provider extends Context.Tag("@popeye/kernel/Provider")<Provider, ProviderService>() {}
+export class Provider extends Context.Tag("@dungle-scrubs/popeye-kernel/Provider")<
+  Provider,
+  ProviderService
+>() {}

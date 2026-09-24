@@ -3,7 +3,7 @@
  * It exists so the host's generation swap is exercisable as a Command via the same registry as third-party behavior.
  */
 
-import { defineCommandContribution, type PluginManifest } from "@popeye/plugins";
+import { defineCommandContribution, type PluginManifest } from "@dungle-scrubs/popeye-plugins";
 import { Effect, Option, Schema } from "effect";
 
 import { ReloadControl } from "../plugins/reload.js";

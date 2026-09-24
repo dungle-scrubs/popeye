@@ -11,7 +11,7 @@
  * PluginInteractions transport (heads own that); it only decides allow/block/replace.
  */
 
-import type { CapabilityGrants, PluginGeneration } from "@popeye/plugins";
+import type { CapabilityGrants, PluginGeneration } from "@dungle-scrubs/popeye-plugins";
 import { Context, Effect, Layer, type Ref } from "effect";
 
 import {
@@ -35,10 +35,9 @@ export interface ToolInvocationPipeline {
   ) => Effect.Effect<GateDecision>;
 }
 
-export class ToolInvocationPipelineTag extends Context.Tag("@popeye/cli/ToolInvocationPipeline")<
-  ToolInvocationPipelineTag,
-  ToolInvocationPipeline
->() {}
+export class ToolInvocationPipelineTag extends Context.Tag(
+  "@dungle-scrubs/popeye/ToolInvocationPipeline",
+)<ToolInvocationPipelineTag, ToolInvocationPipeline>() {}
 
 export const makeToolInvocationPipeline = (options: {
   readonly generation: PluginGeneration;

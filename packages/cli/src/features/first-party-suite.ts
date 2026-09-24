@@ -32,7 +32,7 @@
 
 import { fileURLToPath } from "node:url";
 
-import type { Contribution, GenerationPlugin, PluginManifest } from "@popeye/plugins";
+import type { Contribution, GenerationPlugin, PluginManifest } from "@dungle-scrubs/popeye-plugins";
 
 import { compactPlugin } from "./compact.js";
 import { reloadPlugin } from "./reload.js";

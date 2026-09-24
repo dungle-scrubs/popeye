@@ -1,8 +1,8 @@
 # First-party Plugin author interface
 
 The first-party Plugins use the same public interface as an external Plugin. Feature modules import
-`@popeye/plugins` from its package root. They use Effect v3 for execution and Schema values. The CLI
-composition module imports `@popeye/kernel` from its package root and supplies the public kernel
+`@dungle-scrubs/popeye-plugins` from its package root. They use Effect v3 for execution and Schema values. The CLI
+composition module imports `@dungle-scrubs/popeye-kernel` from its package root and supplies the public kernel
 operations through the command context. Feature modules do not import kernel source files or
 journal adapters.
 
@@ -40,6 +40,6 @@ Compaction. The Turn settles with a budget diagnostic that tells the user to bra
 Session. The v1 Hook does not replace a Compaction summary or instruction.
 
 The import-boundary check scans every file under a `features/` directory. It rejects deep imports
-from `@popeye/kernel`, `@popeye/plugins`, `@popeye/journal`, and `@popeye/protocol`. It also rejects relative
-imports that escape the feature's package. Feature modules use `@popeye/plugins` from its package
-root. The CLI composition module uses `@popeye/kernel` from its package root.
+from `@dungle-scrubs/popeye-kernel`, `@dungle-scrubs/popeye-plugins`, `@dungle-scrubs/popeye-journal`, and `@dungle-scrubs/popeye-protocol`. It also rejects relative
+imports that escape the feature's package. Feature modules use `@dungle-scrubs/popeye-plugins` from its package
+root. The CLI composition module uses `@dungle-scrubs/popeye-kernel` from its package root.

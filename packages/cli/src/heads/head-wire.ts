@@ -6,7 +6,7 @@
  *
  * This module hides SnapshotView pagination, wire Schema validation, warning/paginated log side-effects, exit-code mapping, and boundary envelope behind encodeSnapshotLine / encodeProgressLine / exitCodeForStopReason / runHeadBoundary. Heads become thin adapters that pick a line formatter; the wire contract is tested through HeadWire, not by spinning a Head. Deep module over SnapshotView (C2 architecture review): bounded emission, range addressing, and reassembly hide behind snapshotView; HeadWire consumes that seam and adds wire Schema encoding.
  *
- * Not responsible for Session lifecycle (HeadSessionLoop owns create/resume/progress subscription/exit-code sequencing), for byte framing or per-Session FIFO (RpcTransport owns LF/1MB/U+2028 provenance), or for dispatch policy (RpcDispatcher owns queue caps). The seam is process I/O: two adapters justify it — LiveHeadWire over real SnapshotSchema/ProgressSchema + FakeHeadWire over fixture Snapshots in tests (heads.test.ts proves the same wire contract without byte hacks). See @popeye/protocol snapshotView.
+ * Not responsible for Session lifecycle (HeadSessionLoop owns create/resume/progress subscription/exit-code sequencing), for byte framing or per-Session FIFO (RpcTransport owns LF/1MB/U+2028 provenance), or for dispatch policy (RpcDispatcher owns queue caps). The seam is process I/O: two adapters justify it — LiveHeadWire over real SnapshotSchema/ProgressSchema + FakeHeadWire over fixture Snapshots in tests (heads.test.ts proves the same wire contract without byte hacks). See @dungle-scrubs/popeye-protocol snapshotView.
  */
 
 import type { Writable } from "node:stream";
@@ -16,7 +16,7 @@ import {
   type Snapshot,
   SnapshotSchema,
   snapshotView,
-} from "@popeye/protocol";
+} from "@dungle-scrubs/popeye-protocol";
 import { Cause, Chunk, Data, Effect, Exit, Logger, Option, Schema } from "effect";
 
 import type { DriverSnapshot, TurnResult } from "../compose.js";

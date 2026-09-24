@@ -9,7 +9,7 @@ import {
   JournalMemory,
   RecordDraftSchema,
   SessionIdSchema,
-} from "@popeye/journal";
+} from "@dungle-scrubs/popeye-journal";
 import { Effect, type Exit, Layer, Schema, Tracer } from "effect";
 import { expect, test } from "vitest";
 

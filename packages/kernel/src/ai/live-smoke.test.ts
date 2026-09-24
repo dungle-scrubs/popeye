@@ -3,7 +3,7 @@
  * It exists separately from contract fixtures so normal test runs never require network access.
  */
 
-import { createMemoryJournalBacking, Journal, JournalMemory } from "@popeye/journal";
+import { createMemoryJournalBacking, Journal, JournalMemory } from "@dungle-scrubs/popeye-journal";
 import { Effect, Layer } from "effect";
 import { expect, test } from "vitest";
 

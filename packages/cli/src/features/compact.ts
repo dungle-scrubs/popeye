@@ -9,7 +9,7 @@ import {
   defineCommandContribution,
   defineHookContribution,
   type PluginManifest,
-} from "@popeye/plugins";
+} from "@dungle-scrubs/popeye-plugins";
 import { Effect, Schema } from "effect";
 
 export interface CompactPluginOptions {

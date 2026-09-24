@@ -12,3 +12,8 @@ coverage/
 *.db-wal
 *.db-shm
 .bearings/
+
+# Agent instruction files: tracked shared siblings are NOT ignored; only the
+# .local.md siblings are local-only and must stay untracked at every scope.
+AGENTS.local.md
+CLAUDE.local.md

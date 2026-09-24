@@ -2,12 +2,12 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { SessionIdSchema } from "@popeye/journal";
+import { SessionIdSchema } from "@dungle-scrubs/popeye-journal";
 import {
   createCapabilityGrants,
   defineToolContribution,
   ToolContributionError,
-} from "@popeye/plugins";
+} from "@dungle-scrubs/popeye-plugins";
 import { Effect, Either, Logger, Schema } from "effect";
 import { expect, test } from "vitest";
 

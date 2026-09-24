@@ -1,4 +1,4 @@
-import type { CommandExecutionContext } from "@popeye/plugins";
+import type { CommandExecutionContext } from "@dungle-scrubs/popeye-plugins";
 import { Effect, Schema } from "effect";
 import { expect, test } from "vitest";
 

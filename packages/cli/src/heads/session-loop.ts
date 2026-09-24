@@ -17,7 +17,7 @@
  * Protocol framing (rpc-transport owns LF/1MB) or for boundary envelopes (heads own theirs).
  */
 
-import type { SessionId } from "@popeye/journal";
+import type { SessionId } from "@dungle-scrubs/popeye-journal";
 import { Deferred, Effect, Fiber, Stream } from "effect";
 
 import type { DriverSnapshot, Progress, TurnOptions, TurnResult } from "../compose.js";

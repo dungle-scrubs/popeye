@@ -3,7 +3,7 @@
  * It exists to prevent provider, tool, gate, and budget concerns from leaking into heads.
  */
 
-import type { EntryId, SessionId } from "@popeye/journal";
+import type { EntryId, SessionId } from "@dungle-scrubs/popeye-journal";
 import { Data } from "effect";
 
 import type { ProviderUsage } from "./provider.js";

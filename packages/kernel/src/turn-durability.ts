@@ -9,8 +9,12 @@
  * Not responsible for Context assembly (journal/foldContext owns folding), for Provider retry (provider-retry owns bound), for Tool execution (tool-batch owns concurrency), or for Mailbox serialization (callers own that). The seam is Journal I/O for turn writes: two adapters justify it — LiveTurnDurability over a real Journal + FakeTurnDurability over an in-memory commit log in tests (turn-durability.test proves deduplication without Journal I/O).
  */
 
-import type { JournalFailure } from "@popeye/journal";
-import { EntryDraftSchema, type JournalService, type SessionId } from "@popeye/journal";
+import type { JournalFailure } from "@dungle-scrubs/popeye-journal";
+import {
+  EntryDraftSchema,
+  type JournalService,
+  type SessionId,
+} from "@dungle-scrubs/popeye-journal";
 import { Effect, Ref } from "effect";
 import type { AssistantDiagnostic } from "./entry-payloads.js";
 import type { ProgressHub } from "./progress.js";
@@ -49,7 +53,7 @@ export interface TurnDurabilityHandle {
     content: string,
     stopReason: AssistantStopReason,
     diagnostic: AssistantDiagnostic | undefined,
-  ) => Effect.Effect<import("@popeye/journal").Entry, JournalFailure>;
+  ) => Effect.Effect<import("@dungle-scrubs/popeye-journal").Entry, JournalFailure>;
   /** Append steering user entries (sequential, with progress). */
   readonly appendSteering: (
     items: ReadonlyArray<{ readonly content: string }>,
@@ -164,7 +168,8 @@ export const makeTurnDurabilityHandle = (
         appendOperationStarted(journal, sessionId, {
           intent: "turn",
           operationId,
-          promptEntryId: promptEntryId as unknown as import("@popeye/journal").EntryId,
+          promptEntryId:
+            promptEntryId as unknown as import("@dungle-scrubs/popeye-journal").EntryId,
           turnOrdinal,
         }).pipe(Effect.zipRight(Ref.set(operationRecorded, true))),
       );
@@ -302,7 +307,9 @@ export const makeFakeTurnDurabilityHandle = (options: {
       appendAssistant: (content) =>
         Effect.sync(() => {
           assistant.push(content);
-          return { id: `fake-${assistant.length}` } as unknown as import("@popeye/journal").Entry;
+          return {
+            id: `fake-${assistant.length}`,
+          } as unknown as import("@dungle-scrubs/popeye-journal").Entry;
         }),
       appendSteering: () => Effect.void,
       appendToolResult: (result) =>

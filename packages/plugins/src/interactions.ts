@@ -9,7 +9,7 @@ import {
   type InteractionRequest,
   type InteractionResponse,
   InteractionTimeout,
-} from "@popeye/protocol";
+} from "@dungle-scrubs/popeye-protocol";
 import { Context, Effect, FiberRef, Layer, Option } from "effect";
 import { type CapabilityGrants, hasCapability } from "./capability.js";
 
@@ -46,10 +46,9 @@ export interface PluginInteractionsService {
   ) => Effect.Effect<PluginInteractionResolution>;
 }
 
-export class PluginInteractions extends Context.Tag("@popeye/plugins/PluginInteractions")<
-  PluginInteractions,
-  PluginInteractionsService
->() {}
+export class PluginInteractions extends Context.Tag(
+  "@dungle-scrubs/popeye-plugins/PluginInteractions",
+)<PluginInteractions, PluginInteractionsService>() {}
 
 const fallbackResponse = (request: PluginInteractionRequest): InteractionResponse => {
   switch (request.kind) {

@@ -8,7 +8,7 @@
  * with hasMoreBefore/After signaling the branch extends beyond the window. Estimate-then-verify
  * keeps emission under bound without full-branch encode when below threshold. <!-- D-007 -->
  * Private seam of SnapshotView: callers should depend on snapshotView.paginateSnapshot / sliceSnapshotByRange, not on this file directly.
- * What it does not own: Journal persistence or compaction - those live in @popeye/journal.
+ * What it does not own: Journal persistence or compaction - those live in @dungle-scrubs/popeye-journal.
  */
 
 import { Schema } from "effect";

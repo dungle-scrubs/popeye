@@ -1,4 +1,9 @@
-import { createMemoryJournalBacking, Journal, JournalError, JournalMemory } from "@popeye/journal";
+import {
+  createMemoryJournalBacking,
+  Journal,
+  JournalError,
+  JournalMemory,
+} from "@dungle-scrubs/popeye-journal";
 import { Effect, Layer, Schema, Stream } from "effect";
 
 import {

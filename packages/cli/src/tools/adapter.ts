@@ -15,7 +15,7 @@ import {
   type PluginGeneration,
   type RegisteredContribution,
   ToolContributionKind,
-} from "@popeye/plugins";
+} from "@dungle-scrubs/popeye-plugins";
 import { Effect } from "effect";
 
 import type { Tool } from "../compose.js";

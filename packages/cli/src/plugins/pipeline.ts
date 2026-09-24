@@ -30,7 +30,7 @@ import {
   type PluginGeneration,
   phase1Sources,
   TrustStoreMemory,
-} from "@popeye/plugins";
+} from "@dungle-scrubs/popeye-plugins";
 import { Data, Effect } from "effect";
 
 import {

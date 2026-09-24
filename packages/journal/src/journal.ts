@@ -88,7 +88,10 @@ export interface JournalService {
   ) => Effect.Effect<ReadonlyArray<Record>, JournalFailure>;
 }
 
-export class Journal extends Context.Tag("@popeye/journal/Journal")<Journal, JournalService>() {}
+export class Journal extends Context.Tag("@dungle-scrubs/popeye-journal/Journal")<
+  Journal,
+  JournalService
+>() {}
 
 export const isEntry = (line: JournalLine): line is EntryLine => line.type === "entry";
 

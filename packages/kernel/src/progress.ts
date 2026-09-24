@@ -3,7 +3,7 @@
  * It exists so slow heads cannot block durable journal work or become snapshot input.
  */
 
-import { EntryIdSchema, type SessionId } from "@popeye/journal";
+import { EntryIdSchema, type SessionId } from "@dungle-scrubs/popeye-journal";
 import { Context, Effect, Layer, Queue, Ref, Schema, Stream } from "effect";
 
 export const TurnPhaseSchema = Schema.Literal(
@@ -73,7 +73,7 @@ export interface ProgressService {
   readonly subscribe: (sessionId: SessionId) => Stream.Stream<Progress>;
 }
 
-export class ProgressHub extends Context.Tag("@popeye/kernel/ProgressHub")<
+export class ProgressHub extends Context.Tag("@dungle-scrubs/popeye-kernel/ProgressHub")<
   ProgressHub,
   ProgressService
 >() {}
