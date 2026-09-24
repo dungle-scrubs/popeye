@@ -11,3 +11,4 @@ coverage/
 .scratch/
 *.db-wal
 *.db-shm
+.bearings/
