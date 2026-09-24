@@ -40,8 +40,9 @@ the HCN listing rules) and the `SourceEnvelope` below.
 ## Record envelopes
 
 One envelope per acknowledged line. `sourceKey` is `source-0`.
-`position` is `{ sourceKey: "source-0", unit: "entry-index",
-value: <0-based line ordinal> }`. `originalKind` is `saved-record`.
+`position` is `{ sourceKey: "source-0", unit: "byte-offset",
+value: <byte offset of the line> }`, matching the bookmark digest input.
+`originalKind` is `saved-record`.
 `original` is the raw journal line. `nativeId` is the entry or record id.
 
 Normalized kind and role:
