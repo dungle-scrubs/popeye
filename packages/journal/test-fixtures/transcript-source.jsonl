@@ -1,0 +1,24 @@
+{"payload":{"format":"popeye_journal","sessionId":"p3s-01","type":"journal_header","version":1},"v":1}
+{"payload":{"item":{"id":"p3e-01","kind":"session_root","parentId":null,"payload":{}},"sessionId":"p3s-01","type":"entry"},"v":1}
+{"payload":{"item":{"id":"p3e-02","kind":"message","parentId":"p3e-01","payload":{"content":"Inspect the file.","role":"user"}},"sessionId":"p3s-01","type":"entry"},"v":1}
+{"payload":{"item":{"id":"p3r-01","kind":"operation_started","payload":{"intent":"turn","operationId":"p3o-01","promptEntryId":"p3e-02","turnOrdinal":1}},"sessionId":"p3s-01","type":"record"},"v":1}
+{"payload":{"item":{"id":"p3e-03","kind":"message","parentId":"p3e-02","payload":{"content":"","role":"assistant","stopReason":"toolCalls","toolCalls":[{"argumentsJson":"{\"path\":\"src/main.ts\"}","id":"read-call","name":"read-file"}]}},"sessionId":"p3s-01","type":"entry"},"v":1}
+{"payload":{"item":{"id":"p3r-02","kind":"tool_started","payload":{"operationId":"p3o-01","replay":"never","toolCallId":"read-call","toolName":"read-file"}},"sessionId":"p3s-01","type":"record"},"v":1}
+{"payload":{"item":{"id":"p3e-04","kind":"message","parentId":"p3e-03","payload":{"content":"contents:src/main.ts","isError":false,"role":"toolResult","toolCallId":"read-call","toolName":"read-file"}},"sessionId":"p3s-01","type":"entry"},"v":1}
+{"payload":{"item":{"id":"p3e-05","kind":"message","parentId":"p3e-04","payload":{"content":"Also report the exported name.","deliveryMode":"steer","role":"user"}},"sessionId":"p3s-01","type":"entry"},"v":1}
+{"payload":{"item":{"id":"p3e-06","kind":"message","parentId":"p3e-05","payload":{"content":"Tool turn complete with steering.","role":"assistant","stopReason":"done"}},"sessionId":"p3s-01","type":"entry"},"v":1}
+{"payload":{"item":{"id":"p3r-03","kind":"operation_finished","payload":{"operationId":"p3o-01","outcome":"done"}},"sessionId":"p3s-01","type":"record"},"v":1}
+{"payload":{"item":{"id":"p3e-07","kind":"message","parentId":"p3e-06","payload":{"content":"Give the short follow-up.","role":"user"}},"sessionId":"p3s-01","type":"entry"},"v":1}
+{"payload":{"item":{"id":"p3r-04","kind":"operation_started","payload":{"intent":"turn","operationId":"p3o-02","promptEntryId":"p3e-07","turnOrdinal":2}},"sessionId":"p3s-01","type":"record"},"v":1}
+{"payload":{"item":{"id":"p3e-08","kind":"message","parentId":"p3e-07","payload":{"content":"Follow-up complete.","role":"assistant","stopReason":"done"}},"sessionId":"p3s-01","type":"entry"},"v":1}
+{"payload":{"item":{"id":"p3r-05","kind":"operation_finished","payload":{"operationId":"p3o-02","outcome":"done"}},"sessionId":"p3s-01","type":"record"},"v":1}
+{"payload":{"item":{"id":"p3e-09","kind":"message","parentId":"p3e-08","payload":{"content":"This request will be aborted.","role":"user"}},"sessionId":"p3s-01","type":"entry"},"v":1}
+{"payload":{"item":{"id":"p3r-06","kind":"operation_started","payload":{"intent":"turn","operationId":"p3o-03","promptEntryId":"p3e-09","turnOrdinal":3}},"sessionId":"p3s-01","type":"record"},"v":1}
+{"payload":{"item":{"id":"p3e-10","kind":"message","parentId":"p3e-09","payload":{"content":"Partial answer.","role":"assistant","stopReason":"aborted"}},"sessionId":"p3s-01","type":"entry"},"v":1}
+{"payload":{"item":{"id":"p3r-07","kind":"operation_finished","payload":{"operationId":"p3o-03","outcome":"aborted"}},"sessionId":"p3s-01","type":"record"},"v":1}
+{"payload":{"item":{"id":"p3r-08","kind":"leaf_moved","payload":{"toEntryId":"p3e-06"}},"sessionId":"p3s-01","type":"record"},"v":1}
+{"payload":{"item":{"id":"p3e-11","kind":"message","parentId":"p3e-06","payload":{"content":"Answer from the earlier branch.","role":"user"}},"sessionId":"p3s-01","type":"entry"},"v":1}
+{"payload":{"item":{"id":"p3r-09","kind":"operation_started","payload":{"intent":"turn","operationId":"p3o-04","promptEntryId":"p3e-11","turnOrdinal":2}},"sessionId":"p3s-01","type":"record"},"v":1}
+{"payload":{"item":{"id":"p3e-12","kind":"message","parentId":"p3e-11","payload":{"content":"Branched answer.","role":"assistant","stopReason":"done"}},"sessionId":"p3s-01","type":"entry"},"v":1}
+{"payload":{"item":{"id":"p3r-10","kind":"operation_finished","payload":{"operationId":"p3o-04","outcome":"done"}},"sessionId":"p3s-01","type":"record"},"v":1}
+{"payload":{"item":{"id":"p3e-13","kind":"compaction","parentId":"p3e-12","payload":{"firstSummarizedId":"p3e-02","lastSummarizedId":"p3e-12","retainedTailIds":["p3e-11","p3e-12"],"summary":"Canonical compacted transcript."}},"sessionId":"p3s-01","type":"entry"},"v":1}
