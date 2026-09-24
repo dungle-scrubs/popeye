@@ -191,6 +191,90 @@ test("rpc abort bypasses a stalled prompt and correlates both responses", async 
   });
 });
 
+test("rpc close bypasses a stalled prompt and emits the terminal closed shape", async () => {
+  const input = new PassThrough();
+  const providerEntered = Promise.withResolvers<void>();
+  const closeWritten = Promise.withResolvers<Record<string, unknown>>();
+  const promptWritten = Promise.withResolvers<Record<string, unknown>>();
+  const stalledProvider: ProviderService = {
+    streamAssistant: () =>
+      Stream.fromEffect(
+        Effect.sync(() => providerEntered.resolve()).pipe(
+          Effect.as({ _tag: "textDelta" as const, text: "Partial answer." }),
+        ),
+      ).pipe(Stream.concat(Stream.never)),
+  };
+  const stalledLayer = Layer.merge(
+    FirstPartyDriverDefault().pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          JournalMemory(createMemoryJournalBacking()),
+          Layer.succeed(Provider, stalledProvider),
+          ToolRegistryLive([]),
+        ),
+      ),
+    ),
+    RpcInteractionsLive,
+  );
+  const writer: HeadWriter = {
+    write: (text) =>
+      Effect.sync(() => {
+        const frame = JSON.parse(text) as Record<string, unknown>;
+        if (frame.id === "close-stalled") {
+          closeWritten.resolve(frame);
+        }
+        if (frame.id === "prompt-stalled") {
+          promptWritten.resolve(frame);
+        }
+      }),
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const session = yield* driver.createSession();
+      const head = yield* runRpcHead({ input, writer }).pipe(Effect.forkDaemon);
+      input.write(
+        `${JSON.stringify({
+          _tag: "prompt",
+          content: "Stall until closed.",
+          id: "prompt-stalled",
+          sessionId: session.id,
+        })}\n`,
+      );
+      yield* Effect.promise(() => providerEntered.promise);
+      input.write(
+        `${JSON.stringify({ _tag: "close", id: "close-stalled", sessionId: session.id })}\n`,
+      );
+
+      const close = yield* Effect.raceFirst(
+        Effect.promise(() => closeWritten.promise).pipe(
+          Effect.map((frame) => frame as Record<string, unknown> | undefined),
+        ),
+        Effect.sleep("200 millis").pipe(Effect.as(undefined)),
+      );
+      if (close === undefined) {
+        input.end();
+        yield* Fiber.join(head);
+        return undefined;
+      }
+      input.end();
+      const exitCode = yield* Fiber.join(head);
+      return { close, exitCode };
+    }).pipe(Effect.ensuring(Effect.sync(() => input.end())), Effect.provide(stalledLayer)),
+  );
+
+  expect(result).toBeDefined();
+  if (result === undefined) {
+    return;
+  }
+  expect(result.exitCode).toBe(0);
+  expect(result.close).toMatchObject({
+    id: "close-stalled",
+    result: { _tag: "closed", cause: "clean", drainedWithinGrace: true, exitCode: 0 },
+  });
+});
+
 test("rpc abort outracing a queued prompt reports that no turn was aborted", async () => {
   const input = new PassThrough();
   const setModelStarted = Promise.withResolvers<void>();

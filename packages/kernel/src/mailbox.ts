@@ -327,7 +327,11 @@ export const MailboxLive = (options: MailboxOptions = {}): Layer.Layer<Mailbox, 
           yield* Queue.shutdown(mailbox.queue);
           const consumer = yield* Ref.get(mailbox.consumer);
           if (consumer !== undefined) {
-            yield* Fiber.interrupt(consumer);
+            // Past grace the HCN close path takes over: interrupt in the
+            // background and return now instead of awaiting the overrun.
+            yield* Option.isSome(settled)
+              ? Fiber.interrupt(consumer)
+              : Effect.forkDaemon(Fiber.interrupt(consumer)).pipe(Effect.asVoid);
           }
           return Option.isSome(settled);
         }).pipe(Effect.uninterruptible);

@@ -779,3 +779,31 @@ test("closeSession on an idle session drains cleanly", async () => {
   expect(result.drainedWithinGrace).toBe(true);
   expect(result.snapshot.entries).toHaveLength(1);
 });
+
+test("closeSession aborts a running turn mid-stream", async () => {
+  const turnStarted = await Effect.runPromise(Deferred.make<void>());
+  const provider: ProviderService = {
+    streamAssistant: () =>
+      Stream.fromEffect(
+        Deferred.succeed(turnStarted, undefined).pipe(
+          Effect.as({ _tag: "textDelta" as const, text: "Partial answer." }),
+        ),
+      ).pipe(Stream.concat(Stream.never)),
+  };
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const session = yield* driver.createSession();
+      const promptFiber = yield* Effect.fork(driver.prompt(session.id, "Stalled turn."));
+      yield* Deferred.await(turnStarted);
+      const closed = yield* driver.closeSession(session.id);
+      yield* Fiber.join(promptFiber).pipe(Effect.catchAll(() => Effect.succeed(null)));
+      return closed;
+    }).pipe(Effect.provide(driverLayer(provider))),
+  );
+
+  expect(result.drainedWithinGrace).toBe(true);
+  expect(result.snapshot.entries.at(-1)).toMatchObject({
+    payload: { role: "assistant", stopReason: "aborted" },
+  });
+});

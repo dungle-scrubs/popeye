@@ -758,7 +758,11 @@ const handleDispatchBoundExceeded = (
 };
 
 const dispatchRoute = (command: RpcInboundCommand): RpcDispatchRoute => {
-  if (command._tag === "abort" || command._tag === "interaction-response") {
+  if (
+    command._tag === "abort" ||
+    command._tag === "close" ||
+    command._tag === "interaction-response"
+  ) {
     return { _tag: "control" };
   }
   if (command._tag === "create" || command._tag === "list") {

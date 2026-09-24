@@ -58,7 +58,13 @@ import {
   ToolResultMessagePayloadSchema,
 } from "./entry-payloads.js";
 import type { TurnQueueFull } from "./errors.js";
-import { Mailbox, type MailboxFailure, MailboxLive, type MailboxOptions } from "./mailbox.js";
+import {
+  CLOSE_GRACE_MS,
+  Mailbox,
+  type MailboxFailure,
+  MailboxLive,
+  type MailboxOptions,
+} from "./mailbox.js";
 import { type InvokeCommandError, PluginHost, PluginHostNone } from "./plugin-host.js";
 import { type Progress, ProgressHub, ProgressHubLive, TurnPhaseSchema } from "./progress.js";
 import { Provider, type ThinkingLevel, ThinkingLevelSchema } from "./provider.js";
@@ -441,8 +447,13 @@ export const DriverLive: Layer.Layer<
       sessionId: SessionId,
     ): Effect.Effect<CloseSessionResult, JournalFailure | MailboxFailure> =>
       Effect.gen(function* () {
-        yield* orchestrator.abortTurn(sessionId).pipe(Effect.catchAll(() => Effect.succeed(null)));
-        const drainedWithinGrace = yield* mailbox.closeSession(sessionId);
+        // One 5s budget for the whole close: abort plus drain race it
+        // together instead of stacking two serial graces. On expiry the
+        // HCN close path takes over; the snapshot read still runs.
+        const settled = yield* Effect.gen(function* () {
+          yield* orchestrator.abortTurn(sessionId);
+          return yield* mailbox.closeSession(sessionId);
+        }).pipe(Effect.timeoutOption(`${CLOSE_GRACE_MS} millis`));
         const snapshot = yield* readSnapshotCore(sessionId).pipe(
           Effect.flatMap((core) =>
             journal
@@ -450,7 +461,7 @@ export const DriverLive: Layer.Layer<
               .pipe(Effect.map((revision) => makeSnapshot(core, revision))),
           ),
         );
-        return { drainedWithinGrace, snapshot };
+        return { drainedWithinGrace: settled !== undefined, snapshot };
       });
 
     return {

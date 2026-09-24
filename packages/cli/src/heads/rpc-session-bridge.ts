@@ -257,19 +257,19 @@ export const makeRpcSessionBridge = (options: {
             }),
           ),
           Effect.tap(() =>
-            Effect.sync(() => {
-              attached.delete(sessionId);
-              interactiveHeads.delete(sessionId);
+            Effect.gen(function* () {
+              const head = interactiveHeads.get(sessionId);
+              if (head !== undefined) {
+                yield* interactions.detach(sessionId, head);
+              }
               const subscription = progressSubscriptions.get(sessionId);
               if (subscription !== undefined) {
-                progressSubscriptions.delete(sessionId);
+                yield* Fiber.interrupt(subscription);
               }
-              return subscription;
-            }).pipe(
-              Effect.flatMap((subscription) =>
-                subscription === undefined ? Effect.void : Fiber.interrupt(subscription),
-              ),
-            ),
+              attached.delete(sessionId);
+              interactiveHeads.delete(sessionId);
+              progressSubscriptions.delete(sessionId);
+            }),
           ),
         );
       }
