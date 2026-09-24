@@ -7,15 +7,257 @@
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": true,
       "changelog-sections": [
-        { "type": "feat", "section": "Added" },
-        { "type": "fix", "section": "Fixed" },
-        { "type": "perf", "section": "Changed" },
-        { "type": "refactor", "section": "Changed" },
-        { "type": "deps", "section": "Changed" },
-        { "type": "docs", "section": "Changed" },
-        { "type": "chore", "section": "Changed" },
-        { "type": "ci", "section": "Changed" },
-        { "type": "test", "section": "Changed" }
+        {
+          "type": "feat",
+          "section": "Added"
+        },
+        {
+          "type": "fix",
+          "section": "Fixed"
+        },
+        {
+          "type": "perf",
+          "section": "Changed"
+        },
+        {
+          "type": "refactor",
+          "section": "Changed"
+        },
+        {
+          "type": "deps",
+          "section": "Changed"
+        },
+        {
+          "type": "docs",
+          "section": "Changed"
+        },
+        {
+          "type": "chore",
+          "section": "Changed"
+        },
+        {
+          "type": "ci",
+          "section": "Changed"
+        },
+        {
+          "type": "test",
+          "section": "Changed"
+        }
+      ]
+    },
+    "packages/cli": {
+      "release-type": "node",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true,
+      "changelog-sections": [
+        {
+          "type": "feat",
+          "section": "Added"
+        },
+        {
+          "type": "fix",
+          "section": "Fixed"
+        },
+        {
+          "type": "perf",
+          "section": "Changed"
+        },
+        {
+          "type": "refactor",
+          "section": "Changed"
+        },
+        {
+          "type": "deps",
+          "section": "Changed"
+        },
+        {
+          "type": "docs",
+          "section": "Changed"
+        },
+        {
+          "type": "chore",
+          "section": "Changed"
+        },
+        {
+          "type": "ci",
+          "section": "Changed"
+        },
+        {
+          "type": "test",
+          "section": "Changed"
+        }
+      ]
+    },
+    "packages/journal": {
+      "release-type": "node",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true,
+      "changelog-sections": [
+        {
+          "type": "feat",
+          "section": "Added"
+        },
+        {
+          "type": "fix",
+          "section": "Fixed"
+        },
+        {
+          "type": "perf",
+          "section": "Changed"
+        },
+        {
+          "type": "refactor",
+          "section": "Changed"
+        },
+        {
+          "type": "deps",
+          "section": "Changed"
+        },
+        {
+          "type": "docs",
+          "section": "Changed"
+        },
+        {
+          "type": "chore",
+          "section": "Changed"
+        },
+        {
+          "type": "ci",
+          "section": "Changed"
+        },
+        {
+          "type": "test",
+          "section": "Changed"
+        }
+      ]
+    },
+    "packages/kernel": {
+      "release-type": "node",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true,
+      "changelog-sections": [
+        {
+          "type": "feat",
+          "section": "Added"
+        },
+        {
+          "type": "fix",
+          "section": "Fixed"
+        },
+        {
+          "type": "perf",
+          "section": "Changed"
+        },
+        {
+          "type": "refactor",
+          "section": "Changed"
+        },
+        {
+          "type": "deps",
+          "section": "Changed"
+        },
+        {
+          "type": "docs",
+          "section": "Changed"
+        },
+        {
+          "type": "chore",
+          "section": "Changed"
+        },
+        {
+          "type": "ci",
+          "section": "Changed"
+        },
+        {
+          "type": "test",
+          "section": "Changed"
+        }
+      ]
+    },
+    "packages/plugins": {
+      "release-type": "node",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true,
+      "changelog-sections": [
+        {
+          "type": "feat",
+          "section": "Added"
+        },
+        {
+          "type": "fix",
+          "section": "Fixed"
+        },
+        {
+          "type": "perf",
+          "section": "Changed"
+        },
+        {
+          "type": "refactor",
+          "section": "Changed"
+        },
+        {
+          "type": "deps",
+          "section": "Changed"
+        },
+        {
+          "type": "docs",
+          "section": "Changed"
+        },
+        {
+          "type": "chore",
+          "section": "Changed"
+        },
+        {
+          "type": "ci",
+          "section": "Changed"
+        },
+        {
+          "type": "test",
+          "section": "Changed"
+        }
+      ]
+    },
+    "packages/protocol": {
+      "release-type": "node",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true,
+      "changelog-sections": [
+        {
+          "type": "feat",
+          "section": "Added"
+        },
+        {
+          "type": "fix",
+          "section": "Fixed"
+        },
+        {
+          "type": "perf",
+          "section": "Changed"
+        },
+        {
+          "type": "refactor",
+          "section": "Changed"
+        },
+        {
+          "type": "deps",
+          "section": "Changed"
+        },
+        {
+          "type": "docs",
+          "section": "Changed"
+        },
+        {
+          "type": "chore",
+          "section": "Changed"
+        },
+        {
+          "type": "ci",
+          "section": "Changed"
+        },
+        {
+          "type": "test",
+          "section": "Changed"
+        }
       ]
     }
   }

@@ -17,3 +17,4 @@ coverage/
 # .local.md siblings are local-only and must stay untracked at every scope.
 AGENTS.local.md
 CLAUDE.local.md
+.reflect/
