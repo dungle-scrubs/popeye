@@ -4,9 +4,9 @@
  *
  * Tool Contribution declarations live here as plugin-side structural shapes. They match the
  * public kernel Tool interface without a runtime kernel dependency. This keeps the runtime graph
- * lean. A type-only compatibility test pins the structural contract against @popeye/kernel.
+ * lean. A type-only compatibility test pins the structural contract against @dungle-scrubs/popeye-kernel.
  */
-import type { SessionId } from "@popeye/journal";
+import type { SessionId } from "@dungle-scrubs/popeye-journal";
 import type { Effect, Scope } from "effect";
 import { Data, Schema } from "effect";
 

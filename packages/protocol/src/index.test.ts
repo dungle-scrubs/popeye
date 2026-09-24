@@ -3,7 +3,7 @@ import { expect, test } from "vitest";
 import * as protocol from "./index.js";
 
 test("exports the protocol package marker", () => {
-  expect(protocol.protocolPackage).toBe("@popeye/protocol");
+  expect(protocol.protocolPackage).toBe("@dungle-scrubs/popeye-protocol");
 });
 
 test("exports every wire Schema and strict decoder from the package root", () => {

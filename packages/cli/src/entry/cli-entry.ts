@@ -23,8 +23,8 @@
 import { readFile } from "node:fs/promises";
 import type { Readable, Writable } from "node:stream";
 
-import { JournalStore, type JournalStoreEnv, SessionIdSchema } from "@popeye/journal";
-import { type PluginInteractions, PluginInteractionsNullLive } from "@popeye/plugins";
+import { JournalStore, type JournalStoreEnv, SessionIdSchema } from "@dungle-scrubs/popeye-journal";
+import { type PluginInteractions, PluginInteractionsNullLive } from "@dungle-scrubs/popeye-plugins";
 import { Cause, Data, Effect, Exit, Layer, Logger, Schema, Stream } from "effect";
 
 import type { AssistantItem, Driver, ProviderService } from "../compose.js";
@@ -133,7 +133,7 @@ Options:
   --plugin <path>          Add a Plugin path. Repeatable.
   --resume <sessionId>     Resume a Session.
   --session-dir <dir>      Set the Journal directory. Default: .popeye/sessions.
-  --version                Print the @popeye/cli version.
+  --version                Print the @dungle-scrubs/popeye version.
 
 Loopback endpoints need no API key; the CLI supplies its local placeholder automatically.
 Hosted endpoints require POPEYE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.
@@ -204,7 +204,7 @@ const packageVersion = (): Effect.Effect<string, CliEntryError> =>
       catch: (cause) =>
         entryError(
           "package_metadata_invalid",
-          "Could not read @popeye/cli package metadata.",
+          "Could not read @dungle-scrubs/popeye package metadata.",
           cause,
         ),
       try: () => readFile(new URL("../../package.json", import.meta.url), "utf8"),
@@ -213,7 +213,7 @@ const packageVersion = (): Effect.Effect<string, CliEntryError> =>
       catch: (cause) =>
         entryError(
           "package_metadata_invalid",
-          "@popeye/cli package metadata is not valid JSON.",
+          "@dungle-scrubs/popeye package metadata is not valid JSON.",
           cause,
         ),
       try: () => JSON.parse(source) as unknown,
@@ -226,7 +226,7 @@ const packageVersion = (): Effect.Effect<string, CliEntryError> =>
     ) {
       return yield* entryError(
         "package_metadata_invalid",
-        "@popeye/cli package metadata has no version.",
+        "@dungle-scrubs/popeye package metadata has no version.",
       );
     }
     return metadata.version;

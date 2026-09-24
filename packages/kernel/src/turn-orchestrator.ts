@@ -21,8 +21,8 @@ import {
   Journal,
   type JournalFailure,
   type SessionId,
-} from "@popeye/journal";
-import { ProtocolError } from "@popeye/protocol";
+} from "@dungle-scrubs/popeye-journal";
+import { ProtocolError } from "@dungle-scrubs/popeye-protocol";
 import {
   Cause,
   Context,
@@ -179,7 +179,7 @@ export interface TurnOrchestratorService {
   readonly subscribeProgress: (sessionId: SessionId) => Stream.Stream<Progress>;
 }
 
-export class TurnOrchestrator extends Context.Tag("@popeye/kernel/TurnOrchestrator")<
+export class TurnOrchestrator extends Context.Tag("@dungle-scrubs/popeye-kernel/TurnOrchestrator")<
   TurnOrchestrator,
   TurnOrchestratorService
 >() {}

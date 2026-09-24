@@ -8,7 +8,7 @@
  * timeout enforcement.
  */
 
-import { type SessionId, SessionIdSchema } from "@popeye/journal";
+import { type SessionId, SessionIdSchema } from "@dungle-scrubs/popeye-journal";
 import { Effect, Schema } from "effect";
 
 import type { DriverSnapshot, TurnOptions } from "../compose.js";

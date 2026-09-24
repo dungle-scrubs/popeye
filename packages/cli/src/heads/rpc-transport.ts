@@ -14,7 +14,7 @@
 import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 
-import { ProtocolError } from "@popeye/protocol";
+import { ProtocolError } from "@dungle-scrubs/popeye-protocol";
 import type { Scope } from "effect";
 import { Data, Deferred, Effect, Ref, Stream } from "effect";
 import type { HeadWriteError, HeadWriter } from "./head-wire.js";

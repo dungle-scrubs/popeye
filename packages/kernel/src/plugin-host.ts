@@ -2,7 +2,7 @@
  * Owns the kernel-side seam for Plugin Command dispatch.
  * It exists so the Driver can invoke Commands without depending on the Plugin package.
  */
-import type { SessionId } from "@popeye/journal";
+import type { SessionId } from "@dungle-scrubs/popeye-journal";
 import { Context, Data, Effect, Layer } from "effect";
 
 export class InvokeCommandError extends Data.TaggedError("InvokeCommandError")<{
@@ -56,7 +56,7 @@ export interface PluginHostService {
   ) => Effect.Effect<unknown, InvokeCommandError>;
 }
 
-export class PluginHost extends Context.Tag("@popeye/kernel/PluginHost")<
+export class PluginHost extends Context.Tag("@dungle-scrubs/popeye-kernel/PluginHost")<
   PluginHost,
   PluginHostService
 >() {}

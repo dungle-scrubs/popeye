@@ -1,7 +1,6 @@
 {
-  "name": "@popeye/plugins",
+  "name": "@dungle-scrubs/popeye-plugins",
   "version": "0.0.0",
-  "private": true,
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -13,14 +12,20 @@
     }
   },
   "dependencies": {
-    "@popeye/journal": "workspace:*",
-    "@popeye/protocol": "workspace:*"
+    "@dungle-scrubs/popeye-journal": "workspace:*",
+    "@dungle-scrubs/popeye-protocol": "workspace:*"
   },
   "peerDependencies": {
     "effect": "^3.22.1"
   },
   "devDependencies": {
-    "@popeye/kernel": "workspace:*",
+    "@dungle-scrubs/popeye-kernel": "workspace:*",
     "effect": "3.22.1"
+  },
+  "license": "MIT",
+  "author": "Kevin Frilot",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dungle-scrubs/popeye.git"
   }
 }

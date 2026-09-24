@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { classifyResolvedPluginSource } from "@popeye/plugins";
+import { classifyResolvedPluginSource } from "@dungle-scrubs/popeye-plugins";
 import { Effect, Exit } from "effect";
 import { expect, test } from "vitest";
 

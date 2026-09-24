@@ -2,6 +2,6 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    name: "@popeye/cli",
+    name: "@dungle-scrubs/popeye",
   },
 });

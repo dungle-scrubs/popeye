@@ -33,7 +33,7 @@ export interface PluginPipelineService {
   ) => Effect.Effect<ReadonlyArray<GenerationPlugin>, ContributionRegistryError | PluginLoadError>;
 }
 
-export class PluginPipeline extends Context.Tag("@popeye/plugins/PluginPipeline")<
+export class PluginPipeline extends Context.Tag("@dungle-scrubs/popeye-plugins/PluginPipeline")<
   PluginPipeline,
   PluginPipelineService
 >() {}

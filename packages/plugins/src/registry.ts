@@ -212,10 +212,9 @@ export interface ContributionRegistryService {
   readonly revision: Effect.Effect<number>;
 }
 
-export class ContributionRegistry extends Context.Tag("@popeye/plugins/ContributionRegistry")<
-  ContributionRegistry,
-  ContributionRegistryService
->() {}
+export class ContributionRegistry extends Context.Tag(
+  "@dungle-scrubs/popeye-plugins/ContributionRegistry",
+)<ContributionRegistry, ContributionRegistryService>() {}
 
 const storedKind = <TKind extends string, TPayload, TEncoded>(
   definition: ContributionKind<TKind, TPayload, TEncoded>,

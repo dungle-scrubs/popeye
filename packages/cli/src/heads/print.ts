@@ -7,7 +7,7 @@
  * per-turn deadline because the Provider seam owns idle timeout enforcement.
  */
 
-import type { SessionId } from "@popeye/journal";
+import type { SessionId } from "@dungle-scrubs/popeye-journal";
 import { Effect } from "effect";
 import type { TurnOptions } from "../compose.js";
 import {

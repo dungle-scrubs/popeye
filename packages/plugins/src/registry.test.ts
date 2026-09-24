@@ -1,4 +1,4 @@
-import { SessionIdSchema } from "@popeye/journal";
+import { SessionIdSchema } from "@dungle-scrubs/popeye-journal";
 import { Effect, Schema } from "effect";
 import { expect, test } from "vitest";
 

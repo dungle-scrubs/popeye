@@ -15,7 +15,7 @@ import {
   type Record as JournalRecord,
   type JournalService,
   type SessionId,
-} from "@popeye/journal";
+} from "@dungle-scrubs/popeye-journal";
 import { Deferred, Effect, type Exit, Fiber, Layer, Schema, Stream, Tracer } from "effect";
 
 import { Driver, DriverDefault } from "./driver.js";

@@ -13,8 +13,8 @@ import type {
   Record as JournalRecord,
   JournalService,
   SessionId,
-} from "@popeye/journal";
-import { Journal } from "@popeye/journal";
+} from "@dungle-scrubs/popeye-journal";
+import { Journal } from "@dungle-scrubs/popeye-journal";
 import { Context, Effect, Layer } from "effect";
 
 import {
@@ -36,14 +36,14 @@ export interface RecoveryEngineService {
   readonly plan: (
     records: ReadonlyArray<JournalRecord>,
     entries: ReadonlyArray<Entry>,
-  ) => Effect.Effect<RecoveryPlan, import("@popeye/journal").JournalError>;
+  ) => Effect.Effect<RecoveryPlan, import("@dungle-scrubs/popeye-journal").JournalError>;
   /** Dry-run helper for the matrix harness: bounded + plan without Journal writes. */
   readonly dryRun: (
     allRecords: ReadonlyArray<JournalRecord>,
     entries: ReadonlyArray<Entry>,
   ) => Effect.Effect<
     { readonly bounded: ReadonlyArray<JournalRecord>; readonly plan: RecoveryPlan },
-    import("@popeye/journal").JournalError
+    import("@dungle-scrubs/popeye-journal").JournalError
   >;
   /** Durable: the one resume path — reads Journal, derives plan, applies it, returns leaf + report. */
   readonly resume: (
@@ -52,7 +52,7 @@ export interface RecoveryEngineService {
   ) => Effect.Effect<{ readonly leaf: Entry; readonly report: RecoveryReport }, JournalFailure>;
 }
 
-export class RecoveryEngine extends Context.Tag("@popeye/kernel/RecoveryEngine")<
+export class RecoveryEngine extends Context.Tag("@dungle-scrubs/popeye-kernel/RecoveryEngine")<
   RecoveryEngine,
   RecoveryEngineService
 >() {}

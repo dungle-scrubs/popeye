@@ -48,13 +48,17 @@ test("packed packages run both conformance suites in a clean consumer", async ()
     await mkdir(consumerDirectory, { recursive: true });
     await mkdir(packDirectory, { recursive: true });
     run(repositoryRoot, ["build"]);
-    for (const packageName of ["@popeye/journal", "@popeye/protocol", "@popeye/kernel"]) {
+    for (const packageName of [
+      "@dungle-scrubs/popeye-journal",
+      "@dungle-scrubs/popeye-protocol",
+      "@dungle-scrubs/popeye-kernel",
+    ]) {
       run(repositoryRoot, ["--filter", packageName, "pack", "--pack-destination", packDirectory]);
     }
 
-    const journalTarball = await packedTarball(packDirectory, "popeye-journal-");
-    const kernelTarball = await packedTarball(packDirectory, "popeye-kernel-");
-    const protocolTarball = await packedTarball(packDirectory, "popeye-protocol-");
+    const journalTarball = await packedTarball(packDirectory, "dungle-scrubs-popeye-journal-");
+    const kernelTarball = await packedTarball(packDirectory, "dungle-scrubs-popeye-kernel-");
+    const protocolTarball = await packedTarball(packDirectory, "dungle-scrubs-popeye-protocol-");
     await writeFile(
       join(consumerDirectory, "package.json"),
       `${JSON.stringify(
@@ -72,8 +76,8 @@ test("packed packages run both conformance suites in a clean consumer", async ()
       `${JSON.stringify(
         {
           overrides: {
-            "@popeye/journal": `file:${journalTarball}`,
-            "@popeye/protocol": `file:${protocolTarball}`,
+            "@dungle-scrubs/popeye-journal": `file:${journalTarball}`,
+            "@dungle-scrubs/popeye-protocol": `file:${protocolTarball}`,
           },
         },
         null,
@@ -81,13 +85,7 @@ test("packed packages run both conformance suites in a clean consumer", async ()
       )}\n`,
     );
 
-    const installOptions = [
-      "--prefer-offline",
-      "--ignore-scripts",
-      "--config.auto-install-peers=false",
-      "--store-dir",
-      storeDirectory,
-    ];
+    const installOptions = ["--prefer-offline", "--ignore-scripts", "--store-dir", storeDirectory];
     run(consumerDirectory, [
       "add",
       ...installOptions,
@@ -102,10 +100,10 @@ test("packed packages run both conformance suites in a clean consumer", async ()
 import { access } from "node:fs/promises";
 
 await assert.rejects(access(new URL("./node_modules/vitest/package.json", import.meta.url)));
-const journal = await import("@popeye/journal");
-const kernel = await import("@popeye/kernel");
-assert.equal(journal.journalPackage, "@popeye/journal");
-assert.equal(kernel.kernelPackage, "@popeye/kernel");
+const journal = await import("@dungle-scrubs/popeye-journal");
+const kernel = await import("@dungle-scrubs/popeye-kernel");
+assert.equal(journal.journalPackage, "@dungle-scrubs/popeye-journal");
+assert.equal(kernel.kernelPackage, "@dungle-scrubs/popeye-kernel");
 `,
     );
     run(consumerDirectory, ["exec", "node", "check-main.mjs"]);
@@ -116,11 +114,11 @@ assert.equal(kernel.kernelPackage, "@popeye/kernel");
       `import {
   createMemoryJournalContractHarness,
   describeJournalContract,
-} from "@popeye/journal/conformance";
+} from "@dungle-scrubs/popeye-journal/conformance";
 import {
   createPiAiSeamContractHarness,
   describeAiSeamContract,
-} from "@popeye/kernel/ai-conformance";
+} from "@dungle-scrubs/popeye-kernel/ai-conformance";
 
 await describeJournalContract(createMemoryJournalContractHarness);
 await describeAiSeamContract(createPiAiSeamContractHarness);
@@ -131,8 +129,8 @@ await describeAiSeamContract(createPiAiSeamContractHarness);
     expect(result.output).toContain("conformance.test.ts");
     expect(result.output).toContain("passed");
     const manifest = await readFile(join(consumerDirectory, "package.json"), "utf8");
-    expect(manifest).toContain('"@popeye/journal"');
-    expect(manifest).toContain('"@popeye/kernel"');
+    expect(manifest).toContain('"@dungle-scrubs/popeye-journal"');
+    expect(manifest).toContain('"@dungle-scrubs/popeye-kernel"');
     expect(manifest).toContain('"vitest"');
   } finally {
     await rm(root, { force: true, recursive: true });

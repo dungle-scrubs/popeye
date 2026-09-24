@@ -1,11 +1,11 @@
-import type { JournalService } from "@popeye/journal";
+import type { JournalService } from "@dungle-scrubs/popeye-journal";
 import {
   createMemoryJournalBacking,
   Journal,
   JournalMemory,
   RecordDraftSchema,
   SessionIdSchema,
-} from "@popeye/journal";
+} from "@dungle-scrubs/popeye-journal";
 import { Deferred, Effect, Exit, Fiber, Layer, Scope, Tracer } from "effect";
 import { expect, test } from "vitest";
 

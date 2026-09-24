@@ -19,9 +19,9 @@ test("The protocol package has zero kernel imports (package graph verified)", as
     sources.push(await readFile(file, "utf8"));
   }
 
-  expect(dependencies).toHaveProperty("@popeye/journal", "workspace:*");
-  expect(dependencies).not.toHaveProperty("@popeye/kernel");
-  expect(Object.values(imports)).not.toContain("@popeye/kernel");
+  expect(dependencies).toHaveProperty("@dungle-scrubs/popeye-journal", "workspace:*");
+  expect(dependencies).not.toHaveProperty("@dungle-scrubs/popeye-kernel");
+  expect(Object.values(imports)).not.toContain("@dungle-scrubs/popeye-kernel");
   expect(tsconfig.references).toEqual([{ path: "../journal" }]);
-  expect(sources.join("\n")).not.toContain('from "@popeye/kernel"');
+  expect(sources.join("\n")).not.toContain('from "@dungle-scrubs/popeye-kernel"');
 });

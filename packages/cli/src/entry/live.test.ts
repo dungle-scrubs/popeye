@@ -5,7 +5,7 @@
  * POPEYE_LIVE_ENDPOINT=http://127.0.0.1:1234/v1 \
  * POPEYE_LIVE_MODEL=lmstudio-community/qwen3.6-27b-mlx \
  * POPEYE_LIVE_MODEL_ALT=openai/gpt-oss-20b \
- * pnpm vitest run --project @popeye/cli src/entry/live.test.ts
+ * pnpm vitest run --project @dungle-scrubs/popeye src/entry/live.test.ts
  *
  * The local suite is skipped unless POPEYE_LIVE_ENDPOINT and POPEYE_LIVE_MODEL are set. Spawned local
  * processes have every supported API-key variable removed, so they exercise keyless loopback.
@@ -19,8 +19,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import type { Progress, Snapshot } from "@popeye/protocol";
-import { decodeProgress, decodeSnapshot } from "@popeye/protocol";
+import type { Progress, Snapshot } from "@dungle-scrubs/popeye-protocol";
+import { decodeProgress, decodeSnapshot } from "@dungle-scrubs/popeye-protocol";
 import { Effect } from "effect";
 import { afterEach, beforeAll, expect, test } from "vitest";
 

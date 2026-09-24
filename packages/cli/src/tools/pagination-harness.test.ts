@@ -1,11 +1,11 @@
-import { createMemoryJournalBacking, JournalMemory } from "@popeye/journal";
+import { createMemoryJournalBacking, JournalMemory } from "@dungle-scrubs/popeye-journal";
 import {
   type PaginationInput,
   paginateSnapshot,
   reassembleSnapshots,
   SnapshotSchema,
   sliceSnapshotByRange,
-} from "@popeye/protocol";
+} from "@dungle-scrubs/popeye-protocol";
 import { Effect, Fiber, Layer, Schema, Stream } from "effect";
 import { describe, expect, test } from "vitest";
 import { Driver, FirstPartyDriverDefault, Provider, ToolRegistryLive } from "../compose.js";
@@ -13,9 +13,9 @@ import { Driver, FirstPartyDriverDefault, Provider, ToolRegistryLive } from "../
 const CONTEXT_BUDGET = 4_000_000;
 
 const makeEntry = (id: string, parentId: string | null, payload: unknown, kind = "message") => ({
-  id: id as unknown as import("@popeye/journal").EntryId,
+  id: id as unknown as import("@dungle-scrubs/popeye-journal").EntryId,
   kind,
-  parentId: parentId as unknown as import("@popeye/journal").EntryId | null,
+  parentId: parentId as unknown as import("@dungle-scrubs/popeye-journal").EntryId | null,
   payload,
 });
 
@@ -23,11 +23,11 @@ const paginationInput = (
   entries: ReturnType<typeof makeEntry>[],
   leafId: string,
 ): PaginationInput => ({
-  entries: entries as unknown as import("@popeye/journal").Entry[],
-  leafEntryId: leafId as unknown as import("@popeye/journal").EntryId,
+  entries: entries as unknown as import("@dungle-scrubs/popeye-journal").Entry[],
+  leafEntryId: leafId as unknown as import("@dungle-scrubs/popeye-journal").EntryId,
   phase: "IDLE" as const,
   revision: entries.length,
-  sessionId: "session-1" as unknown as import("@popeye/journal").SessionId,
+  sessionId: "session-1" as unknown as import("@dungle-scrubs/popeye-journal").SessionId,
 });
 
 describe("M6 harness mirroring snapshot-size-report", () => {
@@ -114,8 +114,8 @@ describe("M6 harness mirroring snapshot-size-report", () => {
     }
     const leaf = parent;
     const input = paginationInput(entries, leaf);
-    const after = "e5" as unknown as import("@popeye/journal").EntryId;
-    const before = "e15" as unknown as import("@popeye/journal").EntryId;
+    const after = "e5" as unknown as import("@dungle-scrubs/popeye-journal").EntryId;
+    const before = "e15" as unknown as import("@dungle-scrubs/popeye-journal").EntryId;
     const sliced = sliceSnapshotByRange(input, after, before);
     expect(sliced.isValid).toBe(true);
     expect(sliced.snapshot.entries.map((e) => e.id)).toEqual([
@@ -182,11 +182,11 @@ describe("M6 harness mirroring snapshot-size-report", () => {
     const firstHalf = sliceSnapshotByRange(
       input,
       null,
-      "e26" as unknown as import("@popeye/journal").EntryId,
+      "e26" as unknown as import("@dungle-scrubs/popeye-journal").EntryId,
     ).snapshot;
     const secondHalf = sliceSnapshotByRange(
       input,
-      "e25" as unknown as import("@popeye/journal").EntryId,
+      "e25" as unknown as import("@dungle-scrubs/popeye-journal").EntryId,
       null,
     ).snapshot;
     // Ensure windows are correct

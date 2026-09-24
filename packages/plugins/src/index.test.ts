@@ -3,7 +3,7 @@ import { expect, test } from "vitest";
 import * as plugins from "./index.js";
 
 test("exports the plugins package marker", () => {
-  expect(plugins.pluginsPackage).toBe("@popeye/plugins");
+  expect(plugins.pluginsPackage).toBe("@dungle-scrubs/popeye-plugins");
 });
 
 test("exports the M15 interface from the public Plugin seam", () => {

@@ -7,8 +7,8 @@ import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { createMemoryJournalBacking, JournalMemory } from "@popeye/journal";
-import { SnapshotSchema } from "@popeye/protocol";
+import { createMemoryJournalBacking, JournalMemory } from "@dungle-scrubs/popeye-journal";
+import { SnapshotSchema } from "@dungle-scrubs/popeye-protocol";
 import { Cause, Data, Effect, Exit, Layer, Schema, Stream } from "effect";
 
 import {

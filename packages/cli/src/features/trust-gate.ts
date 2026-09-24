@@ -13,7 +13,7 @@ import {
   PluginInteractions,
   type TrustHookInput,
   type TrustHookOutput,
-} from "@popeye/plugins";
+} from "@dungle-scrubs/popeye-plugins";
 import { Effect } from "effect";
 
 const makeTrustGatePlugin = () => {

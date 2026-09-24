@@ -80,7 +80,7 @@ test("hcn head scopes the diagnostic to the current turn on resume", async () =>
     JSON.parse(first.output().trimEnd().split("\n")[0] ?? "null") as {
       readonly sessionId: string;
     }
-  ).sessionId as unknown as import("@popeye/journal").SessionId;
+  ).sessionId as unknown as import("@dungle-scrubs/popeye-journal").SessionId;
 
   const second = captureWriter();
   const secondExit = await Effect.runPromise(
@@ -225,7 +225,7 @@ test("hcn boundary failures end failed with exit 1 and HCN events", async () => 
   const exitCode = await Effect.runPromise(
     runHcnHead({
       prompts: [prompts.plain],
-      sessionId: "missing-session" as unknown as import("@popeye/journal").SessionId,
+      sessionId: "missing-session" as unknown as import("@dungle-scrubs/popeye-journal").SessionId,
       writer: capture.writer,
     }).pipe(Effect.provide(scriptedDriverLayer())),
   );

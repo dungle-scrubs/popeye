@@ -10,7 +10,7 @@
  * in this mode only; the in-tree json mapping (abort to 2) is unchanged.
  */
 
-import type { SessionId } from "@popeye/journal";
+import type { SessionId } from "@dungle-scrubs/popeye-journal";
 import { Cause, Effect, Option, Schema } from "effect";
 import type { AssistantDiagnostic, DriverSnapshot, Progress, TurnOptions } from "../compose.js";
 import { AssistantDiagnosticSchema, type Driver as DriverTag } from "../compose.js";

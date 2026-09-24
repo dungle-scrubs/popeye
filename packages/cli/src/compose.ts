@@ -34,7 +34,7 @@ import {
   type ToolRegistryService,
   type TurnOptions,
   type TurnResult,
-} from "@popeye/kernel";
+} from "@dungle-scrubs/popeye-kernel";
 import {
   type CapabilityGrants,
   CommandContributionKind,
@@ -42,7 +42,7 @@ import {
   createCapabilityGrants,
   type HookEmitterService,
   type PluginGeneration,
-} from "@popeye/plugins";
+} from "@dungle-scrubs/popeye-plugins";
 import { Effect, Layer, Logger, Schema } from "effect";
 
 import { composePluginRuntime, type FirstPartyPlugin } from "./plugins/pipeline.js";

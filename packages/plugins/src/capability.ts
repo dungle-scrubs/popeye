@@ -4,7 +4,7 @@
  * Capabilities are not an enforcement boundary. Trust is the control, per D-005 and the RFC
  * security posture.
  */
-import type { SessionId } from "@popeye/journal";
+import type { SessionId } from "@dungle-scrubs/popeye-journal";
 import { Schema } from "effect";
 
 export const CapabilityNameSchema = Schema.String.pipe(

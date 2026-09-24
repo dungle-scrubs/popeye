@@ -1,7 +1,6 @@
 {
-  "name": "@popeye/kernel",
+  "name": "@dungle-scrubs/popeye-kernel",
   "version": "0.0.0",
-  "private": true,
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -21,12 +20,12 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.84.1",
-    "@popeye/journal": "workspace:*",
-    "@popeye/protocol": "workspace:*"
+    "@dungle-scrubs/popeye-journal": "workspace:*",
+    "@dungle-scrubs/popeye-protocol": "workspace:*"
   },
   "peerDependencies": {
     "effect": "^3.22.1",
-    "vitest": "^3.2.7"
+    "vitest": "^5.0.1"
   },
   "peerDependenciesMeta": {
     "vitest": {
@@ -35,6 +34,12 @@
   },
   "devDependencies": {
     "effect": "3.22.1",
-    "vitest": "3.2.7"
+    "vitest": "5.0.1"
+  },
+  "license": "MIT",
+  "author": "Kevin Frilot",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dungle-scrubs/popeye.git"
   }
 }

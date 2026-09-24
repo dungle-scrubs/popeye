@@ -3,14 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { SessionIdSchema } from "@popeye/journal";
+import { SessionIdSchema } from "@dungle-scrubs/popeye-journal";
 import {
   CommandContributionKind,
   type CommandDeclaration,
   type CommandExecutionContext,
   createCapabilityGrants,
   type RegisteredContribution,
-} from "@popeye/plugins";
+} from "@dungle-scrubs/popeye-plugins";
 import { Effect, Logger, Schema } from "effect";
 import { expect, test } from "vitest";
 

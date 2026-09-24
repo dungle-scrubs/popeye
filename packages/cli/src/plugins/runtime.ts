@@ -5,14 +5,14 @@
  * Not responsible for generation lifetime (GenerationRuntime owns that), Tool adaptation (adapter owns that) or Turn orchestration.
  */
 
-import { type SessionId, SessionIdSchema } from "@popeye/journal";
-import type { GenerationSwapDiagnostic, PluginGeneration } from "@popeye/plugins";
+import { type SessionId, SessionIdSchema } from "@dungle-scrubs/popeye-journal";
+import type { GenerationSwapDiagnostic, PluginGeneration } from "@dungle-scrubs/popeye-plugins";
 import {
   CommandContributionKind,
   createCapabilityGrants,
   GenerationBusyError,
   makeGenerationRuntimeWithLoader,
-} from "@popeye/plugins";
+} from "@dungle-scrubs/popeye-plugins";
 import { Effect, Schema, type Scope } from "effect";
 import {
   InvokeCommandError,
