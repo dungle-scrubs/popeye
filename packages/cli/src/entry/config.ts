@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 import { Data, Effect } from "effect";
 
-import type { CliMode, ParsedArgs } from "./args.js";
+import type { CliMode, HcnEffort, ParsedArgs } from "./args.js";
 
 export type CliConfigErrorReason =
   | "invalid_base_url"
@@ -16,7 +16,8 @@ export type CliConfigErrorReason =
   | "missing_api_key"
   | "missing_base_url"
   | "missing_fake_provider_script"
-  | "missing_model";
+  | "missing_model"
+  | "unexpressible_flag";
 
 export class CliConfigError extends Data.TaggedError("CliConfigError")<{
   readonly cause?: unknown;
@@ -26,17 +27,30 @@ export class CliConfigError extends Data.TaggedError("CliConfigError")<{
 
 export interface CliRunConfig {
   readonly action: "run";
+  readonly access: string | undefined;
   readonly apiKey: string | undefined;
+  readonly appendSystemPrompt: string | undefined;
   readonly baseUrl: string;
   readonly baseUrlHost: string;
+  readonly contextWindow: number | undefined;
+  readonly effort: HcnEffort | undefined;
+  readonly excludeTools: ReadonlyArray<string>;
   readonly fakeProviderScript: string | undefined;
+  readonly isolation: string | undefined;
+  /** Declared no-op divergence: accepted and ignored. */
+  readonly memory: boolean | undefined;
   readonly mode: CliMode;
   readonly model: string;
   readonly noProjectPlugins: boolean;
   readonly pluginPaths: ReadonlyArray<string>;
   readonly prompt: string | undefined;
+  /** Declared divergence: ask never emits awaiting-input. */
+  readonly questions: string | undefined;
   readonly resume: string | undefined;
   readonly sessionDir: string;
+  readonly skills: ReadonlyArray<string>;
+  readonly systemPrompt: string | undefined;
+  readonly tools: ReadonlyArray<string>;
   readonly userPluginDir: string;
 }
 
@@ -82,6 +96,14 @@ export const resolveConfig = (
   Effect.gen(function* () {
     if (parsed.action !== "run") {
       return parsed;
+    }
+    // Flat journal dir with no workspace binding risks resuming a stranger
+    // session: refuse before touching any session state.
+    if (parsed.resumeLast === true) {
+      return yield* configError(
+        "unexpressible_flag",
+        "--resume-last is not supported: popeye sessions have no workspace binding.",
+      );
     }
     if (parsed.model === "") {
       return yield* configError(
@@ -132,17 +154,28 @@ export const resolveConfig = (
 
     return {
       action: "run",
+      access: configured(parsed.access),
       apiKey,
+      appendSystemPrompt: configured(parsed.appendSystemPrompt),
       baseUrl,
       baseUrlHost: endpoint.hostname,
+      contextWindow: parsed.contextWindow,
+      effort: parsed.effort,
+      excludeTools: parsed.excludeTools,
       fakeProviderScript,
+      isolation: configured(parsed.isolation),
+      memory: parsed.memory,
       mode: parsed.mode,
       model,
       noProjectPlugins: parsed.noProjectPlugins,
       pluginPaths: parsed.pluginPaths,
       prompt: parsed.prompt,
+      questions: configured(parsed.questions),
       resume: configured(parsed.resume),
       sessionDir: configured(parsed.sessionDir) ?? ".popeye/sessions",
+      skills: parsed.skills,
+      systemPrompt: configured(parsed.systemPrompt),
+      tools: parsed.tools,
       // POPEYE_USER_PLUGIN_DIR is test-support and deliberately undocumented,
       // the same posture as POPEYE_FAKE_PROVIDER_SCRIPT.
       userPluginDir:
