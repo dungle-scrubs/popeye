@@ -388,6 +388,54 @@ test("the built RPC Head serves LF-delimited commands until stdin closes", () =>
   ]);
 });
 
+test("the built RPC Head closes a session with the terminal closed shape", () => {
+  const sessionDir = sessionDirectory();
+  const create = runBuiltBin(["-p", "--mode", "rpc", "--session-dir", sessionDir], {
+    env: fakeProviderEnvironment(),
+    input: `${JSON.stringify({ _tag: "create", id: "create-close" })}\n`,
+  });
+
+  expect(create.status, create.stderr).toBe(0);
+  const sessionId = (
+    JSON.parse(create.stdout.trimEnd()) as {
+      readonly result?: { readonly sessionId?: unknown };
+    }
+  ).result?.sessionId;
+  expect(sessionId).toBeTypeOf("string");
+  if (typeof sessionId !== "string") {
+    throw new Error("RPC create response did not contain a Session id.");
+  }
+
+  const result = runBuiltBin(["-p", "--mode", "rpc", "--session-dir", sessionDir], {
+    env: fakeProviderEnvironment(),
+    input: `${[
+      { _tag: "resume", id: "resume-close", sessionId },
+      { _tag: "close", id: "close-close", sessionId },
+    ]
+      .map((frame) => JSON.stringify(frame))
+      .join("\n")}\n`,
+  });
+
+  expect(result.status, result.stderr).toBe(0);
+  const lines = result.stdout
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  expect(lines).toMatchObject([
+    { id: "resume-close", result: { _tag: "snapshot" } },
+    {
+      id: "close-close",
+      result: {
+        _tag: "closed",
+        cause: "clean",
+        drainedWithinGrace: true,
+        exitCode: 0,
+        sessionId,
+      },
+    },
+  ]);
+});
+
 test("the built RPC Head invokes a project Plugin Command", () => {
   const projectPath = sessionDirectory();
   const projectPluginDir = join(projectPath, ".popeye", "plugins");
