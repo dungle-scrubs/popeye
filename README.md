@@ -45,7 +45,7 @@ kernel ai seam. Feature modules import public package roots only.
 ## Install
 
 For a repository quickstart, use Node 24 or later and pnpm 11.5.2. The workspace packages remain
-private. `@popeye/cli` is version `0.1.0` and is linked as the `popeye` executable in this workspace.
+private. `@dungle-scrubs/popeye` is version `0.1.3` and is linked as the `popeye` executable in this workspace.
 No npm release exists yet.
 
 ```sh
@@ -72,7 +72,7 @@ echo "Explain this repository." | popeye -p
 popeye usage export --session-dir .popeye/sessions
 ```
 
-Inside this repository, replace `popeye` with `pnpm --filter @popeye/cli popeye` when the installed bin
+Inside this repository, replace `popeye` with `pnpm --filter @dungle-scrubs/popeye popeye` when the installed bin
 is not on `PATH`. Use `--resume <sessionId>` to continue a Session. Use `--session-dir <dir>` to
 replace the default `.popeye/sessions` Journal directory. Print mode writes settled assistant text.
 JSON mode writes only Progress and Snapshot JSON lines. RPC mode stays open and accepts LF-delimited
