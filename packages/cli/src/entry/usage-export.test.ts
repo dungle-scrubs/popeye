@@ -117,7 +117,7 @@ test("torn JSONL tail fails export without repair or leaking its content", async
   expect(readFileSync(file, "utf8")).toBe(before);
 });
 
-test("direct CLI request reaches the Journal receipt and passive export", async () => {
+test("direct and HCN CLI requests reach distinct Journal receipts and passive export", async () => {
   const directory = mkdtempSync(join(tmpdir(), "popeye-usage-live-fixture-"));
   directories.push(directory);
   const server = createServer((request, response) => {
@@ -140,45 +140,51 @@ test("direct CLI request reaches the Journal receipt and passive export", async 
   try {
     const address = server.address();
     if (address === null || typeof address === "string") throw new Error("No fixture listener");
-    const input = new PassThrough();
-    input.end();
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    let output = "";
-    let errors = "";
-    stdout.on("data", (chunk: Buffer) => {
-      output += chunk.toString();
-    });
-    stderr.on("data", (chunk: Buffer) => {
-      errors += chunk.toString();
-    });
-    const code = await executeCli(
-      ["-p", "--session-dir", directory, "PRIVATE SENTINEL"],
-      {
-        ...cleanCliEnvironment(),
-        POPEYE_BASE_URL: `http://127.0.0.1:${address.port}/v1`,
-        POPEYE_MODEL: "fixture-model",
-        POPEYE_USER_PLUGIN_DIR: join(directory, "plugins"),
-      },
-      { input, stdout, stderr },
-    );
-    expect(code, errors).toBe(0);
-    expect(output).toContain("ok");
+    const run = async (mode: "print" | "hcn") => {
+      const input = new PassThrough();
+      input.end();
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      let output = "";
+      let errors = "";
+      stdout.on("data", (chunk: Buffer) => {
+        output += chunk.toString();
+      });
+      stderr.on("data", (chunk: Buffer) => {
+        errors += chunk.toString();
+      });
+      const code = await executeCli(
+        ["-p", "--mode", mode, "--session-dir", directory, "PRIVATE SENTINEL"],
+        {
+          ...cleanCliEnvironment(),
+          POPEYE_BASE_URL: `http://127.0.0.1:${address.port}/v1`,
+          POPEYE_MODEL: "fixture-model",
+          POPEYE_USER_PLUGIN_DIR: join(directory, "plugins"),
+        },
+        { input, stdout, stderr },
+      );
+      expect(code, errors).toBe(0);
+      expect(output).toContain("ok");
+    };
+    await run("print");
+    await run("hcn");
     const exported = runBuiltBin(["usage", "export", "--session-dir", directory]);
     expect(exported.status, exported.stderr).toBe(0);
     const rows = exported.stdout
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      outcome: "done",
-      model: "fixture-model",
-      counts: {
-        input: { status: "normalized", value: 31 },
-        output: { status: "normalized", value: 4 },
-      },
-    });
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((row) => row.requestId)).size).toBe(2);
+    for (const row of rows)
+      expect(row).toMatchObject({
+        outcome: "done",
+        model: "fixture-model",
+        counts: {
+          input: { status: "normalized", value: 31 },
+          output: { status: "normalized", value: 4 },
+        },
+      });
     expect(exported.stdout).not.toContain("PRIVATE SENTINEL");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
