@@ -413,7 +413,7 @@ const runWithConfig = (
         provider === undefined
           ? PiAiProviderLive({
               accountingProvider: "openai-compatible",
-              accountingProviderClass: "unknown",
+              accountingProviderClass: config.accountingProviderClass,
               ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
               baseUrl: config.baseUrl,
               // RFC-02 P4 item 6: trusted window override replaces the

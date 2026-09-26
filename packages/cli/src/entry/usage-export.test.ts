@@ -213,7 +213,7 @@ test("direct and HCN CLI requests reach distinct Journal receipts and passive ex
         outcome: "done",
         model: "fixture-model",
         provider: "openai-compatible",
-        providerClass: "unknown",
+        providerClass: "local",
         counts: {
           input: { status: "normalized", value: 31 },
           output: { status: "normalized", value: 4 },

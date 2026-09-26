@@ -32,6 +32,7 @@ export interface CliRunConfig {
   readonly appendSystemPrompt: string | undefined;
   readonly baseUrl: string;
   readonly baseUrlHost: string;
+  readonly accountingProviderClass: "local" | "unknown";
   readonly contextWindow: number | undefined;
   readonly effort: HcnEffort | undefined;
   readonly excludeTools: ReadonlyArray<string>;
@@ -159,6 +160,7 @@ export const resolveConfig = (
       appendSystemPrompt: configured(parsed.appendSystemPrompt),
       baseUrl,
       baseUrlHost: endpoint.hostname,
+      accountingProviderClass: isLoopbackHost(endpoint.hostname) ? "local" : "unknown",
       contextWindow: parsed.contextWindow,
       effort: parsed.effort,
       excludeTools: parsed.excludeTools,
