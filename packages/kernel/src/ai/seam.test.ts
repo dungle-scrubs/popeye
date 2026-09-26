@@ -1,17 +1,20 @@
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { createMemoryJournalBacking, Journal, JournalMemory } from "@dungle-scrubs/popeye-journal";
 import type {
+  Api,
   AssistantMessage,
   AssistantMessageEvent,
   AssistantMessageEventStream,
   Context,
+  Model,
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-
 import {
   createAssistantMessageEventStream,
   isRetryableAssistantError,
 } from "@earendil-works/pi-ai";
+import { createFauxCore, fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import {
   Cause,
   Chunk,
@@ -30,6 +33,7 @@ import { ProviderError } from "../errors.js";
 import type { PiAiProviderLayerOptions } from "../index.js";
 import { PiAiProviderLive } from "../index.js";
 import { Provider } from "../provider.js";
+import { accountingRows } from "../request-accounting.js";
 import { defineTool, ToolRegistryLive } from "../tool.js";
 import {
   abortFixture,
@@ -114,6 +118,165 @@ const withOpenAiSseServer = async <TResult>(
     });
   }
 };
+
+test("one provider invocation writes a count-only start and terminal receipt", async () => {
+  const stream = createAssistantMessageEventStream();
+  const partial = fixtureMessage("pending");
+  const final = {
+    ...fixtureMessage("stop"),
+    usage: {
+      ...fixtureMessage("stop").usage,
+      input: 31,
+      output: 4,
+    },
+  };
+  stream.push({ partial, type: "start" });
+  stream.push({ message: final, reason: "stop", type: "done" });
+  const journalLayer = JournalMemory(createMemoryJournalBacking());
+  const providerLayer = makePiAiProviderLayer(
+    fixtureModel,
+    {
+      classifyError: () => false,
+      streamSimple: () => stream,
+    },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { recordUsage: true },
+  );
+  const rows = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const session = yield* journal.createSession();
+      const provider = yield* Provider;
+      yield* Stream.runDrain(
+        provider.streamAssistant([{ role: "user", content: "PRIVATE SENTINEL" }], {
+          attempt: 1,
+          turnOrdinal: 1,
+          accountingScope: {
+            sessionId: session.id,
+            ownerId: "22222222-2222-4222-8222-222222222222",
+          },
+        }),
+      );
+      return accountingRows(session.id, yield* journal.readRecords(session.id));
+    }).pipe(
+      Effect.provide(providerLayer),
+      Effect.provide(Layer.merge(journalLayer, ToolRegistryLive([]))),
+    ),
+  );
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({
+    outcome: "done",
+    counts: {
+      input: { status: "normalized", value: 31 },
+      output: { status: "normalized", value: 4 },
+      cacheRead: { status: "unknown", reason: "ambiguous_zero" },
+    },
+  });
+  expect(JSON.stringify(rows)).not.toContain("PRIVATE SENTINEL");
+});
+
+test("error and local abort each retain a distinct request receipt", async () => {
+  const backing = createMemoryJournalBacking();
+  const journalLayer = JournalMemory(backing);
+  let invocation = 0;
+  const providerLayer = makePiAiProviderLayer(
+    fixtureModel,
+    {
+      classifyError: () => true,
+      streamSimple: () => {
+        invocation += 1;
+        if (invocation === 1) return errorFixture().stream;
+        const partial = fixtureMessage("pending", [{ text: "", type: "text" }]);
+        return trackedStream(
+          [
+            { partial, type: "start" },
+            { contentIndex: 0, partial, type: "text_start" },
+            { contentIndex: 0, delta: "partial", partial, type: "text_delta" },
+          ],
+          () => undefined,
+        );
+      },
+    },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { recordUsage: true },
+  );
+  const rows = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const session = yield* journal.createSession();
+      const provider = yield* Provider;
+      const scope = { sessionId: session.id, ownerId: "22222222-2222-4222-8222-222222222222" };
+      yield* Effect.either(
+        Stream.runDrain(
+          provider.streamAssistant([], { attempt: 1, turnOrdinal: 1, accountingScope: scope }),
+        ),
+      );
+      yield* Stream.runDrain(
+        provider
+          .streamAssistant([], { attempt: 2, turnOrdinal: 1, accountingScope: scope })
+          .pipe(Stream.take(1)),
+      );
+      return accountingRows(session.id, yield* journal.readRecords(session.id));
+    }).pipe(
+      Effect.provide(providerLayer),
+      Effect.provide(Layer.merge(journalLayer, ToolRegistryLive([]))),
+    ),
+  );
+  expect(rows).toHaveLength(2);
+  expect(rows.map((row) => row.outcome)).toEqual(["error", "aborted"]);
+  expect(new Set(rows.map((row) => row.requestId)).size).toBe(2);
+});
+
+test("pi-ai faux positive usage is recorded as estimated", async () => {
+  const faux = createFauxCore({});
+  faux.setResponses([fauxAssistantMessage("A synthetic answer")]);
+  const journalLayer = JournalMemory(createMemoryJournalBacking());
+  const providerLayer = makePiAiProviderLayer(
+    faux.getModel() as Model<Api>,
+    { classifyError: () => false, streamSimple: faux.streamSimple },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { recordUsage: true },
+  );
+  const rows = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const session = yield* journal.createSession();
+      const provider = yield* Provider;
+      yield* Stream.runDrain(
+        provider.streamAssistant([{ role: "user", content: "Count this" }], {
+          attempt: 1,
+          turnOrdinal: 1,
+          accountingScope: {
+            sessionId: session.id,
+            ownerId: "22222222-2222-4222-8222-222222222222",
+          },
+        }),
+      );
+      return accountingRows(session.id, yield* journal.readRecords(session.id));
+    }).pipe(
+      Effect.provide(providerLayer),
+      Effect.provide(Layer.merge(journalLayer, ToolRegistryLive([]))),
+    ),
+  );
+  expect(rows).toHaveLength(1);
+  expect(rows[0]?.counts.input).toMatchObject({
+    status: "estimated",
+    mapping: "pi-ai-faux@0.84.1",
+  });
+  expect(rows[0]?.counts.output).toMatchObject({
+    status: "estimated",
+    mapping: "pi-ai-faux@0.84.1",
+  });
+});
 
 test("recorded interleaved pi-ai fixture maps context, tools, deltas, and settlement in order", async () => {
   const fixture = interleavedFixture();

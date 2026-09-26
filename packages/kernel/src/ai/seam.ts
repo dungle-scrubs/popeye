@@ -9,6 +9,9 @@
  * Not responsible for Session view resolution (turn owns that) or for recovery.
  */
 
+import { randomUUID } from "node:crypto";
+
+import { Journal, RecordDraftSchema } from "@dungle-scrubs/popeye-journal";
 import {
   type Api,
   type AssistantMessage,
@@ -35,12 +38,18 @@ import type {
   ProviderUsage,
 } from "../provider.js";
 import { Provider } from "../provider.js";
+import { countsFromPiAi, type RequestStarted, type RequestUsage } from "../request-accounting.js";
 import type { RegisteredTool } from "../tool.js";
 import { ToolRegistry } from "../tool.js";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30_000;
 const DEFAULT_LOCAL_CONTEXT_WINDOW = 128_000;
 const DEFAULT_LOCAL_MAX_TOKENS = 32_000;
+
+const accountingIdentity = (value: string): string =>
+  value.length <= 256 && /^[A-Za-z0-9][A-Za-z0-9._+:/@-]*$/u.test(value) && !value.includes("://")
+    ? value
+    : "unidentified";
 
 let modelRegistry: ReturnType<typeof builtinModels> | undefined;
 
@@ -61,6 +70,8 @@ interface PiAiRuntime {
 export type PiAiProviderThinkingLevel = "high" | "low" | "max" | "medium" | "minimal" | "xhigh";
 
 export interface PiAiProviderLayerOptions {
+  readonly accountingProvider?: string;
+  readonly accountingProviderClass?: "hosted" | "local" | "unknown";
   readonly apiKey?: string;
   readonly baseUrl?: string;
   /** Fabricated base-URL models default to 128,000 tokens. */
@@ -70,6 +81,7 @@ export interface PiAiProviderLayerOptions {
   readonly maxTokens?: number;
   readonly modelId: string;
   readonly provider: string;
+  readonly recordUsage?: boolean;
   /** Fabricated base-URL models default to non-reasoning. */
   readonly reasoning?: boolean;
   readonly thinkingLevel?: PiAiProviderThinkingLevel;
@@ -563,7 +575,10 @@ const fromPiAiStream = (
   });
 
 export interface MakePiAiProviderLayerOptions {
+  readonly accountingProvider?: string;
+  readonly accountingProviderClass?: "hosted" | "local" | "unknown";
   readonly baseWindowTrusted?: boolean;
+  readonly recordUsage?: boolean;
 }
 
 export const makePiAiProviderLayer = (
@@ -583,6 +598,8 @@ export const makePiAiProviderLayer = (
     Provider,
     Effect.gen(function* () {
       const toolRegistry = yield* ToolRegistry;
+      const journalOption = yield* Effect.serviceOption(Journal);
+      const journal = Option.getOrUndefined(journalOption);
       const fallbackDeclarations = yield* Effect.try({
         catch: (cause) =>
           new ProviderError({
@@ -637,6 +654,15 @@ export const makePiAiProviderLayer = (
                   transient: false,
                 });
               }
+              if (
+                layerOptions.recordUsage &&
+                (journal === undefined || options.accountingScope === undefined)
+              ) {
+                return yield* new ProviderError({
+                  message: "Provider accounting scope is unavailable.",
+                  transient: false,
+                });
+              }
               const piAiContext = yield* Effect.try({
                 catch: (cause) =>
                   new ProviderError({
@@ -648,6 +674,96 @@ export const makePiAiProviderLayer = (
                   }),
                 try: () => toPiAiContext(context, requestModel, declarations),
               });
+              const requestStarted: RequestStarted | undefined =
+                journal === undefined ||
+                options.accountingScope === undefined ||
+                !layerOptions.recordUsage
+                  ? undefined
+                  : {
+                      version: 1,
+                      sessionId: options.accountingScope.sessionId,
+                      ownerId: options.accountingScope.ownerId,
+                      requestId: randomUUID(),
+                      purpose: options.purpose ?? "turn",
+                      attempt: options.attempt,
+                      provider: accountingIdentity(
+                        layerOptions.accountingProvider ?? requestModel.provider,
+                      ),
+                      providerClass: layerOptions.accountingProviderClass ?? "unknown",
+                      model: accountingIdentity(requestModel.id),
+                      startedAt: new Date().toISOString(),
+                    };
+              if (
+                requestStarted !== undefined &&
+                journal !== undefined &&
+                options.accountingScope !== undefined
+              ) {
+                yield* journal
+                  .appendRecord(
+                    options.accountingScope.sessionId,
+                    RecordDraftSchema.make({
+                      kind: "provider_request_started",
+                      payload: requestStarted,
+                    }),
+                  )
+                  .pipe(
+                    Effect.mapError(
+                      () =>
+                        new ProviderError({
+                          message: "Provider accounting start could not be persisted.",
+                          transient: false,
+                        }),
+                    ),
+                  );
+              }
+              let terminalRecorded = false;
+              let sourceCreated = false;
+              let lastUsage: unknown;
+              const appendUsage = (
+                outcome: RequestUsage["outcome"],
+              ): Effect.Effect<void, ProviderError> => {
+                if (
+                  requestStarted === undefined ||
+                  journal === undefined ||
+                  options.accountingScope === undefined
+                )
+                  return Effect.void;
+                const receipt: RequestUsage = {
+                  ...requestStarted,
+                  completedAt: new Date().toISOString(),
+                  outcome,
+                  counts: countsFromPiAi(
+                    lastUsage,
+                    requestModel.provider === "faux" ? "estimated" : "normalized",
+                  ),
+                  attemptGranularity: "provider-invocation",
+                };
+                return journal
+                  .appendRecord(
+                    options.accountingScope.sessionId,
+                    RecordDraftSchema.make({
+                      kind: "provider_request_usage",
+                      payload: receipt,
+                    }),
+                  )
+                  .pipe(
+                    Effect.asVoid,
+                    Effect.mapError(
+                      () =>
+                        new ProviderError({
+                          message: "Provider accounting receipt could not be persisted.",
+                          transient: false,
+                        }),
+                    ),
+                  );
+              };
+              if (requestStarted !== undefined) {
+                yield* Effect.addFinalizer(() =>
+                  terminalRecorded
+                    ? Effect.void
+                    : appendUsage(sourceCreated ? "aborted" : "error").pipe(Effect.orDie),
+                );
+              }
               const source = yield* Effect.try({
                 catch: (cause) =>
                   new ProviderError({
@@ -662,6 +778,7 @@ export const makePiAiProviderLayer = (
                       ? undefined
                       : clampThinkingLevel(requestModel, pinThinkingLevel(requestThinkingLevel));
                   return runtime.streamSimple(requestModel, piAiContext, {
+                    maxRetries: 0,
                     ...(reasoning === undefined || reasoning === "off" ? {} : { reasoning }),
                     ...(apiKey === undefined ? {} : { apiKey }),
                     onResponse: (response) => {
@@ -671,6 +788,7 @@ export const makePiAiProviderLayer = (
                   });
                 },
               });
+              sourceCreated = true;
               const stream = yield* fromPiAiStream(source, controller);
               const estimateChars = context.reduce(
                 (total, item) => total + item.content.length,
@@ -693,6 +811,18 @@ export const makePiAiProviderLayer = (
                 contextWindow: requestModel.contextWindow,
               };
               return stream.pipe(
+                Stream.tap((event) => {
+                  if (event.type !== "done" && event.type !== "error") return Effect.void;
+                  lastUsage = event.type === "done" ? event.message.usage : event.error.usage;
+                  terminalRecorded = true;
+                  return appendUsage(
+                    event.type === "done"
+                      ? "done"
+                      : event.reason === "aborted"
+                        ? "aborted"
+                        : "error",
+                  );
+                }),
                 Stream.mapEffect((event) =>
                   mapStreamItem(event, runtime, () => responseStatus, usageContext),
                 ),
@@ -705,6 +835,11 @@ export const makePiAiProviderLayer = (
                     }),
                   idleTimeoutMs,
                 ),
+                Stream.tapError(() => {
+                  if (terminalRecorded) return Effect.void;
+                  terminalRecorded = true;
+                  return appendUsage("error");
+                }),
               );
             }),
           ).pipe(
@@ -782,6 +917,19 @@ export const PiAiProviderLive = (
         options.thinkingLevel,
         options.apiKey ?? (options.provider === "lmstudio" ? "lm-studio" : undefined),
         (modelId) => resolveModel({ ...options, modelId })?.model,
-        { baseWindowTrusted: resolved.windowTrusted },
+        {
+          baseWindowTrusted: resolved.windowTrusted,
+          ...(options.accountingProvider === undefined
+            ? {}
+            : { accountingProvider: options.accountingProvider }),
+          accountingProviderClass:
+            options.accountingProviderClass ??
+            (options.provider === "lmstudio"
+              ? "local"
+              : options.baseUrl === undefined
+                ? "hosted"
+                : "unknown"),
+          ...(options.recordUsage === undefined ? {} : { recordUsage: options.recordUsage }),
+        },
       );
 };

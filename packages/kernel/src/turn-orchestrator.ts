@@ -806,6 +806,7 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                   yield* Stream.runForEach(
                     provider.streamAssistant(context, {
                       attempt,
+                      accountingScope: { sessionId, ownerId: durability.operationId },
                       ...(options.model === undefined ? {} : { model: options.model }),
                       purpose: "turn",
                       ...(options.thinkingLevel === undefined

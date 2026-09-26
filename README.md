@@ -45,7 +45,7 @@ kernel ai seam. Feature modules import public package roots only.
 ## Install
 
 For a repository quickstart, use Node 24 or later and pnpm 11.5.2. The workspace packages remain
-private. `@popeye/cli` is version `0.1.0` and is linked as the `popeye` executable in this workspace.
+private. `@dungle-scrubs/popeye` is version `0.1.3` and is linked as the `popeye` executable in this workspace.
 No npm release exists yet.
 
 ```sh
@@ -69,14 +69,31 @@ popeye -p --mode json "Explain this repository."
 popeye -p --mode rpc
 popeye "Explain this repository."
 echo "Explain this repository." | popeye -p
+popeye usage export --session-dir .popeye/sessions
 ```
 
-Inside this repository, replace `popeye` with `pnpm --filter @popeye/cli popeye` when the installed bin
+Inside this repository, replace `popeye` with `pnpm --filter @dungle-scrubs/popeye popeye` when the installed bin
 is not on `PATH`. Use `--resume <sessionId>` to continue a Session. Use `--session-dir <dir>` to
 replace the default `.popeye/sessions` Journal directory. Print mode writes settled assistant text.
 JSON mode writes only Progress and Snapshot JSON lines. RPC mode stays open and accepts LF-delimited
 protocol commands on stdin. RPC frames dispatch per Session in arrival order. `abort` and
 `interaction-response` frames bypass the Session queue so they can run during a Turn.
+
+`popeye usage export` reads all Session Records and writes one JSON line per Provider request.
+`--session <id>` limits the scan. Each row has stable Session, owner, and request IDs; Provider
+and model identity; a `providerClass`; outcome; and separate input, output, cache-read, cache-write, one-hour
+cache-write, and reasoning counts. A started request with no receipt is `pending`, with unknown
+counts. Repeated exports have the same request IDs, so an external collector can upsert them.
+The command opens JSONL or SQLite read-only and emits no Entry content, prompts, responses, Tool
+data, endpoint URLs, or credentials. It exits nonzero on a torn or invalid Journal read.
+
+The CLI uses `provider: "openai-compatible"` and `providerClass: "unknown"` for a configured
+base URL, including loopback relays. A collector must not infer a public API price from that
+model name. The pinned pi-ai version normalizes missing usage fields to zero for several Providers.
+Popeye labels positive values `normalized`, faux Provider estimates `estimated`, and ambiguous
+zeros `unknown`; it never treats context-pressure
+`ProviderUsage` as billable tokens. Historical Sessions without these Records have unknown usage
+coverage. The export does not calculate prices.
 
 Use `--plugin <path>` to load an additional Plugin. The flag is repeatable. Use
 `--no-project-plugins` to skip project-local Plugins.
