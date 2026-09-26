@@ -2,17 +2,19 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createMemoryJournalBacking, Journal, JournalMemory } from "@dungle-scrubs/popeye-journal";
 import type {
+  Api,
   AssistantMessage,
   AssistantMessageEvent,
   AssistantMessageEventStream,
   Context,
+  Model,
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-
 import {
   createAssistantMessageEventStream,
   isRetryableAssistantError,
 } from "@earendil-works/pi-ai";
+import { createFauxCore, fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import {
   Cause,
   Chunk,
@@ -152,7 +154,10 @@ test("one provider invocation writes a count-only start and terminal receipt", a
         provider.streamAssistant([{ role: "user", content: "PRIVATE SENTINEL" }], {
           attempt: 1,
           turnOrdinal: 1,
-          accountingScope: { sessionId: session.id, ownerId: "turn-a" },
+          accountingScope: {
+            sessionId: session.id,
+            ownerId: "22222222-2222-4222-8222-222222222222",
+          },
         }),
       );
       return accountingRows(session.id, yield* journal.readRecords(session.id));
@@ -206,7 +211,7 @@ test("error and local abort each retain a distinct request receipt", async () =>
       const journal = yield* Journal;
       const session = yield* journal.createSession();
       const provider = yield* Provider;
-      const scope = { sessionId: session.id, ownerId: "turn-a" };
+      const scope = { sessionId: session.id, ownerId: "22222222-2222-4222-8222-222222222222" };
       yield* Effect.either(
         Stream.runDrain(
           provider.streamAssistant([], { attempt: 1, turnOrdinal: 1, accountingScope: scope }),
@@ -226,6 +231,51 @@ test("error and local abort each retain a distinct request receipt", async () =>
   expect(rows).toHaveLength(2);
   expect(rows.map((row) => row.outcome)).toEqual(["error", "aborted"]);
   expect(new Set(rows.map((row) => row.requestId)).size).toBe(2);
+});
+
+test("pi-ai faux positive usage is recorded as estimated", async () => {
+  const faux = createFauxCore({});
+  faux.setResponses([fauxAssistantMessage("A synthetic answer")]);
+  const journalLayer = JournalMemory(createMemoryJournalBacking());
+  const providerLayer = makePiAiProviderLayer(
+    faux.getModel() as Model<Api>,
+    { classifyError: () => false, streamSimple: faux.streamSimple },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { recordUsage: true },
+  );
+  const rows = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const session = yield* journal.createSession();
+      const provider = yield* Provider;
+      yield* Stream.runDrain(
+        provider.streamAssistant([{ role: "user", content: "Count this" }], {
+          attempt: 1,
+          turnOrdinal: 1,
+          accountingScope: {
+            sessionId: session.id,
+            ownerId: "22222222-2222-4222-8222-222222222222",
+          },
+        }),
+      );
+      return accountingRows(session.id, yield* journal.readRecords(session.id));
+    }).pipe(
+      Effect.provide(providerLayer),
+      Effect.provide(Layer.merge(journalLayer, ToolRegistryLive([]))),
+    ),
+  );
+  expect(rows).toHaveLength(1);
+  expect(rows[0]?.counts.input).toMatchObject({
+    status: "estimated",
+    mapping: "pi-ai-faux@0.84.1",
+  });
+  expect(rows[0]?.counts.output).toMatchObject({
+    status: "estimated",
+    mapping: "pi-ai-faux@0.84.1",
+  });
 });
 
 test("recorded interleaved pi-ai fixture maps context, tools, deltas, and settlement in order", async () => {

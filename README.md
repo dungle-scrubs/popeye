@@ -81,14 +81,17 @@ protocol commands on stdin. RPC frames dispatch per Session in arrival order. `a
 
 `popeye usage export` reads all Session Records and writes one JSON line per Provider request.
 `--session <id>` limits the scan. Each row has stable Session, owner, and request IDs; Provider
-and model identity; outcome; and separate input, output, cache-read, cache-write, one-hour
+and model identity; a `providerClass`; outcome; and separate input, output, cache-read, cache-write, one-hour
 cache-write, and reasoning counts. A started request with no receipt is `pending`, with unknown
 counts. Repeated exports have the same request IDs, so an external collector can upsert them.
 The command opens JSONL or SQLite read-only and emits no Entry content, prompts, responses, Tool
 data, endpoint URLs, or credentials. It exits nonzero on a torn or invalid Journal read.
 
-The pinned pi-ai version normalizes missing usage fields to zero for several Providers. Popeye
-labels positive values `normalized` and ambiguous zeros `unknown`; it never treats context-pressure
+The CLI uses `provider: "openai-compatible"` and `providerClass: "unknown"` for a configured
+base URL, including loopback relays. A collector must not infer a public API price from that
+model name. The pinned pi-ai version normalizes missing usage fields to zero for several Providers.
+Popeye labels positive values `normalized`, faux Provider estimates `estimated`, and ambiguous
+zeros `unknown`; it never treats context-pressure
 `ProviderUsage` as billable tokens. Historical Sessions without these Records have unknown usage
 coverage. The export does not calculate prices.
 

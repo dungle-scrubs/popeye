@@ -70,6 +70,8 @@ interface PiAiRuntime {
 export type PiAiProviderThinkingLevel = "high" | "low" | "max" | "medium" | "minimal" | "xhigh";
 
 export interface PiAiProviderLayerOptions {
+  readonly accountingProvider?: string;
+  readonly accountingProviderClass?: "hosted" | "local" | "unknown";
   readonly apiKey?: string;
   readonly baseUrl?: string;
   /** Fabricated base-URL models default to 128,000 tokens. */
@@ -573,6 +575,8 @@ const fromPiAiStream = (
   });
 
 export interface MakePiAiProviderLayerOptions {
+  readonly accountingProvider?: string;
+  readonly accountingProviderClass?: "hosted" | "local" | "unknown";
   readonly baseWindowTrusted?: boolean;
   readonly recordUsage?: boolean;
 }
@@ -682,7 +686,10 @@ export const makePiAiProviderLayer = (
                       requestId: randomUUID(),
                       purpose: options.purpose ?? "turn",
                       attempt: options.attempt,
-                      provider: accountingIdentity(requestModel.provider),
+                      provider: accountingIdentity(
+                        layerOptions.accountingProvider ?? requestModel.provider,
+                      ),
+                      providerClass: layerOptions.accountingProviderClass ?? "unknown",
                       model: accountingIdentity(requestModel.id),
                       startedAt: new Date().toISOString(),
                     };
@@ -725,7 +732,10 @@ export const makePiAiProviderLayer = (
                   ...requestStarted,
                   completedAt: new Date().toISOString(),
                   outcome,
-                  counts: countsFromPiAi(lastUsage),
+                  counts: countsFromPiAi(
+                    lastUsage,
+                    requestModel.provider === "faux" ? "estimated" : "normalized",
+                  ),
                   attemptGranularity: "provider-invocation",
                 };
                 return journal
@@ -909,6 +919,16 @@ export const PiAiProviderLive = (
         (modelId) => resolveModel({ ...options, modelId })?.model,
         {
           baseWindowTrusted: resolved.windowTrusted,
+          ...(options.accountingProvider === undefined
+            ? {}
+            : { accountingProvider: options.accountingProvider }),
+          accountingProviderClass:
+            options.accountingProviderClass ??
+            (options.provider === "lmstudio"
+              ? "local"
+              : options.baseUrl === undefined
+                ? "hosted"
+                : "unknown"),
           ...(options.recordUsage === undefined ? {} : { recordUsage: options.recordUsage }),
         },
       );

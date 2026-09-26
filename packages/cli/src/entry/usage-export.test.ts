@@ -33,11 +33,12 @@ for (const format of ["jsonl", "sqlite"] as const) {
         const start = {
           version: 1,
           sessionId: session.id,
-          requestId: "request-a",
-          ownerId: "turn-a",
+          requestId: "11111111-1111-4111-8111-111111111111",
+          ownerId: "22222222-2222-4222-8222-222222222222",
           purpose: "turn",
           attempt: 1,
           provider: "fixture",
+          providerClass: "unknown",
           model: "fixture-model",
           startedAt: "2026-09-26T00:00:00.000Z",
         };
@@ -89,12 +90,43 @@ for (const format of ["jsonl", "sqlite"] as const) {
     expect(first.stdout).toBe(second.stdout);
     expect(JSON.parse(first.stdout)).toMatchObject({
       sessionId,
-      requestId: "request-a",
+      requestId: "11111111-1111-4111-8111-111111111111",
       outcome: "done",
     });
     expect(first.stdout).not.toContain("PRIVATE SENTINEL");
     expect(statSync(file).size).toBe(before);
     if (format === "jsonl") expect(readFileSync(file, "utf8")).toContain("PRIVATE SENTINEL");
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const journal = yield* Journal;
+        yield* journal.appendRecord(
+          sessionId,
+          RecordDraftSchema.make({
+            kind: "provider_request_started",
+            payload: {
+              version: 1,
+              sessionId,
+              requestId: "33333333-3333-4333-8333-333333333333",
+              ownerId: "44444444-4444-4444-8444-444444444444",
+              purpose: "turn",
+              attempt: 1,
+              provider: "fixture",
+              providerClass: "unknown",
+              model: "PRIVATE SENTINEL",
+              startedAt: "2026-09-26T00:00:00.000Z",
+            },
+          }),
+        );
+      }).pipe(
+        Effect.provide(format === "sqlite" ? JournalSqlite(directory) : JournalJsonl(directory)),
+      ),
+    );
+    const invalid = runBuiltBin(["usage", "export", "--session-dir", directory]);
+    expect(invalid.status).toBe(4);
+    expect(invalid.stdout).toBe("");
+    expect(invalid.stderr).toBe("ERROR ACCOUNTING_READ_FAILED\n");
+    expect(invalid.stderr).not.toContain("PRIVATE SENTINEL");
   });
 }
 
@@ -180,6 +212,8 @@ test("direct and HCN CLI requests reach distinct Journal receipts and passive ex
       expect(row).toMatchObject({
         outcome: "done",
         model: "fixture-model",
+        provider: "openai-compatible",
+        providerClass: "unknown",
         counts: {
           input: { status: "normalized", value: 31 },
           output: { status: "normalized", value: 4 },
