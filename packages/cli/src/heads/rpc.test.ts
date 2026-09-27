@@ -83,6 +83,112 @@ test("rpc framing uses LF only and preserves Unicode separators, CRLF, empty lin
   ]);
 });
 
+test("rpc resume-goal awaits the Goal chain while Goal pause and clear bypass its Session queue", async () => {
+  const input = new PassThrough();
+  const enteredGoal = Promise.withResolvers<void>();
+  const releaseGoal = Promise.withResolvers<void>();
+  const pauseWritten = Promise.withResolvers<void>();
+  const whitespacePauseWritten = Promise.withResolvers<void>();
+  const clearWritten = Promise.withResolvers<void>();
+  const whitespaceClearWritten = Promise.withResolvers<void>();
+  const resumeWritten = Promise.withResolvers<void>();
+  const goalWritten = Promise.withResolvers<void>();
+  const responses: Array<Record<string, unknown>> = [];
+  let goalResumes = 0;
+  const writer: HeadWriter = {
+    write: (text) =>
+      Effect.sync(() => {
+        const response = JSON.parse(text) as Record<string, unknown>;
+        responses.push(response);
+        if (response.id === "pause-during-goal") pauseWritten.resolve();
+        if (response.id === "whitespace-pause-during-goal") whitespacePauseWritten.resolve();
+        if (response.id === "clear-during-goal") clearWritten.resolve();
+        if (response.id === "whitespace-clear-during-goal") whitespaceClearWritten.resolve();
+        if (response.id === "resume-read-only") resumeWritten.resolve();
+        if (response.id === "resume-goal") goalWritten.resolve();
+      }),
+  };
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const session = yield* driver.createSession();
+      const observedDriver = {
+        ...driver,
+        resumeGoal: () =>
+          Effect.sync(() => {
+            goalResumes += 1;
+            enteredGoal.resolve();
+          }).pipe(Effect.zipRight(Effect.promise(() => releaseGoal.promise)), Effect.as(undefined)),
+        invokeCommand: (_sessionId: Parameters<typeof driver.invokeCommand>[0], name: string) =>
+          Effect.succeed(name === "goal" ? "accepted" : null),
+      } satisfies typeof driver;
+      const head = yield* runRpcHead({ input, writer }).pipe(
+        Effect.provide(Layer.succeed(Driver, observedDriver)),
+        Effect.fork,
+      );
+      const send = (frame: Record<string, unknown>): void => {
+        input.write(`${JSON.stringify(frame)}\n`);
+      };
+
+      send({ _tag: "resume", id: "resume-read-only", sessionId: session.id });
+      yield* Effect.promise(() => resumeWritten.promise).pipe(Effect.timeout("2 seconds"));
+      expect(goalResumes).toBe(0);
+
+      send({ _tag: "resume-goal", id: "resume-goal", sessionId: session.id });
+      yield* Effect.promise(() => enteredGoal.promise).pipe(Effect.timeout("2 seconds"));
+      send({
+        _tag: "invoke-command",
+        args: { action: "pause" },
+        id: "pause-during-goal",
+        name: "goal",
+        sessionId: session.id,
+      });
+      yield* Effect.promise(() => pauseWritten.promise).pipe(Effect.timeout("2 seconds"));
+      send({
+        _tag: "invoke-command",
+        args: " pause ",
+        id: "whitespace-pause-during-goal",
+        name: "goal",
+        sessionId: session.id,
+      });
+      yield* Effect.promise(() => whitespacePauseWritten.promise).pipe(Effect.timeout("2 seconds"));
+      send({
+        _tag: "invoke-command",
+        args: { action: "clear" },
+        id: "clear-during-goal",
+        name: "goal",
+        sessionId: session.id,
+      });
+      yield* Effect.promise(() => clearWritten.promise).pipe(Effect.timeout("2 seconds"));
+      send({
+        _tag: "invoke-command",
+        args: " clear ",
+        id: "whitespace-clear-during-goal",
+        name: "goal",
+        sessionId: session.id,
+      });
+      yield* Effect.promise(() => whitespaceClearWritten.promise).pipe(Effect.timeout("2 seconds"));
+      expect(responses.some((response) => response.id === "resume-goal")).toBe(false);
+
+      releaseGoal.resolve();
+      yield* Effect.promise(() => goalWritten.promise).pipe(Effect.timeout("2 seconds"));
+      input.end();
+      yield* Fiber.join(head).pipe(Effect.timeout("2 seconds"));
+    }).pipe(Effect.provide(rpcDriverLayer)),
+  );
+
+  expect(responses).toMatchObject([
+    { id: "resume-read-only", result: { _tag: "snapshot" } },
+    { id: "pause-during-goal", result: { _tag: "commandInvoked", value: "accepted" } },
+    { id: "whitespace-pause-during-goal", result: { _tag: "commandInvoked", value: "accepted" } },
+    { id: "clear-during-goal", result: { _tag: "commandInvoked", value: "accepted" } },
+    { id: "whitespace-clear-during-goal", result: { _tag: "commandInvoked", value: "accepted" } },
+    { id: "resume-goal", result: { _tag: "snapshot" } },
+  ]);
+  expect(goalResumes).toBe(1);
+});
+
 test("rpc abort bypasses a stalled prompt and correlates both responses", async () => {
   const input = new PassThrough();
   const providerEntered = Promise.withResolvers<void>();

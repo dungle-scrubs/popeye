@@ -47,6 +47,7 @@ export type RpcInboundTag =
   | "list"
   | "prompt"
   | "resume"
+  | "resume-goal"
   | "set-model"
   | "set-thinking"
   | "steer"
@@ -299,6 +300,7 @@ export const makeRpcSessionBridge = (options: {
             const snapshot = yield* driver.getSnapshot(command.sessionId as unknown as SessionId);
             const protocolInput = {
               entries: snapshot.entries,
+              ...(snapshot.goal === undefined ? {} : { goal: snapshot.goal }),
               leafEntryId: snapshot.leaf.id,
               phase: snapshot.phase,
               revision: snapshot.revision,
@@ -395,6 +397,14 @@ export const makeRpcSessionBridge = (options: {
       }
       if (command._tag === "resume") {
         return driver.resumeSession(command.sessionId as unknown as SessionId).pipe(
+          Effect.zipRight(driver.getSnapshot(command.sessionId as unknown as SessionId)),
+          Effect.flatMap((snapshot) =>
+            writeSnapshot(command.id, snapshot, attached.has(command.sessionId as string)),
+          ),
+        );
+      }
+      if (command._tag === "resume-goal") {
+        return driver.resumeGoal(command.sessionId as unknown as SessionId).pipe(
           Effect.zipRight(driver.getSnapshot(command.sessionId as unknown as SessionId)),
           Effect.flatMap((snapshot) =>
             writeSnapshot(command.id, snapshot, attached.has(command.sessionId as string)),

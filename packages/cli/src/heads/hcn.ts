@@ -152,6 +152,28 @@ const renderSettledTurn = (
   turn: SettledTurn,
 ): Effect.Effect<HeadExitCode, unknown> =>
   Effect.gen(function* () {
+    if (turn.kind === "command") {
+      collected.compactionEvents = [];
+      collected.infoErrors = [];
+      collected.text = "";
+      yield* writeEvents(writer, [
+        {
+          kind: "message",
+          role: "assistant",
+          text:
+            typeof turn.commandValue === "string"
+              ? turn.commandValue
+              : JSON.stringify(turn.commandValue ?? null),
+        },
+        {
+          cause: "clean",
+          escalation: { detection: "none", mode: "none" },
+          exitCode: 0,
+          kind: "done",
+        },
+      ]);
+      return HCN_EXIT_CODES.done;
+    }
     // Head rule: message text comes from the authoritative Snapshot,
     // never from Progress (which can drop deltas under burst).
     // Progress deltas feed token events only.

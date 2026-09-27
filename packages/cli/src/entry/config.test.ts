@@ -227,6 +227,7 @@ test("loopback endpoints get a provider placeholder while hosted endpoints requi
   );
 
   expect(local).toMatchObject({
+    accountingProviderClass: "local",
     apiKey: expect.stringMatching(/.+/u),
     baseUrlHost: "127.0.0.1",
   });
@@ -235,6 +236,25 @@ test("loopback endpoints get a provider placeholder while hosted endpoints requi
     message: expect.stringMatching(/POPEYE_API_KEY.*OPENAI_API_KEY.*ANTHROPIC_API_KEY/u),
     reason: "missing_api_key",
   });
+});
+
+test.each([
+  ["http://127.0.0.1:1234/v1", "local"],
+  ["http://localhost:1234/v1", "local"],
+  ["http://[::1]:1234/v1", "local"],
+  ["https://gateway.example/v1", "unknown"],
+  ["https://127.example.com/v1", "unknown"],
+])("accounting class follows the resolved endpoint %s", async (baseUrl, providerClass) => {
+  const parsed = await Effect.runPromise(parseArgs(["-p", "Explain."]));
+  const config = await Effect.runPromise(
+    resolveConfig(parsed, {
+      POPEYE_API_KEY: "test-key",
+      POPEYE_BASE_URL: baseUrl,
+      POPEYE_MODEL: "fixture-model",
+    }),
+  );
+
+  expect(config).toMatchObject({ action: "run", accountingProviderClass: providerClass });
 });
 
 test("hostnames that only start with 127 are still hosted endpoints", async () => {

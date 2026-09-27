@@ -6,6 +6,8 @@
  * publishes progress items without changing the session phase because it is not a turn.
  */
 
+import { randomUUID } from "node:crypto";
+
 import {
   type CompactionPayload,
   type Entry,
@@ -239,6 +241,8 @@ const summarizeSlice = (
   context: ReadonlyArray<ContextItem>,
   sliceIndex: number,
   turnOrdinal: number,
+  sessionId: SessionId,
+  compactionId: string,
 ): Effect.Effect<string, ProviderError> =>
   providerRuntime.run((attempt) =>
     Effect.gen(function* () {
@@ -247,6 +251,7 @@ const summarizeSlice = (
       yield* Stream.runForEach(
         provider.streamAssistant(context, {
           attempt,
+          accountingScope: { sessionId, ownerId: compactionId },
           purpose: "compaction",
           sliceIndex,
           turnOrdinal,
@@ -370,6 +375,7 @@ export const compactBranch = (
       input.options.sliceBudget,
       input.options.summarizationInstruction,
     );
+    const compactionId = randomUUID();
     const started = {
       entriesCovered: unsummarized.length,
       sliceCount: slices.length,
@@ -382,7 +388,15 @@ export const compactBranch = (
     const summaries = yield* Effect.forEach(
       slices,
       (slice, index) =>
-        summarizeSlice(input.provider, providerRuntime, slice, index + 1, input.turnOrdinal),
+        summarizeSlice(
+          input.provider,
+          providerRuntime,
+          slice,
+          index + 1,
+          input.turnOrdinal,
+          input.sessionId,
+          compactionId,
+        ),
       { concurrency: 1 },
     );
     const summary = summaries.join("\n");

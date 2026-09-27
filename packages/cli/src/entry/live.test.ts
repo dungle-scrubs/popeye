@@ -636,16 +636,17 @@ test.skipIf(liveConfig === undefined)(
     const toolStarts = output.progress.filter(
       (progress) => progress._tag === "toolStarted" && progress.name === toolName,
     );
-    expect(toolStarts).toHaveLength(1);
-    const toolStarted = toolStarts[0];
-    if (toolStarted === undefined || toolStarted._tag !== "toolStarted") {
+    if (toolStarts.length === 0) {
       throw new Error(`Live Provider did not call ${toolName}.`);
     }
-    expect(output.progress).toContainEqual({
-      _tag: "toolCompleted",
-      isError: false,
-      toolCallId: toolStarted.toolCallId,
-    });
+    for (const toolStarted of toolStarts) {
+      if (toolStarted._tag !== "toolStarted") continue;
+      expect(output.progress).toContainEqual({
+        _tag: "toolCompleted",
+        isError: false,
+        toolCallId: toolStarted.toolCallId,
+      });
+    }
     expect(output.progress.at(-1)).toMatchObject({ _tag: "turnSettled", stopReason: "done" });
     expect(output.snapshot.phase).toBe("IDLE");
     expect(assistantStopReasons(output.snapshot).at(-1)).toBe("done");

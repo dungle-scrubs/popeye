@@ -199,6 +199,7 @@ export const makeCliRuntime = (
             ),
           );
           const commandContext: PluginCommandContext = {
+            changeGoal: context.changeGoal,
             compactNow: ((expectedRevision?: number) =>
               Effect.gen(function* () {
                 const gateResult = yield* gen.emitter
@@ -220,6 +221,7 @@ export const makeCliRuntime = (
                 }
                 return yield* context.compactNow(expectedRevision);
               }) as unknown) as PluginCommandContext["compactNow"],
+            getGoal: context.getGoal,
             sessionId: context.sessionId,
             setSessionName: context.setSessionName,
           };

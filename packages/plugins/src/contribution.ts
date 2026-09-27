@@ -6,7 +6,7 @@
  * public kernel Tool interface without a runtime kernel dependency. This keeps the runtime graph
  * lean. A type-only compatibility test pins the structural contract against @dungle-scrubs/popeye-kernel.
  */
-import type { SessionId } from "@dungle-scrubs/popeye-journal";
+import type { Goal, GoalAction, SessionId } from "@dungle-scrubs/popeye-journal";
 import type { Effect, Scope } from "effect";
 import { Data, Schema } from "effect";
 
@@ -47,9 +47,11 @@ export interface CommandCompactionResult {
 }
 
 export interface CommandExecutionContext {
+  readonly changeGoal: (action: GoalAction) => Effect.Effect<Goal | undefined, unknown>;
   readonly compactNow: (
     expectedRevision?: number,
   ) => Effect.Effect<CommandCompactionResult, unknown>;
+  readonly getGoal: () => Effect.Effect<Goal | undefined, unknown>;
   readonly sessionId: SessionId;
   readonly setSessionName: (
     name: string,
@@ -137,6 +139,8 @@ export type ToolExecutionMode = "parallel" | "sequential";
 export type ToolReplay = "never" | "safe";
 
 export interface ToolExecutionContext {
+  readonly changeGoal: (action: GoalAction) => Effect.Effect<Goal | undefined, unknown>;
+  readonly getGoal: () => Effect.Effect<Goal | undefined, unknown>;
   readonly sessionId: SessionId;
   readonly toolCallId?: string;
   readonly toolName?: string;

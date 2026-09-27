@@ -13,7 +13,9 @@ test("session-name command ships as a Plugin using only the public command conte
   }
   let selectedName: string | undefined;
   const context: CommandExecutionContext = {
+    changeGoal: () => Effect.die("Unexpected changeGoal call."),
     compactNow: () => Effect.die("Unexpected compactNow call."),
+    getGoal: () => Effect.die("Unexpected getGoal call."),
     sessionId: Schema.decodeSync(Schema.String.pipe(Schema.brand("SessionId")))("session-1"),
     setSessionName: (name) =>
       Effect.sync(() => {

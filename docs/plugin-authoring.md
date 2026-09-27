@@ -194,7 +194,7 @@ cp packages/cli/src/features/tool-vetting.ts ~/.popeye/plugins/
 cp packages/cli/src/features/trust-gate.ts ~/.popeye/plugins/
 ```
 
-The default first-party set is `compact`, `reload`, and `session-name` only; the gates load only when the user places them in the Plugin source directory. Remove the symlink or file to uninstall.
+The default first-party set is `compact`, `goal`, `reload`, and `session-name`; the gates load only when the user places them in the Plugin source directory. Remove the symlink or file to uninstall.
 
 ## PluginInteractions author guidance
 

@@ -13,6 +13,7 @@ test("compact command ships as a Plugin using only the public command context", 
   }
   let calls = 0;
   const context: CommandExecutionContext = {
+    changeGoal: () => Effect.die("Unexpected changeGoal call."),
     compactNow: () =>
       Effect.sync(() => {
         calls += 1;
@@ -23,6 +24,7 @@ test("compact command ships as a Plugin using only the public command context", 
           summaryLength: 7,
         };
       }),
+    getGoal: () => Effect.die("Unexpected getGoal call."),
     sessionId: Schema.decodeSync(Schema.String.pipe(Schema.brand("SessionId")))("session-1"),
     setSessionName: () => Effect.void,
   };

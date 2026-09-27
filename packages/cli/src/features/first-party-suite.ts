@@ -35,6 +35,7 @@ import { fileURLToPath } from "node:url";
 import type { Contribution, GenerationPlugin, PluginManifest } from "@dungle-scrubs/popeye-plugins";
 
 import { compactPlugin } from "./compact.js";
+import { goalPlugin } from "./goal.js";
 import { reloadPlugin } from "./reload.js";
 import { sessionNamePlugin } from "./session-name.js";
 import { toolVettingPlugin } from "./tool-vetting.js";
@@ -51,6 +52,7 @@ export interface FirstPartyPlugin {
 
 export const defaultFirstPartyPlugins: ReadonlyArray<FirstPartyPlugin> = [
   compactPlugin,
+  goalPlugin,
   reloadPlugin,
   sessionNamePlugin,
 ] as const;
@@ -73,15 +75,17 @@ export const allFirstPartyPlugins: ReadonlyArray<FirstPartyPlugin> = [
 export const firstPartyPath = (plugin: FirstPartyPlugin): string =>
   plugin === compactPlugin
     ? fileURLToPath(new URL("./compact.js", import.meta.url))
-    : plugin === sessionNamePlugin
-      ? fileURLToPath(new URL("./session-name.js", import.meta.url))
-      : plugin === reloadPlugin
-        ? fileURLToPath(new URL("./reload.js", import.meta.url))
-        : plugin === trustGatePlugin
-          ? fileURLToPath(new URL("./trust-gate.js", import.meta.url))
-          : plugin === toolVettingPlugin
-            ? fileURLToPath(new URL("./tool-vetting.js", import.meta.url))
-            : `first-party:${plugin.manifest.name}`;
+    : plugin === goalPlugin
+      ? fileURLToPath(new URL("./goal.js", import.meta.url))
+      : plugin === sessionNamePlugin
+        ? fileURLToPath(new URL("./session-name.js", import.meta.url))
+        : plugin === reloadPlugin
+          ? fileURLToPath(new URL("./reload.js", import.meta.url))
+          : plugin === trustGatePlugin
+            ? fileURLToPath(new URL("./trust-gate.js", import.meta.url))
+            : plugin === toolVettingPlugin
+              ? fileURLToPath(new URL("./tool-vetting.js", import.meta.url))
+              : `first-party:${plugin.manifest.name}`;
 
 export const firstPartyGenerationPlugins = (
   plugins: ReadonlyArray<FirstPartyPlugin>,

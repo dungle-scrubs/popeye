@@ -18,7 +18,7 @@
  */
 
 import type { SessionId } from "@dungle-scrubs/popeye-journal";
-import { Deferred, Effect, Fiber, Stream } from "effect";
+import { Data, Deferred, Effect, Fiber, Ref, Stream } from "effect";
 
 import type { DriverSnapshot, Progress, TurnOptions, TurnResult } from "../compose.js";
 import { Driver } from "../compose.js";
@@ -26,12 +26,36 @@ import type { HeadExitCode } from "./head-wire.js";
 
 export type HeadProgressHandler = (progress: Progress) => Effect.Effect<void, unknown>;
 
-export interface SettledTurn {
+interface SettledResult {
   readonly entryCountAfter: number;
   readonly entryCountBefore: number;
   readonly snapshot: DriverSnapshot;
   readonly stopReason: TurnResult["stopReason"];
 }
+
+export type SettledTurn = SettledResult &
+  (
+    | { readonly kind: "turn" }
+    | { readonly commandName: string; readonly commandValue: unknown; readonly kind: "command" }
+  );
+
+class SlashCommandSyntaxError extends Data.TaggedError("SlashCommandSyntaxError")<{
+  readonly message: string;
+}> {}
+
+const slashCommand = (
+  input: string,
+): Effect.Effect<
+  { readonly args: string; readonly name: string } | undefined,
+  SlashCommandSyntaxError
+> => {
+  const trimmed = input.trim();
+  if (!trimmed.startsWith("/")) return Effect.succeed(undefined);
+  const match = /^\/([a-z][a-z0-9-]*)(?:\s+([\s\S]*))?$/.exec(trimmed);
+  return match === null || match[1] === undefined
+    ? Effect.fail(new SlashCommandSyntaxError({ message: "Invalid slash Command syntax." }))
+    : Effect.succeed({ args: match[2] ?? "", name: match[1] });
+};
 
 /** Renders one settled turn and returns its exit code; non-zero stops the loop. */
 export type HeadTurnHandler = (turn: SettledTurn) => Effect.Effect<HeadExitCode, unknown>;
@@ -66,20 +90,108 @@ export const runSessionLoop = (
     }
     let entryCountBefore = (yield* driver.getSnapshot(session.id)).entries.length;
 
-    for (const prompt of options.prompts) {
+    if (options.prompts.length === 0 && options.sessionId !== undefined) {
+      const resumed = yield* driver.resumeGoal(session.id);
+      if (resumed !== undefined) {
+        const snapshot = yield* driver.getSnapshot(session.id);
+        return yield* options.onTurnSettled({
+          entryCountAfter: snapshot.entries.length,
+          entryCountBefore,
+          kind: "turn",
+          snapshot,
+          stopReason: resumed.stopReason,
+        });
+      }
+    }
+
+    for (const [promptIndex, prompt] of options.prompts.entries()) {
       let stopReason: TurnResult["stopReason"];
       let snapshot: DriverSnapshot;
+      const command = yield* slashCommand(prompt);
+      if (command !== undefined) {
+        const commandValue = yield* driver.invokeCommand(session.id, command.name, command.args);
+        if (
+          command.name === "goal" &&
+          command.args.trim() === "resume" &&
+          promptIndex === options.prompts.length - 1
+        ) {
+          const resumed = yield* driver.resumeGoal(session.id);
+          if (resumed !== undefined) {
+            snapshot = yield* driver.getSnapshot(session.id);
+            return yield* options.onTurnSettled({
+              entryCountAfter: snapshot.entries.length,
+              entryCountBefore,
+              kind: "turn",
+              snapshot,
+              stopReason: resumed.stopReason,
+            });
+          }
+        }
+        snapshot = yield* driver.getSnapshot(session.id);
+        const commandTurn: SettledTurn = {
+          commandName: command.name,
+          commandValue,
+          entryCountAfter: snapshot.entries.length,
+          entryCountBefore,
+          kind: "command",
+          snapshot,
+          stopReason: "done",
+        };
+        entryCountBefore = commandTurn.entryCountAfter;
+        const exitCode = yield* options.onTurnSettled(commandTurn);
+        if (exitCode !== 0) return exitCode;
+        continue;
+      }
 
       if (options.onProgress !== undefined) {
         const onProgress = options.onProgress;
         const settled = yield* Effect.scoped(
           Effect.gen(function* () {
             const subscriptionReady = yield* Deferred.make<void>();
+            const targetSettlements = yield* Ref.make<number | undefined>(undefined);
+            const observedSettlements = yield* Ref.make(0);
+            const progressDropped = yield* Ref.make(false);
+            const hasSettled = yield* Ref.make(false);
+            const finalSettlement = yield* Deferred.make<void>();
             const progressFiber = yield* driver.subscribeProgress(session.id).pipe(
-              Stream.takeUntil((progress) => progress._tag === "turnSettled"),
               Stream.runForEach((progress) =>
                 Deferred.succeed(subscriptionReady, undefined).pipe(
-                  Effect.zipRight(onProgress(progress)),
+                  Effect.zipRight(
+                    Ref.get(hasSettled).pipe(
+                      Effect.flatMap((settled) =>
+                        settled && progress._tag === "phaseChanged" && progress.phase === "IDLE"
+                          ? Effect.void
+                          : onProgress(progress),
+                      ),
+                    ),
+                  ),
+                  Effect.zipRight(
+                    progress._tag === "progressDropped"
+                      ? Ref.set(progressDropped, true).pipe(
+                          Effect.zipRight(Deferred.succeed(finalSettlement, undefined)),
+                          Effect.asVoid,
+                        )
+                      : progress._tag === "turnSettled"
+                        ? Ref.update(observedSettlements, (count) => count + 1).pipe(
+                            Effect.zipRight(Ref.set(hasSettled, true)),
+                            Effect.zipRight(
+                              Ref.get(targetSettlements).pipe(
+                                Effect.flatMap((target) =>
+                                  Ref.get(observedSettlements).pipe(
+                                    Effect.flatMap((observed) =>
+                                      target !== undefined && observed >= target
+                                        ? Deferred.succeed(finalSettlement, undefined).pipe(
+                                            Effect.asVoid,
+                                          )
+                                        : Effect.void,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          )
+                        : Effect.void,
+                  ),
                 ),
               ),
               Effect.forkScoped,
@@ -89,8 +201,28 @@ export const runSessionLoop = (
             const result = yield* options.turnOptions === undefined
               ? driver.prompt(session.id, prompt)
               : driver.prompt(session.id, prompt, options.turnOptions);
-            yield* Fiber.join(progressFiber);
             const snapshot = yield* driver.getSnapshot(session.id);
+            const startedTurns = snapshot.entries.slice(entryCountBefore).filter((entry) => {
+              if (entry.kind === "goal_continuation") return true;
+              if (entry.kind !== "message" || typeof entry.payload !== "object") return false;
+              if (entry.payload === null) return false;
+              const payload = entry.payload as {
+                readonly deliveryMode?: unknown;
+                readonly role?: unknown;
+              };
+              return payload.role === "user" && payload.deliveryMode !== "steer";
+            }).length;
+            yield* Ref.set(targetSettlements, startedTurns);
+            if (
+              (yield* Ref.get(observedSettlements)) < startedTurns &&
+              !(yield* Ref.get(progressDropped))
+            ) {
+              yield* Deferred.await(finalSettlement).pipe(
+                Effect.timeoutOption("5 seconds"),
+                Effect.asVoid,
+              );
+            }
+            yield* Fiber.interrupt(progressFiber);
             return { snapshot, stopReason: result.stopReason };
           }),
         );
@@ -107,6 +239,7 @@ export const runSessionLoop = (
       const turn: SettledTurn = {
         entryCountAfter: snapshot.entries.length,
         entryCountBefore,
+        kind: "turn",
         snapshot,
         stopReason,
       };

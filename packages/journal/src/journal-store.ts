@@ -21,13 +21,24 @@
  */
 
 import { existsSync } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
+import { basename, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
-import type { Layer } from "effect";
+import { Effect, type Layer, Schema } from "effect";
 
 import type { JournalError } from "./errors.js";
-import type { Journal } from "./journal.js";
+import { type Journal, JournalHeaderSchema } from "./journal.js";
 import { JournalJsonl } from "./jsonl.js";
+import { createLineCodec } from "./line-codec.js";
 import { type MigrateResult, migrateJsonlToSqlite } from "./migrate.js";
+import {
+  JournalLineSchema,
+  type Record as JournalRecord,
+  RecordSchema,
+  type SessionId,
+  SessionIdSchema,
+} from "./shapes.js";
 import { JournalSqlite } from "./sqlite.js";
 
 export interface JournalStoreEnv {
@@ -56,5 +67,85 @@ export const migrateDirectory = (
 
 export const JournalStore = {
   migrate: migrateDirectory,
+  readAccountingRecords,
   selectLayer: selectJournalLayer,
 };
+
+/** Passive, complete snapshot of Record envelopes. The caller must project an allowlisted schema. */
+export async function readAccountingRecords(
+  directory: string,
+  selectedSession?: string,
+): Promise<
+  ReadonlyArray<{ readonly sessionId: SessionId; readonly records: ReadonlyArray<JournalRecord> }>
+> {
+  const sqliteFile = join(directory, "journal.sqlite");
+  if (existsSync(sqliteFile)) {
+    const db = new DatabaseSync(sqliteFile, { readOnly: true });
+    try {
+      const sessions = db.prepare("SELECT id FROM sessions ORDER BY id").all() as Array<{
+        id: string;
+      }>;
+      return sessions
+        .filter(({ id }) => selectedSession === undefined || id === selectedSession)
+        .map(({ id }) => ({
+          sessionId: SessionIdSchema.make(id),
+          records: (
+            db
+              .prepare(
+                "SELECT record_id AS id, kind, payload_json AS payloadJson FROM records WHERE session_id = ? ORDER BY global_seq",
+              )
+              .all(id) as Array<{ id: string; kind: string; payloadJson: string }>
+          ).map((row) =>
+            Schema.decodeUnknownSync(RecordSchema, { onExcessProperty: "error" })({
+              id: row.id,
+              kind: row.kind,
+              payload: JSON.parse(row.payloadJson) as unknown,
+            }),
+          ),
+        }));
+    } finally {
+      db.close();
+    }
+  }
+  const codec = await Effect.runPromise(
+    createLineCodec({
+      currentVersion: 1,
+      versions: [
+        { payloadSchema: Schema.Union(JournalHeaderSchema, JournalLineSchema), version: 1 },
+      ],
+    }),
+  );
+  const names = (await readdir(directory))
+    .filter(
+      (name) =>
+        name.endsWith(".jsonl") &&
+        (selectedSession === undefined || name === `${selectedSession}.jsonl`),
+    )
+    .sort();
+  const results: Array<{ sessionId: SessionId; records: ReadonlyArray<JournalRecord> }> = [];
+  for (const name of names) {
+    const sessionId = SessionIdSchema.make(basename(name, ".jsonl"));
+    const content = await readFile(join(directory, name), "utf8");
+    if (!content.endsWith("\n")) throw new Error("ACCOUNTING_INCOMPLETE_TAIL");
+    const lines = content.slice(0, -1).split("\n");
+    const parsed = await Promise.all(
+      lines.map((line, index) => Effect.runPromise(codec.decodeLine(line, { line: index + 1 }))),
+    );
+    const header = parsed[0];
+    if (header?.type !== "journal_header" || header.sessionId !== sessionId)
+      throw new Error("ACCOUNTING_INTEGRITY");
+    if (
+      parsed.slice(1).some((line) => line.type === "journal_header" || line.sessionId !== sessionId)
+    )
+      throw new Error("ACCOUNTING_INTEGRITY");
+    const records = parsed
+      .slice(1)
+      .filter(
+        (line): line is Extract<typeof line, { type: "record" }> =>
+          line.type === "record" && line.sessionId === sessionId,
+      )
+      .map((line) => line.item);
+    results.push({ sessionId, records });
+  }
+  return results;
+}

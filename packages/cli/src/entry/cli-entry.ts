@@ -24,6 +24,7 @@ import { readFile } from "node:fs/promises";
 import type { Readable, Writable } from "node:stream";
 
 import { JournalStore, type JournalStoreEnv, SessionIdSchema } from "@dungle-scrubs/popeye-journal";
+import { accountingRows } from "@dungle-scrubs/popeye-kernel";
 import { type PluginInteractions, PluginInteractionsNullLive } from "@dungle-scrubs/popeye-plugins";
 import { Cause, Data, Effect, Exit, Layer, Logger, Schema, Stream } from "effect";
 
@@ -128,6 +129,7 @@ const CLI_USAGE = `Usage:
   popeye -p --mode rpc
   popeye "<prompt>"
   echo "<prompt>" | popeye -p
+  popeye usage export [--session-dir <dir>] [--session <id>]
 
 Options:
   --agent <name>           Start as a named Agent definition (RFC-04). Dirs: ./.popeye/agents,
@@ -413,6 +415,7 @@ const runWithConfig = (
         ),
       );
       const tools = Layer.succeed(ToolRegistry, cliRuntime.toolRegistry);
+      const journalLayer = selectJournalLayer(config.sessionDir, env);
       const startupView = yield* cliRuntime.toolRegistry.view(
         SessionIdSchema.make("startup-toolcount"),
       );
@@ -445,6 +448,8 @@ const runWithConfig = (
       const providerLayer =
         provider === undefined
           ? PiAiProviderLive({
+              accountingProvider: "openai-compatible",
+              accountingProviderClass: config.accountingProviderClass,
               ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
               baseUrl: config.baseUrl,
               // RFC-02 P4 item 6: trusted window override replaces the
@@ -454,13 +459,10 @@ const runWithConfig = (
                 : { contextWindow: config.contextWindow }),
               modelId: config.model,
               provider: "openai",
-            }).pipe(Layer.provide(tools))
+              recordUsage: true,
+            }).pipe(Layer.provide(Layer.merge(tools, journalLayer)))
           : Layer.succeed(Provider, provider);
-      const dependencies = Layer.mergeAll(
-        selectJournalLayer(config.sessionDir, env),
-        providerLayer,
-        tools,
-      );
+      const dependencies = Layer.mergeAll(journalLayer, providerLayer, tools);
       const currentGen = yield* cliRuntime.currentGeneration;
       const driver = GenerationDriverDefault(currentGen).pipe(Layer.provide(dependencies));
       const pluginLive =
@@ -507,13 +509,13 @@ const runWithConfig = (
           snapshotAudit,
           writer,
         });
-      } else if (config.prompt === undefined) {
+      } else if (config.prompt === undefined && resumeSessionId === undefined) {
         head = Effect.fail(
           runError("missing_prompt", "A prompt argument or piped stdin is required."),
         );
       } else if (config.mode === "hcn") {
         head = runHcnHead({
-          prompts: [config.prompt],
+          prompts: config.prompt === undefined ? [] : [config.prompt],
           ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
           snapshotAudit,
           ...(turnOptions === undefined ? {} : { turnOptions }),
@@ -521,7 +523,7 @@ const runWithConfig = (
         });
       } else if (config.mode === "json") {
         head = runJsonHead({
-          prompts: [config.prompt],
+          prompts: config.prompt === undefined ? [] : [config.prompt],
           ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
           snapshotAudit,
           ...(turnOptions === undefined ? {} : { turnOptions }),
@@ -530,7 +532,7 @@ const runWithConfig = (
       } else {
         head = runPrintHead({
           errorWriter,
-          prompts: [config.prompt],
+          prompts: config.prompt === undefined ? [] : [config.prompt],
           ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
           ...(turnOptions === undefined ? {} : { turnOptions }),
           writer,
@@ -610,6 +612,43 @@ export const executeCli = async (
   env: CliEnvironment,
   io: CliIo,
 ): Promise<number> => {
+  if (argv[0] === "usage") {
+    if (argv[1] !== "export") {
+      io.stderr.write("ERROR ACCOUNTING_ARGUMENTS\n");
+      return 2;
+    }
+    let directory = ".popeye/sessions";
+    let session: string | undefined;
+    for (let index = 2; index < argv.length; index += 2) {
+      const flag = argv[index];
+      const value = argv[index + 1];
+      if (
+        value === undefined ||
+        value.length === 0 ||
+        (flag !== "--session-dir" && flag !== "--session")
+      ) {
+        io.stderr.write("ERROR ACCOUNTING_ARGUMENTS\n");
+        return 2;
+      }
+      if (flag === "--session-dir") directory = value;
+      else session = value;
+    }
+    try {
+      const sessions = await JournalStore.readAccountingRecords(directory, session);
+      if (session !== undefined && sessions.length !== 1)
+        throw new Error("ACCOUNTING_SESSION_NOT_FOUND");
+      const rows = sessions.flatMap(({ sessionId, records }) => accountingRows(sessionId, records));
+      io.stdout.write(rows.map((row) => `${JSON.stringify(row)}\n`).join(""));
+      return 0;
+    } catch (cause) {
+      const code =
+        cause instanceof Error && cause.message.startsWith("ACCOUNTING_")
+          ? cause.message
+          : "ACCOUNTING_READ_FAILED";
+      io.stderr.write(`ERROR ${code}\n`);
+      return 4;
+    }
+  }
   const stdoutWriter = makeWritableHeadWriter(io.stdout);
   const errorWriter = makeWritableHeadWriter(io.stderr);
   const program = Effect.gen(function* () {

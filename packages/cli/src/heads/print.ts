@@ -35,7 +35,9 @@ export const runPrintHead = (options: PrintHeadOptions) =>
       return yield* runSessionLoop({
         onTurnSettled: (turn) =>
           writer
-            .write(`${finalAssistantText(turn.snapshot)}\n`)
+            .write(
+              `${turn.kind === "command" ? (typeof turn.commandValue === "string" ? turn.commandValue : JSON.stringify(turn.commandValue ?? null)) : finalAssistantText(turn.snapshot)}\n`,
+            )
             .pipe(Effect.as(exitCodeForStopReason(turn.stopReason))),
         prompts: options.prompts,
         ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),

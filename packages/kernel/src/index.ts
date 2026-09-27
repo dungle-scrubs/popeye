@@ -131,6 +131,15 @@ export {
   type RecoveryEngineService,
 } from "./recovery-engine.js";
 export {
+  type AccountingCount,
+  type AccountingCounts,
+  accountingRows,
+  countsFromPiAi,
+  type ExportRow,
+  RequestStartedSchema,
+  RequestUsageSchema,
+} from "./request-accounting.js";
+export {
   makeSessionConductorForTest,
   SessionConductor,
   SessionConductorLive,

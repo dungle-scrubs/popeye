@@ -122,6 +122,7 @@ const commandExecutionContext = (
   emitter: HookEmitterService,
   grants: CapabilityGrants,
 ): CommandExecutionContext => ({
+  changeGoal: context.changeGoal,
   compactNow: (expectedRevision) =>
     Effect.gen(function* () {
       const decision = yield* emitCompactionGate(emitter, grants, {
@@ -133,6 +134,7 @@ const commandExecutionContext = (
       }
       return yield* context.compactNow(expectedRevision);
     }),
+  getGoal: context.getGoal,
   sessionId: context.sessionId,
   setSessionName: context.setSessionName,
 });

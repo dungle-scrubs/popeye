@@ -66,6 +66,13 @@ test("empty piped stdin is a typed no-prompt error", async () => {
   });
 });
 
+test("empty stdin is allowed only when an explicit Session resumes", async () => {
+  const parsed = await parseRunArgs(["-p", "--resume", "session-1"]);
+  const completed = await Effect.runPromise(withStdinPrompt(parsed, " \n\t"));
+
+  expect(completed).toMatchObject({ prompt: undefined, resume: "session-1" });
+});
+
 test("provider and Session flags are parsed", async () => {
   const parsed = await parseRunArgs([
     "-p",

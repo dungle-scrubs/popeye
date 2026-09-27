@@ -92,6 +92,8 @@ const executeCall = <E>(
       yield* onToolStarted?.(call) ?? Effect.void;
       const tool = registry.get(call.name);
       const callContext: ToolExecutionContext = {
+        changeGoal: context.changeGoal,
+        getGoal: context.getGoal,
         sessionId: context.sessionId,
         toolCallId: call.id,
         toolName: call.name,

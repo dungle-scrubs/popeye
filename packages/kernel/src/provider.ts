@@ -107,6 +107,10 @@ export type AssistantItem =
 
 export interface ProviderStreamOptions {
   readonly attempt: number;
+  readonly accountingScope?: {
+    readonly sessionId: import("@dungle-scrubs/popeye-journal").SessionId;
+    readonly ownerId: string;
+  };
   readonly model?: string;
   readonly purpose?: "compaction" | "turn";
   readonly sliceIndex?: number;
