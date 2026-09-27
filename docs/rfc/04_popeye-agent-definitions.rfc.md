@@ -101,12 +101,19 @@ Unknown frontmatter keys MUST be ignored. The parser MUST NOT validate tool
 names or model identifiers at parse time. The body is trimmed markdown; an
 empty body appends nothing.
 
+A tools list in which every name is unknown to the granted set MUST fail
+closed at startup with a hard error; the never-widens rule outranks the
+absent-list default.
+
 Discovery: both scopes are flat, non-recursive collections of `*.md` files
 (regular files and symlinks). User scope reads `POPEYE_AGENTS_DIR` when
-set, else `~/.popeye/agents`. Project scope reads `.popeye/agents` at the
-project root only; popeye MUST NOT walk ancestor directories. On a
-cross-scope name collision, project wins (pi's both-scope shadowing). A
-duplicate name within one scope MUST be a load error naming both files.
+set, else `~/.popeye/agents`; the override is operator-controlled trusted
+input, in the posture of `POPEYE_USER_PLUGIN_DIR`. Project scope reads
+`.popeye/agents` at the project root only; popeye MUST NOT walk ancestor
+directories, and a project-scope symlink that escapes the project MUST be
+rejected, matching the plugin pipeline's rule. On a cross-scope name
+collision, project wins (pi's both-scope shadowing). A duplicate name
+within one scope MUST be a load error naming both files.
 
 ### 2. Persona seam
 
@@ -181,7 +188,11 @@ completed.
 ### 7. Agent identity is not journaled
 
 No new journal entry kind. Persona and model are startup or creation
-inputs; a resumed agent session requires the flag or field again.
+inputs; a resumed agent session requires the flag or field again. Because
+identity is not journaled, resuming a session that ran as an agent without
+re-passing `--agent` produces an unagented session, with no diagnostic:
+this is the documented sharp edge, matching `--system-prompt` resume
+behavior today.
 
 ## State Machine
 
