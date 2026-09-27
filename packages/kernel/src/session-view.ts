@@ -20,8 +20,10 @@
  */
 
 import {
+  deriveGoal,
   type Entry,
   type EntryId,
+  type Goal,
   JournalError as JournalErrorClass,
   type JournalFailure,
   type SessionId,
@@ -49,6 +51,7 @@ export interface SessionSettings {
 
 export interface SessionView {
   readonly branch: ReadonlyArray<Entry>;
+  readonly goal?: Goal;
   readonly leaf: Entry;
   readonly revision: number;
   readonly sessionId: SessionId;
@@ -132,6 +135,7 @@ const makeView = (
   branch: ReadonlyArray<Entry>,
   revision: number,
   settings: SessionSettings,
+  goal: Goal | undefined,
 ): SessionView => {
   const leaf = branch.at(-1);
   if (leaf === undefined) {
@@ -143,6 +147,7 @@ const makeView = (
   return {
     branch,
     contains: (entryId: EntryId) => branchContains(branch, entryId),
+    ...(goal === undefined ? {} : { goal }),
     leaf,
     revision,
     sessionId,
@@ -160,6 +165,7 @@ const makeSessionViewService = (
       const branch = yield* store.getBranch(sessionId);
       const revision = yield* store.countDurableLines(sessionId);
       const settings = yield* deriveSettings(branch);
+      const goal = yield* deriveGoal(branch);
       const leaf = branch.at(-1);
       if (leaf === undefined) {
         return yield* new JournalErrorClass({
@@ -170,6 +176,7 @@ const makeSessionViewService = (
       return {
         branch,
         contains: (entryId: EntryId) => branchContains(branch, entryId),
+        ...(goal === undefined ? {} : { goal }),
         leaf,
         revision,
         sessionId,
@@ -193,6 +200,8 @@ export const makeSessionViewForTest = (
   branch: ReadonlyArray<Entry>,
   revision: number,
 ): Effect.Effect<SessionView, JournalErrorClass> =>
-  deriveSettings(branch).pipe(
-    Effect.map((settings) => makeView(sessionId, branch, revision, settings)),
-  );
+  Effect.gen(function* () {
+    const settings = yield* deriveSettings(branch);
+    const goal = yield* deriveGoal(branch);
+    return makeView(sessionId, branch, revision, settings, goal);
+  });

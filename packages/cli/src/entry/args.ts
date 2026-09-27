@@ -266,7 +266,7 @@ export const withStdinPrompt = (
   }
   const prompt = stdin.trimEnd();
   if (prompt.length === 0) {
-    return Effect.fail(promptRequired());
+    return parsed.resume === undefined ? Effect.fail(promptRequired()) : Effect.succeed(parsed);
   }
   return Effect.succeed({ ...parsed, prompt });
 };

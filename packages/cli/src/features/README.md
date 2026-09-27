@@ -23,6 +23,9 @@ The `CommandExecutionContext` is scoped to one Session. It provides the Session 
 kernel operations:
 
 - `compactNow(expectedRevision?)` applies Compaction through the public Compaction operation.
+- `getGoal()` reads the current Branch's Goal, if one is set.
+- `changeGoal(action)` appends a `goal_change` Entry for a validated Goal action. It is safe inside
+  the Session mailbox and shares state with the `manage-goal` Tool.
 - `setSessionName(name, expectedRevision?)` appends a non-model-visible `session_name` Entry. A
   Session name must contain a non-whitespace character and must not exceed 200 characters.
 

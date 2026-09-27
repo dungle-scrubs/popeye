@@ -472,13 +472,13 @@ const runWithConfig = (
           snapshotAudit,
           writer,
         });
-      } else if (config.prompt === undefined) {
+      } else if (config.prompt === undefined && resumeSessionId === undefined) {
         head = Effect.fail(
           runError("missing_prompt", "A prompt argument or piped stdin is required."),
         );
       } else if (config.mode === "hcn") {
         head = runHcnHead({
-          prompts: [config.prompt],
+          prompts: config.prompt === undefined ? [] : [config.prompt],
           ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
           snapshotAudit,
           ...(turnOptions === undefined ? {} : { turnOptions }),
@@ -486,7 +486,7 @@ const runWithConfig = (
         });
       } else if (config.mode === "json") {
         head = runJsonHead({
-          prompts: [config.prompt],
+          prompts: config.prompt === undefined ? [] : [config.prompt],
           ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
           snapshotAudit,
           ...(turnOptions === undefined ? {} : { turnOptions }),
@@ -495,7 +495,7 @@ const runWithConfig = (
       } else {
         head = runPrintHead({
           errorWriter,
-          prompts: [config.prompt],
+          prompts: config.prompt === undefined ? [] : [config.prompt],
           ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
           ...(turnOptions === undefined ? {} : { turnOptions }),
           writer,

@@ -758,10 +758,20 @@ const handleDispatchBoundExceeded = (
 };
 
 const dispatchRoute = (command: RpcInboundCommand): RpcDispatchRoute => {
+  const goalCancellation =
+    command._tag === "invoke-command" &&
+    command.name === "goal" &&
+    ((typeof command.args === "string" &&
+      (command.args.trim() === "pause" || command.args.trim() === "clear")) ||
+      (typeof command.args === "object" &&
+        command.args !== null &&
+        "action" in command.args &&
+        (command.args.action === "pause" || command.args.action === "clear")));
   if (
     command._tag === "abort" ||
     command._tag === "close" ||
-    command._tag === "interaction-response"
+    command._tag === "interaction-response" ||
+    goalCancellation
   ) {
     return { _tag: "control" };
   }

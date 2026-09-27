@@ -1,5 +1,6 @@
 import {
   createMemoryJournalBacking,
+  deriveGoal,
   type EntryDraft,
   EntryDraftSchema,
   Journal,
@@ -22,7 +23,8 @@ import {
 import { expect, test } from "vitest";
 import { Compaction, CompactionLive, type CompactionPolicyOptions } from "./compaction-policy.js";
 import { ProviderError } from "./errors.js";
-import { MailboxLive } from "./mailbox.js";
+import { makeGoalAccess } from "./goal.js";
+import { Mailbox, MailboxLive } from "./mailbox.js";
 import { PluginHostNone } from "./plugin-host.js";
 import { type Progress, ProgressHubLive } from "./progress.js";
 import {
@@ -3384,4 +3386,520 @@ test("abort between provider retry attempts aborts with one provider start and l
   const retries = observed.filter((item) => item._tag === "providerRetryScheduled");
   expect(retries).toStrictEqual([{ _tag: "providerRetryScheduled", attempt: 2, delayMs: 5000 }]);
   expect(observed.filter((item) => item._tag === "assistantText")).toStrictEqual([]);
+});
+
+test("an active Goal continues through the mailbox without adding a user message", async () => {
+  const secondSettlement = await Effect.runPromise(Deferred.make<void>());
+  const contexts: Array<ReadonlyArray<ContextItem>> = [];
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: (context) => {
+      contexts.push(context);
+      requests += 1;
+      if (requests === 2) {
+        return Stream.fromIterable([
+          { _tag: "toolCall", argumentsJson: "{}", id: "goal-complete", name: "finish-goal" },
+          { _tag: "done", stopReason: "toolCalls" },
+        ]);
+      }
+      return Stream.fromIterable([
+        { _tag: "textDelta", text: requests === 1 ? "Working." : "Finished." },
+        { _tag: "done", stopReason: "done" },
+      ]);
+    },
+  };
+  const finishGoal = defineTool({
+    description: "Completes the Goal.",
+    execute: (_arguments, context) =>
+      context
+        .changeGoal({ action: "complete", evidence: "The work finished." })
+        .pipe(Effect.orDie, Effect.as({ content: "Goal complete." })),
+    name: "finish-goal",
+    parameters: Schema.Struct({}),
+  });
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const orchestrator = yield* TurnOrchestrator;
+      const session = yield* sessions.create();
+      yield* makeGoalAccess(journal).changeGoal(session.id, {
+        action: "set",
+        objective: "Finish the assigned work",
+      });
+      let settlements = 0;
+      const progressFiber = yield* Effect.fork(
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) => {
+          if (item._tag !== "turnSettled") return Effect.void;
+          settlements += 1;
+          return settlements === 2 ? Deferred.succeed(secondSettlement, undefined) : Effect.void;
+        }),
+      );
+      yield* orchestrator.openTurn(session.id, "Start");
+      const requestsAtPromptReturn = requests;
+      yield* Deferred.await(secondSettlement).pipe(Effect.timeout("2 seconds"));
+      yield* Fiber.interrupt(progressFiber);
+      const branch = yield* journal.readBranch(session.id);
+      return { branch, goal: yield* deriveGoal(branch), requestsAtPromptReturn };
+    }).pipe(Effect.provide(testLayer(provider, undefined, ToolRegistryLive([finishGoal])))),
+  );
+  expect(requests).toBe(3);
+  expect(result.requestsAtPromptReturn).toBe(3);
+  expect(result.goal).toMatchObject({ status: "complete", continuations: 1 });
+  expect(result.branch.filter((entry) => entry.kind === "goal_continuation")).toHaveLength(1);
+  expect(
+    result.branch.filter(
+      (entry) =>
+        entry.kind === "message" && (entry.payload as { readonly role?: unknown }).role === "user",
+    ),
+  ).toHaveLength(1);
+  expect(
+    contexts
+      .slice(0, 2)
+      .every((context) => context[0]?.content.includes("Finish the assigned work")),
+  ).toBe(true);
+});
+
+test("a queued Goal pause runs before the automatic continuation", async () => {
+  const enteredProvider = await Effect.runPromise(Deferred.make<void>());
+  const releaseProvider = await Effect.runPromise(Deferred.make<void>());
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      return Stream.fromEffect(
+        Deferred.succeed(enteredProvider, undefined).pipe(
+          Effect.zipRight(Deferred.await(releaseProvider)),
+          Effect.as({ _tag: "done" as const, stopReason: "done" as const }),
+        ),
+      );
+    },
+  };
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const mailbox = yield* Mailbox;
+      const sessions = yield* Sessions;
+      const orchestrator = yield* TurnOrchestrator;
+      const session = yield* sessions.create();
+      const goals = makeGoalAccess(journal);
+      yield* goals.changeGoal(session.id, { action: "set", objective: "Complete work" });
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Start"));
+      yield* Deferred.await(enteredProvider);
+      const pause = yield* Effect.fork(
+        mailbox.enqueue(session.id, {
+          name: "pause-goal",
+          run: () => goals.changeGoal(session.id, { action: "pause" }),
+        }),
+      );
+      yield* Effect.yieldNow();
+      yield* Deferred.succeed(releaseProvider, undefined);
+      yield* Fiber.join(running);
+      yield* Fiber.join(pause);
+      const branch = yield* journal.readBranch(session.id);
+      return { branch, goal: yield* deriveGoal(branch) };
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+  expect(requests).toBe(1);
+  expect(result.goal).toMatchObject({ continuations: 0, status: "paused" });
+  expect(result.branch.filter((entry) => entry.kind === "goal_continuation")).toHaveLength(0);
+});
+
+test("a user Follow-up runs before Goal continuation", async () => {
+  const enteredProvider = await Effect.runPromise(Deferred.make<void>());
+  const releaseProvider = await Effect.runPromise(Deferred.make<void>());
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      if (requests === 1) {
+        return Stream.fromEffect(
+          Deferred.succeed(enteredProvider, undefined).pipe(
+            Effect.zipRight(Deferred.await(releaseProvider)),
+            Effect.as({ _tag: "done" as const, stopReason: "done" as const }),
+          ),
+        );
+      }
+      if (requests === 2) {
+        return Stream.fromIterable([
+          { _tag: "toolCall", argumentsJson: "{}", id: "finish", name: "finish-goal" },
+          { _tag: "done", stopReason: "toolCalls" },
+        ]);
+      }
+      return Stream.fromIterable([{ _tag: "done", stopReason: "done" }]);
+    },
+  };
+  const finishGoal = defineTool({
+    description: "Completes the Goal.",
+    execute: (_arguments, context) =>
+      context
+        .changeGoal({ action: "complete", evidence: "Follow-up completed it." })
+        .pipe(Effect.orDie, Effect.as({ content: "Complete." })),
+    name: "finish-goal",
+    parameters: Schema.Struct({}),
+  });
+  const branch = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const orchestrator = yield* TurnOrchestrator;
+      const session = yield* sessions.create();
+      yield* makeGoalAccess(journal).changeGoal(session.id, {
+        action: "set",
+        objective: "Finish the work",
+      });
+      const first = yield* Effect.fork(orchestrator.openTurn(session.id, "Start"));
+      yield* Deferred.await(enteredProvider);
+      const followUp = yield* Effect.fork(
+        orchestrator.openTurn(session.id, "Use this new instruction"),
+      );
+      yield* Effect.yieldNow();
+      yield* Deferred.succeed(releaseProvider, undefined);
+      yield* Fiber.join(first);
+      yield* Fiber.join(followUp);
+      return yield* journal.readBranch(session.id);
+    }).pipe(Effect.provide(testLayer(provider, undefined, ToolRegistryLive([finishGoal])))),
+  );
+  expect(requests).toBe(3);
+  expect(branch.filter((entry) => entry.kind === "goal_continuation")).toHaveLength(0);
+  expect(
+    branch.filter(
+      (entry) =>
+        entry.kind === "message" && (entry.payload as { readonly role?: unknown }).role === "user",
+    ),
+  ).toHaveLength(2);
+});
+
+test("abort pauses an active Goal and does not queue continuation", async () => {
+  const enteredProvider = await Effect.runPromise(Deferred.make<void>());
+  const provider: ProviderService = {
+    streamAssistant: () =>
+      Stream.fromEffect(
+        Deferred.succeed(enteredProvider, undefined).pipe(Effect.zipRight(Effect.never)),
+      ),
+  };
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const orchestrator = yield* TurnOrchestrator;
+      const session = yield* sessions.create();
+      yield* makeGoalAccess(journal).changeGoal(session.id, {
+        action: "set",
+        objective: "Finish the work",
+      });
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Start"));
+      yield* Deferred.await(enteredProvider);
+      yield* orchestrator.abortTurn(session.id);
+      yield* Fiber.join(running);
+      const branch = yield* journal.readBranch(session.id);
+      return { branch, goal: yield* deriveGoal(branch) };
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+  expect(result.goal?.status).toBe("paused");
+  expect(result.branch.filter((entry) => entry.kind === "goal_continuation")).toHaveLength(0);
+});
+
+test("resuming an active Goal schedules one internal continuation", async () => {
+  const settled = await Effect.runPromise(Deferred.make<void>());
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      return requests === 1
+        ? Stream.fromIterable([
+            { _tag: "toolCall", argumentsJson: "{}", id: "finish", name: "finish-goal" },
+            { _tag: "done", stopReason: "toolCalls" },
+          ])
+        : Stream.fromIterable([{ _tag: "done", stopReason: "done" }]);
+    },
+  };
+  const finishGoal = defineTool({
+    description: "Completes the Goal.",
+    execute: (_arguments, context) =>
+      context
+        .changeGoal({ action: "complete", evidence: "Resume finished it." })
+        .pipe(Effect.orDie, Effect.as({ content: "Complete." })),
+    name: "finish-goal",
+    parameters: Schema.Struct({}),
+  });
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const orchestrator = yield* TurnOrchestrator;
+      const session = yield* sessions.create();
+      yield* makeGoalAccess(journal).changeGoal(session.id, {
+        action: "set",
+        objective: "Finish on resume",
+      });
+      const progressFiber = yield* Effect.fork(
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
+          item._tag === "turnSettled" ? Deferred.succeed(settled, undefined) : Effect.void,
+        ),
+      );
+      yield* orchestrator.resumeGoal(session.id);
+      yield* orchestrator.resumeGoal(session.id);
+      yield* Deferred.await(settled).pipe(Effect.timeout("2 seconds"));
+      yield* Fiber.interrupt(progressFiber);
+      const branch = yield* journal.readBranch(session.id);
+      return { branch, goal: yield* deriveGoal(branch) };
+    }).pipe(Effect.provide(testLayer(provider, undefined, ToolRegistryLive([finishGoal])))),
+  );
+  expect(requests).toBe(2);
+  expect(result.goal?.status).toBe("complete");
+  expect(result.branch.filter((entry) => entry.kind === "goal_continuation")).toHaveLength(1);
+});
+
+test("Goal continuation stops at its durable limit", async () => {
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      return Stream.fromIterable([{ _tag: "done", stopReason: "done" }]);
+    },
+  };
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const orchestrator = yield* TurnOrchestrator;
+      const session = yield* sessions.create();
+      yield* journal.appendEntry(
+        session.id,
+        EntryDraftSchema.make({
+          kind: "goal_change",
+          payload: { goal: { continuations: 40, objective: "Finish work", status: "active" } },
+        }),
+      );
+      yield* orchestrator.openTurn(session.id, "Continue");
+      const branch = yield* journal.readBranch(session.id);
+      return { branch, goal: yield* deriveGoal(branch) };
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+  expect(requests).toBe(1);
+  expect(result.goal).toMatchObject({ status: "blocked", continuations: 40 });
+  expect(result.branch.filter((entry) => entry.kind === "goal_continuation")).toHaveLength(0);
+});
+
+test("Context includes paused, blocked, completed, and cancelled Goal state", async () => {
+  const contexts: Array<ReadonlyArray<ContextItem>> = [];
+  const provider: ProviderService = {
+    streamAssistant: (context) => {
+      contexts.push(context);
+      return Stream.fromIterable([{ _tag: "done", stopReason: "done" }]);
+    },
+  };
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const orchestrator = yield* TurnOrchestrator;
+      const goals = [
+        { continuations: 1, objective: "Paused task", status: "paused" as const },
+        {
+          continuations: 2,
+          objective: "Blocked task",
+          reason: "Need the artifact",
+          status: "blocked" as const,
+        },
+        {
+          continuations: 3,
+          evidence: "Verified output",
+          objective: "Completed task",
+          status: "complete" as const,
+        },
+        { continuations: 4, objective: "Cancelled task", status: "cancelled" as const },
+      ];
+      for (const goal of goals) {
+        const session = yield* sessions.create();
+        yield* journal.appendEntry(
+          session.id,
+          EntryDraftSchema.make({ kind: "goal_change", payload: { goal } }),
+        );
+        yield* orchestrator.openTurn(session.id, "Inspect Goal");
+      }
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+  expect(contexts).toHaveLength(4);
+  expect(contexts[0]?.[0]?.content).toContain("Paused Goal: Paused task");
+  expect(contexts[1]?.[0]?.content).toContain("Reason: Need the artifact");
+  expect(contexts[2]?.[0]?.content).toContain("Evidence: Verified output");
+  expect(contexts[3]?.[0]?.content).toContain("Cancelled Goal: Cancelled task");
+});
+
+test("Goal instructions count against the Context budget", async () => {
+  let providerRequests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      providerRequests += 1;
+      return Stream.fromIterable([{ _tag: "done", stopReason: "done" }]);
+    },
+  };
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const orchestrator = yield* TurnOrchestrator;
+      const session = yield* sessions.create();
+      yield* makeGoalAccess(journal).changeGoal(session.id, {
+        action: "set",
+        objective: "This objective exceeds the small context budget in this test.",
+      });
+      const turn = yield* orchestrator.openTurn(session.id, "Continue", undefined, {
+        contextBudget: 40,
+      });
+      return { goal: yield* makeGoalAccess(journal).getGoal(session.id), turn };
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+  expect(providerRequests).toBe(0);
+  expect(result.turn.stopReason).toBe("error");
+  expect(result.goal?.status).toBe("paused");
+});
+
+test("a stale Follow-up cannot strand the waiting Goal chain", async () => {
+  const enteredProvider = await Effect.runPromise(Deferred.make<void>());
+  const releaseProvider = await Effect.runPromise(Deferred.make<void>());
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      if (requests === 1) {
+        return Stream.fromEffect(
+          Deferred.succeed(enteredProvider, undefined).pipe(
+            Effect.zipRight(Deferred.await(releaseProvider)),
+            Effect.as({ _tag: "done" as const, stopReason: "done" as const }),
+          ),
+        );
+      }
+      if (requests === 2) {
+        return Stream.fromIterable([
+          { _tag: "toolCall", argumentsJson: "{}", id: "finish", name: "finish-goal" },
+          { _tag: "done", stopReason: "toolCalls" },
+        ]);
+      }
+      return Stream.fromIterable([{ _tag: "done", stopReason: "done" }]);
+    },
+  };
+  const finishGoal = defineTool({
+    description: "Completes the Goal.",
+    execute: (_arguments, context) =>
+      context
+        .changeGoal({ action: "complete", evidence: "Recovered from stale Follow-up." })
+        .pipe(Effect.orDie, Effect.as({ content: "Complete." })),
+    name: "finish-goal",
+    parameters: Schema.Struct({}),
+  });
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const orchestrator = yield* TurnOrchestrator;
+      const session = yield* sessions.create();
+      yield* makeGoalAccess(journal).changeGoal(session.id, {
+        action: "set",
+        objective: "Finish despite stale input",
+      });
+      const initial = yield* Effect.fork(orchestrator.openTurn(session.id, "Start"));
+      yield* Deferred.await(enteredProvider);
+      const stale = yield* Effect.fork(
+        orchestrator.openTurn(session.id, "Stale Follow-up", undefined, {
+          expectedRevision: 0,
+        }),
+      );
+      yield* Effect.yieldNow();
+      yield* Deferred.succeed(releaseProvider, undefined);
+      const staleExit = yield* Fiber.await(stale);
+      const settled = yield* Fiber.join(initial).pipe(Effect.timeout("2 seconds"));
+      const branch = yield* journal.readBranch(session.id);
+      return { branch, goal: yield* deriveGoal(branch), settled, staleExit };
+    }).pipe(Effect.provide(testLayer(provider, undefined, ToolRegistryLive([finishGoal])))),
+  );
+  expect(Exit.isFailure(result.staleExit)).toBe(true);
+  expect(result.settled.stopReason).toBe("done");
+  expect(result.goal?.status).toBe("complete");
+  expect(requests).toBe(3);
+  expect(result.branch.filter((entry) => entry.kind === "goal_continuation")).toHaveLength(1);
+});
+
+test("Stop between Goal Turns prevents the pending continuation", async () => {
+  const blockerEntered = await Effect.runPromise(Deferred.make<void>());
+  const releaseBlocker = await Effect.runPromise(Deferred.make<void>());
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      return requests === 1
+        ? Stream.fromIterable([
+            { _tag: "toolCall", argumentsJson: "{}", id: "finish", name: "finish-goal" },
+            { _tag: "done", stopReason: "toolCalls" },
+          ])
+        : Stream.fromIterable([{ _tag: "done", stopReason: "done" }]);
+    },
+  };
+  const finishGoal = defineTool({
+    description: "Completes the resumed Goal.",
+    execute: (_arguments, context) =>
+      context
+        .changeGoal({ action: "complete", evidence: "Finished after resume." })
+        .pipe(Effect.orDie, Effect.as({ content: "Complete." })),
+    name: "finish-goal",
+    parameters: Schema.Struct({}),
+  });
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const mailbox = yield* Mailbox;
+      const sessions = yield* Sessions;
+      const orchestrator = yield* TurnOrchestrator;
+      const session = yield* sessions.create();
+      yield* makeGoalAccess(journal).changeGoal(session.id, {
+        action: "set",
+        objective: "Stop before continuation",
+      });
+      const blocker = yield* Effect.fork(
+        mailbox.enqueue(session.id, {
+          name: "hold-mailbox",
+          run: () =>
+            Deferred.succeed(blockerEntered, undefined).pipe(
+              Effect.zipRight(Deferred.await(releaseBlocker)),
+            ),
+        }),
+      );
+      yield* Deferred.await(blockerEntered);
+      const runningGoal = yield* Effect.fork(orchestrator.resumeGoal(session.id));
+      yield* Effect.yieldNow();
+      const stopped = yield* orchestrator.abortTurn(session.id);
+      yield* Deferred.succeed(releaseBlocker, undefined);
+      yield* Fiber.join(blocker);
+      const settled = yield* Fiber.join(runningGoal).pipe(Effect.timeout("2 seconds"));
+      const stoppedBranch = yield* journal.readBranch(session.id);
+      const pausedGoal = yield* deriveGoal(stoppedBranch);
+      const requestsBeforeResume = requests;
+      yield* makeGoalAccess(journal).changeGoal(session.id, { action: "resume" });
+      const resumed = yield* orchestrator.resumeGoal(session.id).pipe(Effect.timeout("2 seconds"));
+      const branch = yield* journal.readBranch(session.id);
+      return {
+        branch,
+        goal: yield* deriveGoal(branch),
+        pausedGoal,
+        requestsBeforeResume,
+        resumed,
+        settled,
+        stopped,
+        stoppedBranch,
+      };
+    }).pipe(Effect.provide(testLayer(provider, undefined, ToolRegistryLive([finishGoal])))),
+  );
+  expect(result.stopped).toMatchObject({ aborted: true, note: "loop-prevented" });
+  expect(result.settled?.stopReason).toBe("aborted");
+  expect(result.pausedGoal).toMatchObject({ continuations: 0, status: "paused" });
+  expect(result.stoppedBranch.filter((entry) => entry.kind === "goal_continuation")).toHaveLength(
+    0,
+  );
+  expect(result.requestsBeforeResume).toBe(0);
+  expect(result.resumed?.stopReason).toBe("done");
+  expect(result.goal?.status).toBe("complete");
+  expect(result.branch.filter((entry) => entry.kind === "goal_continuation")).toHaveLength(1);
+  expect(requests).toBe(2);
 });

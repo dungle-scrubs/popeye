@@ -2,7 +2,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { SessionIdSchema } from "@dungle-scrubs/popeye-journal";
+import { type SessionId, SessionIdSchema } from "@dungle-scrubs/popeye-journal";
+import type { ToolExecutionContext } from "@dungle-scrubs/popeye-kernel";
 import {
   createCapabilityGrants,
   defineToolContribution,
@@ -13,6 +14,12 @@ import { expect, test } from "vitest";
 
 import { composePluginRuntime } from "../plugins/pipeline.js";
 import { adaptTools, generationCapabilityUnion } from "./adapter.js";
+
+const testToolContext = (sessionId: SessionId): ToolExecutionContext => ({
+  changeGoal: () => Effect.succeed(undefined),
+  getGoal: () => Effect.succeed(undefined),
+  sessionId,
+});
 
 const toolPluginSource = (pluginName: string, priority: number): string =>
   [
@@ -88,7 +95,7 @@ test("Tool shadowing follows scope, contribution priority, and lexical Plugin-na
       throw new Error("Tool shadowing did not select a survivor.");
     }
     const result = await Effect.runPromise(
-      Effect.scoped(tool.execute({} as never, { sessionId: grants.sessionId })),
+      Effect.scoped(tool.execute({} as never, testToolContext(grants.sessionId))),
     );
     await Effect.runPromise(generation.close);
 
@@ -276,11 +283,11 @@ test("a grant-visible Plugin tool preserves its declaration and execution outcom
     }
 
     const success = await Effect.runPromise(
-      Effect.scoped(tool.execute({ value: "echoed" } as never, { sessionId: grants.sessionId })),
+      Effect.scoped(tool.execute({ value: "echoed" } as never, testToolContext(grants.sessionId))),
     );
     const failure = await Effect.runPromise(
       Effect.scoped(
-        Effect.either(tool.execute({ value: "fail" } as never, { sessionId: grants.sessionId })),
+        Effect.either(tool.execute({ value: "fail" } as never, testToolContext(grants.sessionId))),
       ),
     );
     await Effect.runPromise(generation.close);

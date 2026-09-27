@@ -32,6 +32,7 @@ export const protocolSnapshot = (
       ? {}
       : { capabilityGrants: snapshotAudit.capabilityGrants }),
     entries: snapshot.entries,
+    ...(snapshot.goal === undefined ? {} : { goal: snapshot.goal }),
     leafEntryId: snapshot.leaf.id,
     ...(snapshotAudit?.loadedGeneration === undefined
       ? {}

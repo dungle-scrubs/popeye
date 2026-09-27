@@ -4,7 +4,7 @@
  */
 
 import { Schema } from "effect";
-import { EntryIdSchema, EntrySchema, SessionIdSchema } from "#journal";
+import { EntryIdSchema, EntrySchema, GoalSchema, SessionIdSchema } from "#journal";
 
 import { THINKING_LEVELS } from "./commands.js";
 import { NonNegativeIntegerSchema, OtherEnumValueSchema } from "./schema-common.js";
@@ -66,6 +66,7 @@ export const SnapshotSchema = Schema.Struct({
   capabilityGrants: Schema.optional(Schema.Array(CapabilityNameSchema)),
   entries: Schema.Array(EntrySchema),
   entryRange: Schema.optional(EntryRangeSchema),
+  goal: Schema.optional(GoalSchema),
   /** Derived from DriverSnapshot.leaf.id. */
   leafEntryId: EntryIdSchema,
   /** Reserved for a Head composed with the plugin host. The Driver does not supply this field. */

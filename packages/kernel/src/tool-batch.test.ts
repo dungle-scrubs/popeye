@@ -3,10 +3,15 @@ import { Deferred, Effect, Fiber, Layer, Ref, Schema, type Scope, Tracer } from 
 import { expect, test } from "vitest";
 
 import { ToolError } from "./errors.js";
-import { defineTool, type Tool, ToolRegistryLive } from "./tool.js";
+import { defineTool, type Tool, type ToolExecutionContext, ToolRegistryLive } from "./tool.js";
 import { executeToolBatch } from "./tool-batch.js";
 
 const testSessionId = "session" as SessionId;
+const testContext: ToolExecutionContext = {
+  changeGoal: () => Effect.succeed(undefined),
+  getGoal: () => Effect.succeed(undefined),
+  sessionId: testSessionId,
+};
 
 test("tool batch runs with bounded concurrency using the default of four", async () => {
   const result = await Effect.runPromise(
@@ -42,7 +47,7 @@ test("tool batch runs with bounded concurrency using the default of four", async
             { argumentsJson: '{"value":4}', id: "call-4", name: "block" },
             { argumentsJson: '{"value":5}', id: "call-5", name: "block" },
           ],
-          { sessionId: testSessionId },
+          testContext,
         ).pipe(Effect.provide(ToolRegistryLive([defineTool(tool)]))),
       );
       yield* Effect.repeat(Ref.get(started), { until: (count) => count === 4 });
@@ -92,7 +97,7 @@ test("tool batch accepts a configured concurrency limit", async () => {
             { argumentsJson: '{"value":2}', id: "call-2", name: "block" },
             { argumentsJson: '{"value":3}', id: "call-3", name: "block" },
           ],
-          { sessionId: testSessionId },
+          testContext,
           { concurrency: 2 },
         ).pipe(Effect.provide(ToolRegistryLive([defineTool(tool)]))),
       );
@@ -137,7 +142,7 @@ test("a sequential tool forces its whole batch to execute sequentially", async (
           { argumentsJson: '{"value":2}', id: "call-2", name: "parallel" },
           { argumentsJson: '{"value":3}', id: "call-3", name: "ordered" },
         ],
-        { sessionId: testSessionId },
+        testContext,
         { concurrency: 4 },
       ).pipe(Effect.provide(ToolRegistryLive([defineTool(tool), defineTool(parallel)])));
       return { completed, maximum: yield* Ref.get(maximum) };
@@ -174,7 +179,7 @@ test("a failed tool yields an error result in position while other tools complet
         { argumentsJson: '{"value":"first"}', id: "failed-call", name: "failed" },
         { argumentsJson: '{"value":"second"}', id: "succeeded-call", name: "succeeded" },
       ],
-      { sessionId: testSessionId },
+      testContext,
     ).pipe(Effect.provide(ToolRegistryLive([defineTool(failed), defineTool(succeeded)]))),
   );
 
@@ -199,7 +204,7 @@ test("invalid tool arguments become a model-visible error result before executio
   const result = await Effect.runPromise(
     executeToolBatch(
       [{ argumentsJson: '{"count":"wrong"}', id: "invalid-call", name: "requires-number" }],
-      { sessionId: testSessionId },
+      testContext,
     ).pipe(Effect.provide(ToolRegistryLive([defineTool(tool)]))),
   );
 
@@ -220,7 +225,7 @@ test("strict argument decoding rejects excess properties and names the offending
   const result = await Effect.runPromise(
     executeToolBatch(
       [{ argumentsJson: '{"count":1,"unexpected":true}', id: "strict-call", name: "strict" }],
-      { sessionId: testSessionId },
+      testContext,
     ).pipe(Effect.provide(ToolRegistryLive([defineTool(tool)]))),
   );
 
@@ -259,7 +264,7 @@ test("throwing and dying tools become in-position errors while healthy siblings 
         { argumentsJson: '{"value":"die"}', id: "die-call", name: "dying" },
         { argumentsJson: '{"value":"after"}', id: "healthy-after", name: "healthy" },
       ],
-      { sessionId: testSessionId },
+      testContext,
     ).pipe(
       Effect.provide(
         ToolRegistryLive([defineTool(healthy), defineTool(throwing), defineTool(dying)]),
@@ -297,9 +302,10 @@ test("interrupting a tool runs its execution Scope finalizer", async () => {
   const observed = await Effect.runPromise(
     Effect.gen(function* () {
       const running = yield* Effect.fork(
-        executeToolBatch([{ argumentsJson: '{"value":"wait"}', id: "wait-call", name: "wait" }], {
-          sessionId: testSessionId,
-        }).pipe(Effect.provide(ToolRegistryLive([defineTool(tool)]))),
+        executeToolBatch(
+          [{ argumentsJson: '{"value":"wait"}', id: "wait-call", name: "wait" }],
+          testContext,
+        ).pipe(Effect.provide(ToolRegistryLive([defineTool(tool)]))),
       );
       yield* Deferred.await(started);
       yield* Fiber.interrupt(running);
@@ -328,7 +334,7 @@ test("each execution Scope finalizer runs exactly once across a multi-call batch
         { argumentsJson: '{"value":"two"}', id: "two", name: "finalized" },
         { argumentsJson: '{"value":"three"}', id: "three", name: "finalized" },
       ],
-      { sessionId: testSessionId },
+      testContext,
     ).pipe(Effect.provide(ToolRegistryLive([defineTool(tool)]))),
   );
 
@@ -394,7 +400,7 @@ test("tool and batch spans expose correlation, outcomes, mode, and concurrency",
         { argumentsJson: '{"value":"bad"}', id: "failed-call", name: "failed" },
         { argumentsJson: "{}", id: "unknown-call", name: "unknown" },
       ],
-      { sessionId: testSessionId },
+      testContext,
       { concurrency: 3 },
     ).pipe(
       Effect.provide(ToolRegistryLive([defineTool(successful), defineTool(failed)])),
@@ -437,10 +443,10 @@ test("tool and batch spans expose correlation, outcomes, mode, and concurrency",
 });
 
 test("tool concurrency rejects zero and non-integer capacities", () => {
-  expect(() => executeToolBatch([], { sessionId: testSessionId }, { concurrency: 0 })).toThrow(
+  expect(() => executeToolBatch([], testContext, { concurrency: 0 })).toThrow(
     "Tool concurrency must be a positive safe integer.",
   );
-  expect(() => executeToolBatch([], { sessionId: testSessionId }, { concurrency: 1.5 })).toThrow(
+  expect(() => executeToolBatch([], testContext, { concurrency: 1.5 })).toThrow(
     "Tool concurrency must be a positive safe integer.",
   );
 });

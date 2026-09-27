@@ -2,7 +2,7 @@
  * Owns the kernel-side seam for Plugin Command dispatch.
  * It exists so the Driver can invoke Commands without depending on the Plugin package.
  */
-import type { SessionId } from "@dungle-scrubs/popeye-journal";
+import type { Goal, GoalAction, SessionId } from "@dungle-scrubs/popeye-journal";
 import { Context, Data, Effect, Layer } from "effect";
 
 export class InvokeCommandError extends Data.TaggedError("InvokeCommandError")<{
@@ -34,9 +34,11 @@ export interface PluginCompactionResult {
 }
 
 export interface PluginCommandContext {
+  readonly changeGoal: (action: GoalAction) => Effect.Effect<Goal | undefined, unknown>;
   readonly compactNow: (
     expectedRevision?: number,
   ) => Effect.Effect<PluginCompactionResult, unknown>;
+  readonly getGoal: () => Effect.Effect<Goal | undefined, unknown>;
   readonly sessionId: SessionId;
   readonly setSessionName: (
     name: string,
