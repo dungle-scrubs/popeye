@@ -9,6 +9,7 @@ test("Schema frames exist for every kernel primitive and invoke-command", () => 
   const frames = [
     { _tag: "create", id: "create-1" },
     { _tag: "resume", id: "resume-1", sessionId },
+    { _tag: "resume-goal", id: "resume-goal-1", sessionId },
     { _tag: "list", id: "list-1" },
     {
       _tag: "prompt",

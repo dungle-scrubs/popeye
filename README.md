@@ -81,6 +81,23 @@ protocol commands on stdin. RPC frames dispatch per Session in arrival order. `a
 Use `--plugin <path>` to load an additional Plugin. The flag is repeatable. Use
 `--no-project-plugins` to skip project-local Plugins.
 
+### Session Goals
+
+The first-party `goal` Command stores a Goal on the current Journal Branch. The model can read and
+update the same state through the `manage-goal` Tool. A Goal stays in model Context after Compaction
+or Session resume. When a Turn ends while the Goal is active, the Kernel queues one continuation Turn
+at a time. A queued user Follow-up runs first. Stop or an error pauses the Goal. Completion requires
+evidence, and a blocker requires a reason. The Kernel blocks a Goal after 40 automatic continuations.
+Clearing a Goal records a terminal `cancelled` status so the last condition remains inspectable.
+
+The print, JSON, and HCN Heads accept `/goal <objective>` and bare `/goal` as text Commands. Use
+`/goal pause`, `/goal resume`, `/goal clear`, `/goal blocked <reason>`, or
+`/goal complete <evidence>` to update it. Send a normal prompt after setting the Goal to start
+work. An RPC Head invokes `goal` through `invoke-command`, with arguments such as
+`{"action":"set","objective":"Finish and verify the task"}`. A sole `/goal resume` restarts
+work. A resumed print, JSON, or HCN Head with no new prompt continues an active Goal. RPC clients
+use `resume-goal` after `resume` when they want to continue without a new prompt.
+
 The CLI auto-trusts discovered Plugin code. It loads user-global Plugins from `~/.popeye/plugins` and
 project Plugins from `.popeye/plugins`. Tools contributed by loaded Plugins are available to the
 model. Running `popeye` inside a repository executes that repository's Plugin code, the same trust

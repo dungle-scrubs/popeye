@@ -20,6 +20,16 @@ export {
   JournalNotFound,
 } from "./errors.js";
 export {
+  deriveGoal,
+  GOAL_TEXT_MAX_LENGTH,
+  type Goal,
+  type GoalAction,
+  GoalActionSchema,
+  type GoalChangePayload,
+  GoalChangePayloadSchema,
+  GoalSchema,
+} from "./goal.js";
+export {
   type CreatedSession,
   type ExportRead,
   Journal,

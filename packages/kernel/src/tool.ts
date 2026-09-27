@@ -9,7 +9,7 @@
  * (tool-batch owns that); this module only owns declarations and lookup.
  */
 
-import type { SessionId } from "@dungle-scrubs/popeye-journal";
+import type { Goal, GoalAction, SessionId } from "@dungle-scrubs/popeye-journal";
 import type { Scope } from "effect";
 import { Context, Effect, Layer, type Schema } from "effect";
 
@@ -19,6 +19,8 @@ import type { ToolReplay } from "./records.js";
 export type ToolExecutionMode = "parallel" | "sequential";
 
 export interface ToolExecutionContext {
+  readonly changeGoal: (action: GoalAction) => Effect.Effect<Goal | undefined, unknown>;
+  readonly getGoal: () => Effect.Effect<Goal | undefined, unknown>;
   readonly sessionId: SessionId;
   readonly toolCallId?: string;
   readonly toolName?: string;

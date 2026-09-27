@@ -40,6 +40,32 @@ test("small snapshot not paginated", () => {
   expect(result.snapshot.leafEntryId).toBe(e1.id);
 });
 
+test("Goal metadata survives pagination and range slicing", () => {
+  const root = makeEntry("root", null);
+  const entries = [root];
+  let parent = "root";
+  for (let index = 0; index < 20; index += 1) {
+    const id = `entry-${index}`;
+    entries.push(makeEntry(id, parent, { text: "x".repeat(400) }));
+    parent = id;
+  }
+  const goal = { continuations: 3, objective: "Finish issue 39", status: "active" } as const;
+  const input = {
+    entries,
+    goal,
+    leafEntryId: entries.at(-1)?.id ?? root.id,
+    phase: "IDLE" as const,
+    revision: 22,
+    sessionId,
+  };
+  const page = paginateSnapshot(input, 4_096);
+  expect(page.isPaginated).toBe(true);
+  expect(page.snapshot.goal).toEqual(goal);
+  const range = sliceSnapshotByRange(input, root.id, null);
+  expect(range.isValid).toBe(true);
+  expect(range.snapshot.goal).toEqual(goal);
+});
+
 test("large snapshot paginated leaf-anchored under 1 MiB", () => {
   // Build ~2200 entries to exceed 1 MiB with small payloads - but with 10 bytes payload it will not exceed, so force small pageBytes
   const entries = [];

@@ -143,7 +143,7 @@ test("the committed CLI JSON stream decodes as Progress followed by a Snapshot",
     capabilityGrants: [],
     loadedGeneration: {
       id: expect.any(String),
-      plugins: ["compact", "reload", "session-name"],
+      plugins: ["compact", "goal", "reload", "session-name"],
     },
   });
 });
@@ -193,7 +193,7 @@ test("the committed CLI JSON Tool stream decodes as Progress followed by a Snaps
     capabilityGrants: [],
     loadedGeneration: {
       id: expect.any(String),
-      plugins: ["compact", "reload", "session-name", "project-echo-plugin"],
+      plugins: ["compact", "goal", "reload", "session-name", "project-echo-plugin"],
     },
   });
 });

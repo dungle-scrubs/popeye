@@ -25,6 +25,7 @@ import {
 const testSessionId = (name: string) => Schema.decodeSync(SessionIdSchema)(name);
 
 const testCommandContext = (name: string): CommandExecutionContext => ({
+  changeGoal: () => Effect.die("Unexpected changeGoal call."),
   compactNow: () =>
     Effect.succeed({
       compactionEntryId: "unused",
@@ -32,6 +33,7 @@ const testCommandContext = (name: string): CommandExecutionContext => ({
       sliceCount: 0,
       summaryLength: 0,
     }),
+  getGoal: () => Effect.die("Unexpected getGoal call."),
   sessionId: testSessionId(name),
   setSessionName: () => Effect.void,
 });
@@ -92,6 +94,7 @@ test("first-party Plugin generation entries expose the same manifest accessor", 
       })),
     ).toEqual([
       { manifestName: "compact", name: "compact" },
+      { manifestName: "goal", name: "goal" },
       { manifestName: "reload", name: "reload" },
       { manifestName: "session-name", name: "session-name" },
     ]);
@@ -121,8 +124,13 @@ test("an empty project exposes only the invokable first-party commands", async (
         for (const command of commands) {
           yield* invokeRegisteredCommand(
             command,
-            command.name === "session-name" ? { name: "Pipeline name" } : {},
+            command.name === "session-name"
+              ? { name: "Pipeline name" }
+              : command.name === "goal"
+                ? { action: "get" }
+                : {},
             {
+              changeGoal: () => Effect.die("Unexpected changeGoal call."),
               compactNow: () =>
                 Effect.sync(() => {
                   invocations.push("compact");
@@ -133,6 +141,7 @@ test("an empty project exposes only the invokable first-party commands", async (
                     summaryLength: 0,
                   };
                 }),
+              getGoal: () => Effect.succeed(undefined),
               sessionId: testSessionId("pipeline-test-session"),
               setSessionName: (name) =>
                 Effect.sync(() => {
@@ -151,9 +160,9 @@ test("an empty project exposes only the invokable first-party commands", async (
     );
 
     expect(result).toEqual({
-      commands: ["compact", "reload", "session-name"],
+      commands: ["compact", "goal", "reload", "session-name"],
       invocations: ["compact", "Pipeline name"],
-      plugins: ["compact", "reload", "session-name"],
+      plugins: ["compact", "goal", "reload", "session-name"],
     });
   } finally {
     await rm(projectPath, { force: true, recursive: true });
@@ -198,6 +207,7 @@ test("a project Plugin loads in phase 2 and its command is invokable", async () 
     expect(result.output).toBe("project-result");
     expect(result.plugins.map(({ name, scope }) => ({ name, scope }))).toEqual([
       { name: "compact", scope: "external" },
+      { name: "goal", scope: "external" },
       { name: "reload", scope: "external" },
       { name: "session-name", scope: "external" },
       { name: "project-command", scope: "project-local" },
@@ -428,8 +438,8 @@ test("noProjectPlugins skips discovered and CLI project-local Plugins but keeps 
     );
 
     expect(result).toEqual({
-      commands: ["compact", "external-command", "reload", "session-name", "user-command"],
-      plugins: ["compact", "external-command", "reload", "session-name", "user-command"],
+      commands: ["compact", "external-command", "goal", "reload", "session-name", "user-command"],
+      plugins: ["compact", "external-command", "goal", "reload", "session-name", "user-command"],
     });
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -499,8 +509,8 @@ test("trusted composition uses fresh memory stores and never writes Trust state"
     const projectFiles = await readdir(projectPath, { recursive: true });
 
     expect(loadedNames).toEqual([
-      ["compact", "reload", "session-name", "trusted-command"],
-      ["compact", "reload", "session-name", "trusted-command"],
+      ["compact", "goal", "reload", "session-name", "trusted-command"],
+      ["compact", "goal", "reload", "session-name", "trusted-command"],
     ]);
     expect(projectFiles.filter((path) => path.toLowerCase().includes("trust"))).toEqual([
       ".popeye/plugins/trusted-command.ts",
@@ -623,6 +633,7 @@ test("the generation-backed PluginHost invokes a discovered command", async () =
             "host-command",
             {},
             {
+              changeGoal: () => Effect.die("Unexpected changeGoal call."),
               compactNow: () =>
                 Effect.succeed({
                   compactionEntryId: "unused",
@@ -630,6 +641,7 @@ test("the generation-backed PluginHost invokes a discovered command", async () =
                   sliceCount: 0,
                   summaryLength: 0,
                 }),
+              getGoal: () => Effect.die("Unexpected getGoal call."),
               sessionId: testSessionId("pipeline-host-session"),
               setSessionName: () => Effect.void,
             },

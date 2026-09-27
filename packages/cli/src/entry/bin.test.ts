@@ -99,7 +99,7 @@ test("the built print Head accepts positional and piped prompts with pure stdout
         mode: "print",
         model: "fake-model",
         sessionAction: "create",
-        toolCount: 0,
+        toolCount: 1,
       },
     ]);
   }
@@ -140,7 +140,7 @@ test("the built bin reports the adapted project Plugin Tool count", () => {
   });
 
   expect(result.status).toBe(0);
-  expect(startupRecords(result.stderr)).toMatchObject([{ toolCount: 1 }]);
+  expect(startupRecords(result.stderr)).toMatchObject([{ toolCount: 2 }]);
 });
 
 test("the built RPC Head Snapshot audits the loaded Plugin generation and sorted Capability grants", () => {
@@ -179,7 +179,7 @@ test("the built RPC Head Snapshot audits the loaded Plugin generation and sorted
     capabilityGrants: ["filesystem-read", "shell"],
     loadedGeneration: {
       id: expect.any(String),
-      plugins: ["compact", "reload", "session-name", "snapshot-audit"],
+      plugins: ["compact", "goal", "reload", "session-name", "snapshot-audit"],
     },
   });
 });
@@ -261,11 +261,37 @@ test("the built JSON Head Snapshot audits the current process after Session resu
     capabilityGrants: [],
     loadedGeneration: {
       id: expect.any(String),
-      plugins: ["compact", "reload", "session-name"],
+      plugins: ["compact", "goal", "reload", "session-name"],
     },
     sessionId,
   });
 });
+
+test("the built print Head can resume without a new prompt", () => {
+  const directory = sessionDirectory();
+  const created = runBuiltBin(
+    ["-p", "--mode", "json", "--session-dir", directory, FAKE_PROVIDER_PROMPT],
+    { env: fakeProviderEnvironment() },
+  );
+  expect(created.status, created.stderr).toBe(0);
+  const createdFrames = created.stdout
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const sessionId = createdFrames.at(-1)?.sessionId;
+  if (typeof sessionId !== "string") {
+    throw new Error("JSON Head Snapshot did not contain a Session id.");
+  }
+
+  const resumed = runBuiltBin(["-p", "--resume", sessionId, "--session-dir", directory], {
+    env: fakeProviderEnvironment(),
+  });
+  expect(resumed.status, resumed.stderr).toBe(0);
+  expect(resumed.stdout).toBe("");
+  expect(startupRecords(resumed.stderr)).toMatchObject([
+    { mode: "print", sessionAction: `resume:${sessionId}` },
+  ]);
+}, 15_000);
 
 test("the built JSON CLI exposes invalid project Plugin Tool arguments to the Provider", () => {
   const projectPath = sessionDirectory();
@@ -367,7 +393,7 @@ test("the built JSON CLI exposes invalid project Plugin Tool arguments to the Pr
   expect(toolResult?.content).toEqual(
     expect.stringContaining("Invalid arguments for tool project-echo"),
   );
-  expect(startupRecords(result.stderr)).toMatchObject([{ toolCount: 1 }]);
+  expect(startupRecords(result.stderr)).toMatchObject([{ toolCount: 2 }]);
 }, 15_000);
 
 test("the built RPC Head serves LF-delimited commands until stdin closes", () => {

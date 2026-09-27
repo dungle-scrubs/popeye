@@ -27,10 +27,13 @@
 import {
   type CompactionPayload,
   CompactionPayloadSchema,
+  deriveGoal,
   type Entry,
   EntryDraftSchema,
   type EntryId,
   EntrySchema,
+  type Goal,
+  GoalSchema,
   Journal,
   JournalDraftRejected,
   JournalError,
@@ -58,6 +61,7 @@ import {
   ToolResultMessagePayloadSchema,
 } from "./entry-payloads.js";
 import type { TurnQueueFull } from "./errors.js";
+import { makeGoalAccess } from "./goal.js";
 import {
   CLOSE_GRACE_MS,
   Mailbox,
@@ -91,6 +95,7 @@ import {
 
 export const DriverSnapshotSchema = Schema.Struct({
   entries: Schema.Array(EntrySchema),
+  goal: Schema.optional(GoalSchema),
   leaf: EntrySchema,
   model: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
@@ -111,6 +116,7 @@ export type CloseSessionResult = Schema.Schema.Type<typeof CloseSessionResultSch
 
 interface DriverSnapshotCore {
   readonly entries: ReadonlyArray<Entry>;
+  readonly goal?: Goal;
   readonly leaf: Entry;
   readonly model?: string;
   readonly name?: string;
@@ -164,6 +170,9 @@ export interface DriverService {
   readonly resumeSession: (
     sessionId: SessionId,
   ) => Effect.Effect<ResumedSessionInfo, SessionsFailure>;
+  readonly resumeGoal: (
+    sessionId: SessionId,
+  ) => Effect.Effect<TurnResult | undefined, JournalFailure>;
   readonly setModel: (
     sessionId: SessionId,
     model: string,
@@ -292,6 +301,7 @@ export const DriverLive: Layer.Layer<
   Effect.gen(function* () {
     const compaction = yield* Compaction;
     const journal = yield* Journal;
+    const goals = makeGoalAccess(journal);
     const store = makeSessionStoreForTest(journal);
     const mailbox = yield* Mailbox;
     const pluginHost = yield* PluginHost;
@@ -314,8 +324,10 @@ export const DriverLive: Layer.Layer<
         }
         const phase = yield* progress.currentPhase(sessionId);
         const settings = yield* deriveViewSettings(entries);
+        const goal = yield* deriveGoal(entries);
         return {
           entries,
+          ...(goal === undefined ? {} : { goal }),
           leaf,
           ...(settings.model === undefined ? {} : { model: settings.model }),
           ...(settings.name === undefined ? {} : { name: settings.name }),
@@ -500,6 +512,7 @@ export const DriverLive: Layer.Layer<
             name: "invoke-command",
             run: (revision) =>
               pluginHost.invokeCommand(name, args, {
+                changeGoal: (action) => goals.changeGoal(sessionId, action),
                 compactNow: (commandExpectedRevision) =>
                   requireRevision(commandExpectedRevision, revision).pipe(
                     Effect.zipRight(
@@ -513,6 +526,7 @@ export const DriverLive: Layer.Layer<
                       }),
                     ),
                   ),
+                getGoal: () => goals.getGoal(sessionId),
                 sessionId,
                 setSessionName: (sessionName, commandExpectedRevision) =>
                   requireRevision(commandExpectedRevision, revision).pipe(
@@ -544,6 +558,7 @@ export const DriverLive: Layer.Layer<
         ),
       resumeSession: (sessionId) =>
         sessions.resume(sessionId).pipe(Effect.tap(() => readSnapshot(sessionId))),
+      resumeGoal: (sessionId) => orchestrator.resumeGoal(sessionId),
       setModel: updateModel,
       setThinkingLevel: updateThinkingLevel,
       steer: (sessionId, content) => orchestrator.steer(sessionId, content),

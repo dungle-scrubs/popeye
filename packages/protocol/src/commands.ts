@@ -19,6 +19,7 @@ export const COMMAND_TAGS = [
   "list",
   "prompt",
   "resume",
+  "resume-goal",
   "set-model",
   "set-thinking",
   "steer",
@@ -45,6 +46,7 @@ export const ThinkingLevelSchema = Schema.Literal(...THINKING_LEVELS);
 export const CommandSchema = Schema.Union(
   Schema.TaggedStruct("create", CorrelationFields),
   Schema.TaggedStruct("resume", SessionFields),
+  Schema.TaggedStruct("resume-goal", SessionFields),
   Schema.TaggedStruct("list", CorrelationFields),
   Schema.TaggedStruct("prompt", {
     ...SessionFields,

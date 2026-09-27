@@ -38,6 +38,7 @@ export const snapshotEncodedBytes = (snapshot: Snapshot): number => {
 
 export interface PaginationInput {
   readonly entries: ReadonlyArray<Entry>;
+  readonly goal?: Snapshot["goal"];
   readonly leafEntryId: EntryId;
   readonly phase: Snapshot["phase"];
   readonly revision: number;
@@ -65,6 +66,7 @@ const buildSnapshot = (
     ...(input.capabilityGrants === undefined ? {} : { capabilityGrants: input.capabilityGrants }),
     entries: [...entries],
     ...(entryRange === undefined ? {} : { entryRange }),
+    ...(input.goal === undefined ? {} : { goal: input.goal }),
     leafEntryId: input.leafEntryId,
     ...(input.loadedGeneration === undefined ? {} : { loadedGeneration: input.loadedGeneration }),
     ...(input.model === undefined ? {} : { model: input.model }),

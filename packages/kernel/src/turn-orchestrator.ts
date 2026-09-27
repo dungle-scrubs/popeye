@@ -16,8 +16,10 @@
  */
 
 import {
+  deriveGoal,
   EntryDraftSchema,
   foldContext,
+  type Goal,
   Journal,
   type JournalFailure,
   type SessionId,
@@ -47,6 +49,7 @@ import {
 } from "./compaction-policy.js";
 import type { AssistantDiagnostic } from "./entry-payloads.js";
 import { BudgetExceeded, type ProviderError, TurnQueueFull } from "./errors.js";
+import { makeGoalAccess } from "./goal.js";
 import { Mailbox, type MailboxFailure } from "./mailbox.js";
 import { PluginHost } from "./plugin-host.js";
 import { type Progress, ProgressHub, type TurnPhase } from "./progress.js";
@@ -165,6 +168,9 @@ export type TurnOptionsResolver = (
 
 export interface TurnOrchestratorService {
   readonly abortTurn: (sessionId: SessionId) => Effect.Effect<AbortTurnResult>;
+  readonly resumeGoal: (
+    sessionId: SessionId,
+  ) => Effect.Effect<TurnResult | undefined, JournalFailure>;
   readonly openTurn: (
     sessionId: SessionId,
     content: string,
@@ -237,6 +243,23 @@ export { DEFAULT_RETRY_BASE_DELAY_MS };
 
 /** Maximum steering or follow-up items retained per session. Excess input fails typed. */
 export const TURN_INPUT_QUEUE_CAPACITY = 64;
+const MAX_GOAL_CONTINUATIONS = 40;
+
+const goalContextInstruction = (goal: Goal | undefined): string | undefined => {
+  if (goal === undefined) return undefined;
+  switch (goal.status) {
+    case "active":
+      return `Active Goal: ${goal.objective}\nKeep working toward this Goal. Use manage-goal to mark it complete with evidence, pause it, or mark it blocked with a reason. Do not stop while actionable work remains.`;
+    case "paused":
+      return `Paused Goal: ${goal.objective}\nDo not continue it until the user resumes it.`;
+    case "blocked":
+      return `Blocked Goal: ${goal.objective}\nReason: ${goal.reason}\nAsk for what is needed to resume.`;
+    case "complete":
+      return `Completed Goal: ${goal.objective}\nEvidence: ${goal.evidence}`;
+    case "cancelled":
+      return `Cancelled Goal: ${goal.objective}\nDo not continue this Goal.`;
+  }
+};
 
 interface BufferedToolCall extends ToolCall {
   readonly index?: number;
@@ -320,14 +343,38 @@ export const TurnOrchestratorLive = (): Layer.Layer<
       const journal = yield* Journal;
       const mailbox = yield* Mailbox;
       const pluginHost = yield* PluginHost;
+      const goalAccess = makeGoalAccess(journal);
       const progress = yield* ProgressHub;
       const provider = yield* Provider;
       const toolRegistry = yield* ToolRegistry;
       const active = yield* Ref.make<Map<SessionId, ActiveTurn>>(new Map());
       const followUps = yield* Ref.make<Map<SessionId, ReadonlyArray<FollowUpItem>>>(new Map());
+      const goalChains = yield* Ref.make<ReadonlyMap<SessionId, Deferred.Deferred<TurnResult>>>(
+        new Map(),
+      );
+      const goalContinuationPending = yield* Ref.make<ReadonlyMap<SessionId, symbol>>(new Map());
+      const goalStopRequested = yield* Ref.make<ReadonlySet<SessionId>>(new Set());
       const turnRegistrations = yield* Ref.make<Map<SessionId, ReadonlyArray<TurnRegistration>>>(
         new Map(),
       );
+
+      const ensureGoalChain = (sessionId: SessionId): Effect.Effect<void> =>
+        Effect.gen(function* () {
+          const current = (yield* Ref.get(goalChains)).get(sessionId);
+          if (current !== undefined && !(yield* Deferred.isDone(current))) return;
+          const next = yield* Deferred.make<TurnResult>();
+          yield* Ref.update(goalChains, (chains) => new Map(chains).set(sessionId, next));
+        });
+
+      const completeGoalChain = (sessionId: SessionId, result: TurnResult): Effect.Effect<void> =>
+        Ref.get(goalChains).pipe(
+          Effect.flatMap((chains) => {
+            const chain = chains.get(sessionId);
+            return chain === undefined
+              ? Effect.void
+              : Deferred.succeed(chain, result).pipe(Effect.asVoid);
+          }),
+        );
 
       const offerTurnRegistration = (
         sessionId: SessionId,
@@ -480,15 +527,59 @@ export const TurnOrchestratorLive = (): Layer.Layer<
 
       const execute = (
         sessionId: SessionId,
-        content: string,
+        content: string | undefined,
         options: TurnOptions,
         leasedGeneration: unknown,
         registration: TurnRegistration | undefined,
+        resolveOptions: TurnOptionsResolver,
       ): Effect.Effect<TurnResult, BudgetExceeded | JournalFailure | ProviderError> =>
         Effect.gen(function* () {
           const priorBranch = yield* journal.readBranch(sessionId);
+          if (content !== undefined) {
+            yield* Ref.update(goalStopRequested, (current) => {
+              const next = new Set(current);
+              next.delete(sessionId);
+              return next;
+            });
+          }
+          if (content === undefined) {
+            yield* Ref.update(goalContinuationPending, (current) => {
+              const next = new Map(current);
+              next.delete(sessionId);
+              return next;
+            });
+            if ((yield* Ref.get(goalStopRequested)).has(sessionId)) {
+              yield* completeGoalChain(sessionId, { stopReason: "aborted" });
+              return { stopReason: "aborted" as const };
+            }
+          }
+          if (content === undefined) {
+            const goal = yield* deriveGoal(priorBranch);
+            if (goal?.status !== "active") {
+              yield* completeGoalChain(sessionId, { stopReason: "done" });
+              return { stopReason: "done" as const };
+            }
+            if (goal.continuations >= MAX_GOAL_CONTINUATIONS) {
+              yield* journal.appendEntry(
+                sessionId,
+                EntryDraftSchema.make({
+                  kind: "goal_change",
+                  payload: {
+                    goal: {
+                      ...goal,
+                      reason: `Goal stopped after ${MAX_GOAL_CONTINUATIONS} automatic continuations.`,
+                      status: "blocked" as const,
+                    },
+                  },
+                }),
+              );
+              yield* completeGoalChain(sessionId, { stopReason: "done" });
+              return { stopReason: "done" as const };
+            }
+          }
           const turnOrdinal =
             priorBranch.filter((entry) => {
+              if (entry.kind === "goal_continuation") return true;
               const item = entryToContextItem(entry);
               if (item?.role !== "user") {
                 return false;
@@ -520,6 +611,7 @@ export const TurnOrchestratorLive = (): Layer.Layer<
           const toolCalls = yield* Ref.make<ReadonlyArray<BufferedToolCall>>([]);
           const executingCalls = yield* Ref.make<ReadonlyArray<ToolCall> | undefined>(undefined);
           const compactionAttempted = yield* Ref.make(false);
+          const goalContinuationQueued = yield* Ref.make(false);
           const providerRuntime = yield* makeProviderRequestRuntime({
             ...(options.retryBaseDelayMs === undefined
               ? {}
@@ -713,8 +805,61 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                 if (steeringDecision._tag === "convert") {
                   yield* queueConvertedSteering(steeringDecision.items);
                 }
+                if (reason !== "done" || (yield* Ref.get(goalStopRequested)).has(sessionId)) {
+                  const goal = yield* goalAccess.getGoal(sessionId);
+                  if (goal?.status === "active") {
+                    yield* goalAccess
+                      .changeGoal(sessionId, { action: "pause" })
+                      .pipe(Effect.catchTag("GoalTransitionError", () => Effect.void));
+                  }
+                }
+                if (reason === "done" && steeringDecision._tag === "finish") {
+                  const branch = yield* journal.readBranch(sessionId);
+                  const goal = yield* deriveGoal(branch);
+                  if (goal?.status === "active") {
+                    yield* ensureGoalChain(sessionId);
+                    const hasUserInput =
+                      (yield* Ref.get(followUps)).has(sessionId) ||
+                      (yield* Ref.get(turnRegistrations)).has(sessionId);
+                    if (!hasUserInput) {
+                      if (goal.continuations >= MAX_GOAL_CONTINUATIONS) {
+                        yield* journal.appendEntry(
+                          sessionId,
+                          EntryDraftSchema.make({
+                            kind: "goal_change",
+                            payload: {
+                              goal: {
+                                ...goal,
+                                reason: `Goal stopped after ${MAX_GOAL_CONTINUATIONS} automatic continuations.`,
+                                status: "blocked" as const,
+                              },
+                            },
+                          }),
+                        );
+                      } else {
+                        yield* Ref.set(goalContinuationQueued, true);
+                      }
+                    }
+                  }
+                }
                 yield* durability.finishOperation(reason);
                 yield* finishSettlement(reason);
+                const settledGoal = yield* goalAccess.getGoal(sessionId);
+                if (settledGoal?.status !== "active") {
+                  yield* completeGoalChain(sessionId, {
+                    stopReason: (yield* Ref.get(goalStopRequested)).has(sessionId)
+                      ? "aborted"
+                      : reason,
+                  });
+                }
+                if (yield* Ref.get(goalContinuationQueued)) {
+                  yield* scheduleGoalContinuation(
+                    sessionId,
+                    withoutExpectedRevision(options),
+                    leasedGeneration,
+                    resolveOptions,
+                  );
+                }
                 return false;
               }).pipe(Effect.onError(() => finishSettlement(reason))),
             );
@@ -893,17 +1038,35 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                 const fold = () =>
                   journal.readBranch(sessionId).pipe(
                     Effect.flatMap((branch) =>
-                      foldContext(branch, {
-                        budget: options.contextBudget ?? DEFAULT_CONTEXT_BUDGET,
-                        summaryItem: (payload): ContextItem => ({
-                          content: payload.summary,
-                          role: "system",
-                        }),
-                        visibility: entryToContextItem,
+                      Effect.gen(function* () {
+                        const goal = yield* deriveGoal(branch);
+                        const goalInstruction = goalContextInstruction(goal);
+                        const budget = options.contextBudget ?? DEFAULT_CONTEXT_BUDGET;
+                        const goalCost =
+                          (goalInstruction?.length ?? 0) +
+                          (goalInstruction !== undefined && options.appendSystemPrompt !== undefined
+                            ? 2
+                            : 0);
+                        if (goalCost > budget) {
+                          return yield* new BudgetExceeded({
+                            budget,
+                            optionsDiagnostic: "Goal instruction exceeds the context budget.",
+                            required: goalCost,
+                          });
+                        }
+                        const folded = yield* foldContext(branch, {
+                          budget: budget - goalCost,
+                          summaryItem: (payload): ContextItem => ({
+                            content: payload.summary,
+                            role: "system",
+                          }),
+                          visibility: entryToContextItem,
+                        });
+                        return { folded, goalInstruction };
                       }),
                     ),
                   );
-                const context = yield* fold().pipe(
+                const { folded: context, goalInstruction } = yield* fold().pipe(
                   Effect.catchTag("ContextBudgetExceeded", (error) => {
                     const compactionOptions = resolveCompactionPolicyOptions(
                       compaction.policy,
@@ -966,7 +1129,12 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                 yield* phaseChanged(progress, sessionId, "STREAMING");
                 yield* consume(
                   composeSystemPrompt(context.items, {
-                    appendSystemPrompt: options.appendSystemPrompt,
+                    appendSystemPrompt:
+                      goalInstruction === undefined
+                        ? options.appendSystemPrompt
+                        : [options.appendSystemPrompt, goalInstruction]
+                            .filter(Boolean)
+                            .join("\n\n"),
                     compactionApplied: context.accounting.compactionApplied !== undefined,
                     systemPrompt: options.systemPrompt,
                   }),
@@ -1044,9 +1212,15 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                         onToolCompleted,
                         onToolStarted,
                       };
-                const batch = yield* executeToolBatch(calls, { sessionId }, batchOptions).pipe(
-                  Effect.provideService(ToolRegistry, toolRegistry),
-                );
+                const batch = yield* executeToolBatch(
+                  calls,
+                  {
+                    changeGoal: (action) => goalAccess.changeGoal(sessionId, action),
+                    getGoal: () => goalAccess.getGoal(sessionId),
+                    sessionId,
+                  },
+                  batchOptions,
+                ).pipe(Effect.provideService(ToolRegistry, toolRegistry));
                 const toolNames = new Map(calls.map((call) => [call.id, call.name]));
                 yield* Effect.uninterruptible(
                   Effect.forEach(
@@ -1068,12 +1242,22 @@ export const TurnOrchestratorLive = (): Layer.Layer<
             );
 
           const run = Effect.gen(function* () {
-            const user = yield* journal.appendEntry(
+            const prompt = yield* journal.appendEntry(
               sessionId,
-              EntryDraftSchema.make({ kind: "message", payload: { content, role: "user" } }),
+              content === undefined
+                ? EntryDraftSchema.make({ kind: "goal_continuation", payload: {} })
+                : EntryDraftSchema.make({ kind: "message", payload: { content, role: "user" } }),
             );
-            yield* durability.beginOperation(user.id);
-            yield* Effect.annotateCurrentSpan({ sessionId, turnOrdinal, userEntryId: user.id });
+            yield* durability.beginOperation(prompt.id);
+            if (content === undefined) yield* goalAccess.advanceGoal(sessionId);
+            yield* Effect.annotateCurrentSpan({
+              ...(content === undefined
+                ? { goalContinuationEntryId: prompt.id }
+                : { userEntryId: prompt.id }),
+              promptEntryId: prompt.id,
+              sessionId,
+              turnOrdinal,
+            });
             let reason = yield* request();
             while (
               yield* settle(
@@ -1207,7 +1391,7 @@ export const TurnOrchestratorLive = (): Layer.Layer<
 
       const enqueueTurn = (
         sessionId: SessionId,
-        content: string,
+        content: string | undefined,
         options: TurnOptions,
         followUp: FollowUpItem | undefined = undefined,
         registration: TurnRegistration | undefined = undefined,
@@ -1231,7 +1415,14 @@ export const TurnOrchestratorLive = (): Layer.Layer<
               ).pipe(
                 Effect.zipRight(resolveOptions(options)),
                 Effect.flatMap((resolvedOptions) =>
-                  execute(sessionId, content, resolvedOptions, leasedGeneration, registration),
+                  execute(
+                    sessionId,
+                    content,
+                    resolvedOptions,
+                    leasedGeneration,
+                    registration,
+                    resolveOptions,
+                  ),
                 ),
                 Effect.withSpan("kernel.turn", {
                   attributes: {
@@ -1273,6 +1464,36 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                   registration === undefined
                     ? Effect.void
                     : removeTurnRegistration(sessionId, registration),
+                ),
+                Effect.zipRight(
+                  followUp === undefined && registration === undefined
+                    ? Effect.void
+                    : Effect.gen(function* () {
+                        const chain = (yield* Ref.get(goalChains)).get(sessionId);
+                        if (chain === undefined || (yield* Deferred.isDone(chain))) return;
+                        const goal = yield* goalAccess.getGoal(sessionId);
+                        if (goal?.status !== "active") {
+                          yield* completeGoalChain(sessionId, { stopReason: "done" });
+                          return;
+                        }
+                        const hasUserInput =
+                          (yield* Ref.get(followUps)).has(sessionId) ||
+                          (yield* Ref.get(turnRegistrations)).has(sessionId);
+                        if (!hasUserInput) {
+                          yield* scheduleGoalContinuation(
+                            sessionId,
+                            withoutExpectedRevision(options),
+                            leasedGeneration,
+                            resolveOptions,
+                          );
+                        }
+                      }).pipe(
+                        Effect.catchAllCause((cause) =>
+                          Effect.logError("Goal Follow-up recovery failed", cause).pipe(
+                            Effect.zipRight(completeGoalChain(sessionId, { stopReason: "error" })),
+                          ),
+                        ),
+                      ),
                 ),
                 Effect.zipRight(Effect.fail(error)),
               ),
@@ -1340,6 +1561,72 @@ export const TurnOrchestratorLive = (): Layer.Layer<
           );
         });
 
+      const scheduleGoalContinuation = (
+        sessionId: SessionId,
+        options: TurnOptions = {},
+        leasedGeneration: unknown = undefined,
+        resolveOptions: TurnOptionsResolver = keepTurnOptions,
+      ): Effect.Effect<void> =>
+        Effect.gen(function* () {
+          if ((yield* Ref.get(goalStopRequested)).has(sessionId)) {
+            const goal = yield* goalAccess
+              .getGoal(sessionId)
+              .pipe(Effect.catchAllCause(() => Effect.succeed(undefined)));
+            if (goal?.status === "active") {
+              yield* goalAccess
+                .changeGoal(sessionId, { action: "pause" })
+                .pipe(Effect.catchAllCause(() => Effect.void));
+            }
+            yield* completeGoalChain(sessionId, { stopReason: "aborted" });
+            return;
+          }
+          const token = Symbol("goal-continuation");
+          const newlyPending = yield* Ref.modify(goalContinuationPending, (current) => {
+            if (current.has(sessionId)) return [false, current];
+            return [true, new Map(current).set(sessionId, token)];
+          });
+          if (!newlyPending) return;
+          yield* Effect.forkDaemon(
+            Effect.gen(function* () {
+              const exit = yield* Effect.exit(
+                enqueueTurn(
+                  sessionId,
+                  undefined,
+                  options,
+                  undefined,
+                  undefined,
+                  leasedGeneration,
+                  undefined,
+                  resolveOptions,
+                ),
+              );
+              if (Exit.isSuccess(exit)) return;
+              yield* Effect.logError("Goal continuation could not start", exit.cause);
+              const goal = yield* goalAccess
+                .getGoal(sessionId)
+                .pipe(Effect.catchAllCause(() => Effect.succeed(undefined)));
+              if (goal?.status === "active") {
+                yield* goalAccess
+                  .changeGoal(sessionId, {
+                    action: "blocked",
+                    reason: "The automatic continuation could not start.",
+                  })
+                  .pipe(Effect.catchAllCause(() => Effect.void));
+              }
+              yield* completeGoalChain(sessionId, { stopReason: "error" });
+            }).pipe(
+              Effect.ensuring(
+                Ref.update(goalContinuationPending, (current) => {
+                  if (current.get(sessionId) !== token) return current;
+                  const next = new Map(current);
+                  next.delete(sessionId);
+                  return next;
+                }),
+              ),
+            ),
+          );
+        });
+
       const openTurnInternal = (
         sessionId: SessionId,
         content: string,
@@ -1391,16 +1678,51 @@ export const TurnOrchestratorLive = (): Layer.Layer<
 
       return {
         abortTurn: (sessionId: SessionId) =>
-          Ref.get(active).pipe(
+          Ref.update(goalStopRequested, (current) => new Set(current).add(sessionId)).pipe(
+            Effect.zipRight(Ref.get(active)),
             Effect.flatMap((current) => {
               const turn = current.get(sessionId);
               if (turn === undefined) {
-                const result: AbortTurnResult = {
-                  aborted: false,
-                  reason: "none",
-                  turnOrdinal: undefined,
-                };
-                return Effect.succeed(result);
+                return Effect.gen(function* () {
+                  const chain = (yield* Ref.get(goalChains)).get(sessionId);
+                  const pendingGoal =
+                    (yield* Ref.get(goalContinuationPending)).has(sessionId) ||
+                    (chain !== undefined && !(yield* Deferred.isDone(chain)));
+                  if (!pendingGoal) {
+                    return {
+                      aborted: false,
+                      reason: "none",
+                      turnOrdinal: undefined,
+                    } satisfies AbortTurnResult;
+                  }
+                  const branch = yield* journal
+                    .readBranch(sessionId)
+                    .pipe(Effect.catchAllCause(() => Effect.succeed([])));
+                  const goal = yield* deriveGoal(branch).pipe(
+                    Effect.catchAllCause(() => Effect.succeed(undefined)),
+                  );
+                  if (goal?.status === "active") {
+                    yield* goalAccess
+                      .changeGoal(sessionId, { action: "pause" })
+                      .pipe(Effect.catchAllCause(() => Effect.void));
+                  }
+                  yield* completeGoalChain(sessionId, { stopReason: "aborted" });
+                  const turnOrdinal =
+                    branch.filter((entry) => {
+                      if (entry.kind === "goal_continuation") return true;
+                      const item = entryToContextItem(entry);
+                      return (
+                        item?.role === "user" &&
+                        (entry.payload as { readonly deliveryMode?: unknown }).deliveryMode !==
+                          "steer"
+                      );
+                    }).length + 1;
+                  return {
+                    aborted: true,
+                    note: "loop-prevented",
+                    turnOrdinal,
+                  } satisfies AbortTurnResult;
+                });
               }
               return Ref.modify(turn.stage, (stage) => {
                 if (stage === "settling" || stage === "settling-aborted") {
@@ -1463,13 +1785,22 @@ export const TurnOrchestratorLive = (): Layer.Layer<
           resolveOptions: TurnOptionsResolver = keepTurnOptions,
         ): Effect.Effect<TurnResult, TurnFailure> => {
           validateTurnOptions(options, compaction.policy);
-          return openTurnInternal(
-            sessionId,
-            content,
-            leasedGeneration,
-            options,
-            resolveOptions,
-          ).pipe(
+          return Effect.gen(function* () {
+            const priorChain = (yield* Ref.get(goalChains)).get(sessionId);
+            const priorPending =
+              priorChain === undefined ? false : !(yield* Deferred.isDone(priorChain));
+            const result = yield* openTurnInternal(
+              sessionId,
+              content,
+              leasedGeneration,
+              options,
+              resolveOptions,
+            );
+            const chain = (yield* Ref.get(goalChains)).get(sessionId);
+            return chain !== undefined && (chain !== priorChain || priorPending)
+              ? yield* Deferred.await(chain)
+              : result;
+          }).pipe(
             Effect.withSpan("turn.orchestrate", {
               attributes: {
                 generationId:
@@ -1485,6 +1816,52 @@ export const TurnOrchestratorLive = (): Layer.Layer<
             }),
           );
         },
+        resumeGoal: (sessionId: SessionId) =>
+          Effect.gen(function* () {
+            const branch = yield* journal.readBranch(sessionId);
+            const goal = yield* deriveGoal(branch);
+            if (goal?.status !== "active") return;
+            const latestGoalChange = branch.findLastIndex((entry) => entry.kind === "goal_change");
+            const latestAssistant = branch
+              .slice(latestGoalChange + 1)
+              .findLast(
+                (entry) =>
+                  entry.kind === "message" &&
+                  typeof entry.payload === "object" &&
+                  entry.payload !== null &&
+                  "role" in entry.payload &&
+                  entry.payload.role === "assistant",
+              );
+            const lastStopReason =
+              latestAssistant?.kind === "message" &&
+              typeof latestAssistant.payload === "object" &&
+              latestAssistant.payload !== null &&
+              "stopReason" in latestAssistant.payload
+                ? latestAssistant.payload.stopReason
+                : undefined;
+            if (
+              lastStopReason === "aborted" ||
+              lastStopReason === "error" ||
+              lastStopReason === "truncated"
+            ) {
+              yield* goalAccess
+                .changeGoal(sessionId, { action: "pause" })
+                .pipe(Effect.catchTag("GoalTransitionError", () => Effect.void));
+              return;
+            }
+            if ((yield* Ref.get(active)).has(sessionId)) return;
+            if ((yield* Ref.get(followUps)).has(sessionId)) return;
+            if ((yield* Ref.get(turnRegistrations)).has(sessionId)) return;
+            yield* Ref.update(goalStopRequested, (current) => {
+              const next = new Set(current);
+              next.delete(sessionId);
+              return next;
+            });
+            yield* ensureGoalChain(sessionId);
+            yield* scheduleGoalContinuation(sessionId);
+            const chain = (yield* Ref.get(goalChains)).get(sessionId);
+            return chain === undefined ? undefined : yield* Deferred.await(chain);
+          }),
         steer: (sessionId: SessionId, content: string) =>
           Effect.gen(function* () {
             const turn = (yield* Ref.get(active)).get(sessionId);
