@@ -6,9 +6,10 @@ name: Publish
 # Published event. OIDC npm trusted publishing handles auth; no npm
 # token is stored.
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
   release:
-    types: [published]
+    types:
+      - published
 
 permissions:
   contents: read
