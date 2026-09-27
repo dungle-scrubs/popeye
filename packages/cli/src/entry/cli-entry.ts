@@ -27,6 +27,7 @@ import { JournalStore, type JournalStoreEnv, SessionIdSchema } from "@dungle-scr
 import { type PluginInteractions, PluginInteractionsNullLive } from "@dungle-scrubs/popeye-plugins";
 import { Cause, Data, Effect, Exit, Layer, Logger, Schema, Stream } from "effect";
 
+import { discoverAgents } from "../agents/loader.js";
 import type { AssistantItem, Driver, ProviderService } from "../compose.js";
 import {
   AssistantStopReasonSchema,
@@ -66,6 +67,7 @@ import {
   type CliEnvironment,
   type CliRunConfig,
   resolveConfig,
+  resolveUserAgentsDir,
 } from "./config.js";
 
 // ---------------------------------------------------------------------------
@@ -91,7 +93,11 @@ export class CliEntryError extends Data.TaggedError("CliEntryError")<{
 export class CliRunError extends Data.TaggedError("CliRunError")<{
   readonly cause?: unknown;
   readonly message: string;
-  readonly reason: "composition_failed" | "fake_provider_invalid" | "missing_prompt";
+  readonly reason:
+    | "agent_tools_unknown"
+    | "composition_failed"
+    | "fake_provider_invalid"
+    | "missing_prompt";
 }> {}
 
 const entryError = (
@@ -124,6 +130,8 @@ const CLI_USAGE = `Usage:
   echo "<prompt>" | popeye -p
 
 Options:
+  --agent <name>           Start as a named Agent definition (RFC-04). Dirs: ./.popeye/agents,
+                           ~/.popeye/agents; POPEYE_AGENTS_DIR overrides the user dir.
   --base-url <url>         Set the OpenAI-compatible endpoint. Env: POPEYE_BASE_URL.
   -p, --headless           Run headless.
   --help                   Print this usage text.
@@ -325,6 +333,7 @@ const loadFakeProvider = (file: string): Effect.Effect<ProviderService, CliRunEr
 
 const startupLine = (config: CliRunConfig, toolCount: number): string =>
   `STARTUP ${JSON.stringify({
+    ...(config.agent === undefined ? {} : { agent: config.agent.name }),
     baseUrlHost: config.baseUrlHost,
     mode: config.mode,
     model: config.model,
@@ -340,6 +349,14 @@ const startupLine = (config: CliRunConfig, toolCount: number): string =>
 // ---------------------------------------------------------------------------
 // Heavy path: Driver composition + Head dispatch (previously run.ts dispatch)
 // ---------------------------------------------------------------------------
+
+export const composeAppendedSystemPrompt = (config: {
+  readonly agent: CliRunConfig["agent"];
+  readonly appendSystemPrompt: string | undefined;
+}): string =>
+  [config.agent === undefined ? undefined : config.agent.body, config.appendSystemPrompt]
+    .filter((part): part is string => part !== undefined && part.length > 0)
+    .join("\n\n");
 
 const runWithConfig = (
   config: CliRunConfig,
@@ -396,9 +413,28 @@ const runWithConfig = (
         ),
       );
       const tools = Layer.succeed(ToolRegistry, cliRuntime.toolRegistry);
-      const startupToolCount = yield* cliRuntime.toolRegistry
-        .view(SessionIdSchema.make("startup-toolcount"))
-        .pipe(Effect.map((view) => view.list().length));
+      const startupView = yield* cliRuntime.toolRegistry.view(
+        SessionIdSchema.make("startup-toolcount"),
+      );
+      const startupToolCount = startupView.list().length;
+      // RFC-04 §1: a tools list whose every name is unknown to the granted
+      // set fails closed at startup; partial unknowns ride the diagnostics
+      // channel (narrowing lands with ticket 53's filter composition).
+      if (config.agent !== undefined && config.agent.tools !== undefined) {
+        const grantedNames = new Set(startupView.list().map((tool) => tool.name));
+        const unknownTools = config.agent.tools.filter((name) => !grantedNames.has(name));
+        if (unknownTools.length === config.agent.tools.length) {
+          return yield* runError(
+            "agent_tools_unknown",
+            `Agent ${config.agent.name} (${config.agent.filePath}) lists only tools unknown to this process: ${unknownTools.join(", ")}. Startup fails closed.`,
+          );
+        }
+        if (unknownTools.length > 0) {
+          yield* Effect.logWarning(
+            `Agent ${config.agent.name} names tools unknown to this process: ${unknownTools.join(", ")}.`,
+          );
+        }
+      }
       yield* errorWriter
         .write(startupLine(config, startupToolCount))
         .pipe(
@@ -439,25 +475,26 @@ const runWithConfig = (
       >;
       // RFC-02 P4: effort onto thinkingLevel; system-prompt flags onto
       // fragment composition. Context-window rides the provider layer.
+      // RFC-04 §2: the Agent body rides the same append machinery, flag
+      // content appending after it; an empty body appends nothing.
+      const appendedSystemPrompt = composeAppendedSystemPrompt(config);
       const turnOptions =
         config.effort === undefined &&
         config.systemPrompt === undefined &&
-        config.appendSystemPrompt === undefined
+        appendedSystemPrompt === ""
           ? undefined
           : {
-              ...(config.appendSystemPrompt === undefined
-                ? {}
-                : { appendSystemPrompt: config.appendSystemPrompt }),
+              ...(appendedSystemPrompt === "" ? {} : { appendSystemPrompt: appendedSystemPrompt }),
               ...(config.systemPrompt === undefined ? {} : { systemPrompt: config.systemPrompt }),
               ...(config.effort === undefined
                 ? {}
                 : { thinkingLevel: HCN_EFFORT_TO_THINKING_LEVEL[config.effort] }),
             };
-      if (config.mode === "rpc" && turnOptions !== undefined) {
+      if (config.mode === "rpc" && (turnOptions !== undefined || config.agent !== undefined)) {
         return yield* Effect.fail(
           runError(
             "composition_failed",
-            "--effort, --system-prompt, and --append-system-prompt have no RPC wire carrier: prompt frames carry content only (set-model and set-thinking cover model and thinking level). Omit them in RPC mode.",
+            "--effort, --system-prompt, --append-system-prompt, and --agent have no RPC wire carrier: prompt frames carry content only (set-model and set-thinking cover model and thinking level). Omit them in RPC mode.",
           ),
         );
       }
@@ -578,7 +615,37 @@ export const executeCli = async (
   const program = Effect.gen(function* () {
     const initial = yield* parseArgs(argv);
     const parsed = initial.action === "run" ? yield* completePrompt(initial, io.input) : initial;
-    const config = yield* resolveConfig(parsed, env);
+    // RFC-04 slice 1: discovery runs lazily, only when --agent names a persona.
+    // Diagnostics land on stderr immediately, before any fallible config step,
+    // so a load failure never hides why a file was skipped.
+    const agentDiscovery =
+      parsed.action === "run" && parsed.agent !== undefined
+        ? yield* discoverAgents({
+            projectPath: process.cwd(),
+            userDir: resolveUserAgentsDir(env),
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new CliConfigError({
+                  ...(cause.cause === undefined ? {} : { cause: cause.cause }),
+                  message: cause.message,
+                  reason: cause.reason,
+                }),
+            ),
+          )
+        : undefined;
+    if (agentDiscovery !== undefined) {
+      for (const diagnostic of agentDiscovery.diagnostics) {
+        yield* errorWriter
+          .write(`Agent definition ${diagnostic.filePath} skipped: ${diagnostic.detail}.\n`)
+          .pipe(
+            Effect.mapError((cause) =>
+              entryError("input_failed", `Could not write CLI stderr: ${cause.message}`, cause),
+            ),
+          );
+      }
+    }
+    const config = yield* resolveConfig(parsed, env, agentDiscovery);
     return yield* dispatch(config, io, stdoutWriter, env);
   }).pipe(Effect.catchAll((error) => reportCliFailure(error, errorWriter)));
 

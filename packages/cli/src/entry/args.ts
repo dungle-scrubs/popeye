@@ -30,6 +30,8 @@ export interface ParsedRunArgs {
   readonly action: "run";
   /** HCN read/write tool access preset. */
   readonly access: string | undefined;
+  /** Agent definition name for a persona session (RFC-04). */
+  readonly agent: string | undefined;
   /** Extra system-prompt fragment appended last. */
   readonly appendSystemPrompt: string | undefined;
   readonly baseUrl: string | undefined;
@@ -129,6 +131,7 @@ export const parseArgs = (argv: ReadonlyArray<string>): Effect.Effect<ParsedArgs
         args: [...argv],
         options: {
           access: { type: "string" },
+          agent: { type: "string" },
           "append-system-prompt": { type: "string" },
           "base-url": { type: "string" },
           "context-window": { type: "string" },
@@ -231,6 +234,7 @@ export const parseArgs = (argv: ReadonlyArray<string>): Effect.Effect<ParsedArgs
           return {
             action: "run" as const,
             access: values.access,
+            agent: values.agent,
             appendSystemPrompt: values["append-system-prompt"],
             baseUrl: values["base-url"],
             contextWindow,

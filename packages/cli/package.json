@@ -21,7 +21,8 @@
     "@dungle-scrubs/popeye-journal": "workspace:*",
     "@dungle-scrubs/popeye-kernel": "workspace:*",
     "@dungle-scrubs/popeye-plugins": "workspace:*",
-    "@dungle-scrubs/popeye-protocol": "workspace:*"
+    "@dungle-scrubs/popeye-protocol": "workspace:*",
+    "yaml": "2.9.1"
   },
   "peerDependencies": {
     "effect": "^3.22.1"

@@ -55,6 +55,7 @@ test("the built help documents plugin flags in alphabetical order", () => {
     help.stdout.indexOf("\n\nLoopback"),
   );
   const orderedFlags = [
+    "--agent",
     "--base-url",
     "--headless",
     "--help",
