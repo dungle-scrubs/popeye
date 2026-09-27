@@ -125,6 +125,22 @@ A per-project decision, made before any project-local plugin loads, about
 whether that project's plugins load at all.
 _Avoid_: permission, sandboxing (isolation is an OS concern, not trust)
 
+### Agents
+
+**Agent definition**:
+A markdown artifact, frontmatter plus body, that a Session can run as.
+_Avoid_: agent file, persona, profile, custom agent
+
+**Agent session**:
+A Session that runs as an Agent definition, whether a head starts it or
+Delegation creates it.
+_Avoid_: subagent, agent run
+
+**Delegation**:
+The act of a running session handing a task to a child Agent session and
+receiving its result.
+_Avoid_: subagent, spawn, dispatch
+
 ### Presentation
 
 **Head**:
@@ -156,6 +172,9 @@ _Avoid_: RPC (one head's transport), API
   the tool unavailable, not silently permitted
 - **Trust** gates which plugins load; **Capabilities** gate what loaded
   plugins can do
+- **Delegation** hands a task to a child **Agent session** (a forked
+  **Session**) and returns its result; an **Agent definition** configures
+  that session, it is not a Plugin
 - A **Head** sends protocol commands and renders **Progress**, but trusts
   only **Snapshots**
 
@@ -186,6 +205,11 @@ kernel ~~~~ Progress ~~~~> heads   (hints; rendered, never folded)
 > **Domain expert:** "It's a **command** contributed by a **plugin** that
 > ships with popeye. There are no built-ins that bypass the plugin API -
 > that's the dogfood rule."
+>
+> **Dev:** "When we delegate, does the child get its own journal?"
+> **Domain expert:** "It gets its own **Session**. Delegation composes the
+> fork act with an **Agent definition**; the child is an **Agent session**,
+> not a branch of the parent."
 
 ## Flagged ambiguities
 
@@ -202,3 +226,7 @@ kernel ~~~~ Progress ~~~~> heads   (hints; rendered, never folded)
 - "lane" (pi harness-v2's parallel-operations concept) is deliberately
   not in this vocabulary yet; if concurrent operations per session enter
   scope, the term gets defined then.
+- "agent" was used for the product tagline (prose), the Kernel avoid-list
+  ("agent loop"), and pi's custom agents - resolved: the glossary term is
+  **Agent definition**; bare "agent" in prose is shorthand for a
+  definition, never a second term.
