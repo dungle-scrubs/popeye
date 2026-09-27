@@ -38,7 +38,10 @@ test("the built bin reports the package version and help without Provider config
   const help = runBuiltBin(["--help"]);
 
   expect(version.status).toBe(0);
-  expect(version.stdout).toBe("0.1.3\n");
+  const cliPackage = JSON.parse(
+    readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+  ) as { version: string };
+  expect(version.stdout).toBe(`${cliPackage.version}\n`);
   expect(version.stderr).toBe("");
   expect(help.status).toBe(0);
   expect(help.stdout).toContain('popeye -p --mode json "<prompt>"');

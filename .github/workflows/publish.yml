@@ -1,0 +1,40 @@
+name: Publish
+
+# Manual dispatch lets a maintainer re-publish the version currently
+# pinned at HEAD (typically just after a release-please release was
+# published). The release trigger re-publishes when GitHub records a
+# Published event. OIDC npm trusted publishing handles auth; no npm
+# token is stored.
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      - name: Update npm (OIDC requires 11.5.1+)
+        run: npm install -g npm@latest
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: Publish with OIDC provenance
+        run: pnpm -r publish --access public
+        env:
+          NPM_CONFIG_PROVENANCE: true
