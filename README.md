@@ -121,6 +121,34 @@ model. Running `popeye` inside a repository executes that repository's Plugin co
 you extend to its own scripts; use `--no-project-plugins` to opt out, or install a Trust-gate
 Plugin user-globally.
 
+### Agent definitions
+
+`--agent <name>` starts a headless Session as an Agent definition: a markdown file with YAML
+frontmatter and a body. The frontmatter requires `name` and `description`; `tools` and `model`
+are optional. The body is appended to the system prompt.
+
+```sh
+popeye -p --agent scout "Map the auth flow."
+```
+
+Discovery reads two flat directories: `~/.popeye/agents` for user definitions and `.popeye/agents`
+at the project root for project definitions. Set `POPEYE_AGENTS_DIR` to read user definitions from
+another directory. A project definition shadows a user definition of the same name. A file with
+invalid frontmatter is skipped with a warning on stderr; the other definitions still load.
+Discovery happens when `--agent` is used.
+
+Name resolution is exact and case-sensitive. An unknown name fails startup and lists the available
+names. Two definitions in one scope with the same name fail startup and name both files. The
+`model` frontmatter key picks the Provider model when `--model` is absent: `--model` beats the
+agent file, and the agent file beats `POPEYE_MODEL`. A `tools` list is checked against the tools
+this process grants: a list whose every name is unknown fails startup, and partially unknown names
+are reported as warnings. `--agent` is refused in RPC mode, like the system-prompt flags.
+
+`--agent` is a startup input, like `--system-prompt` and `--append-system-prompt`. Nothing about
+the agent is journaled with the Session: resuming a Session that ran as an agent without passing
+`--agent` again produces an unagented Session, with no warning. Pass `--agent` on resume to
+continue with the same persona.
+
 ## Guides
 
 - [Plugin authoring](docs/plugin-authoring.md) covers manifests, all 4 Contribution kinds, Hook

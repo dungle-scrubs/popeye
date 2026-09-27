@@ -13,6 +13,7 @@ export const cleanCliEnvironment = (): NodeJS.ProcessEnv => {
   for (const key of [
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
+    "POPEYE_AGENTS_DIR",
     "POPEYE_API_KEY",
     "POPEYE_BASE_URL",
     "POPEYE_FAKE_PROVIDER",

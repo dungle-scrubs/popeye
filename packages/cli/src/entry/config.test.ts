@@ -297,3 +297,155 @@ test("memory and questions flags are accepted as declared divergences", async ()
   );
   expect(config).toMatchObject({ memory: true, questions: "ask" });
 });
+
+// ---------------------------------------------------------------------------
+// Agent selection (RFC-04 slice 1)
+// ---------------------------------------------------------------------------
+
+import type { AgentDiscoveryResult } from "../agents/loader.js";
+
+const discoveryWith = (
+  entries: ReadonlyArray<{
+    readonly body?: string;
+    readonly model?: string;
+    readonly name: string;
+    readonly scope?: "project" | "user";
+    readonly tools?: ReadonlyArray<string>;
+  }>,
+): AgentDiscoveryResult => ({
+  agents: new Map(
+    entries.map((entry) => [
+      entry.name,
+      {
+        body: entry.body ?? "Persona body.",
+        description: "test agent",
+        filePath: `/agents/${entry.name}.md`,
+        model: entry.model,
+        name: entry.name,
+        scope: entry.scope ?? "user",
+        tools: entry.tools,
+      },
+    ]),
+  ),
+  diagnostics: [],
+});
+
+const parseWithAgent = async (argv: ReadonlyArray<string>) =>
+  Effect.runPromise(parseArgs(argv)).then((parsed) => {
+    if (parsed.action !== "run") {
+      throw new Error(`Expected run arguments, received ${parsed.action}.`);
+    }
+    return parsed;
+  });
+
+test("model precedence: --model beats agent file model beats POPEYE_MODEL", async () => {
+  const parsed = await parseWithAgent([
+    "-p",
+    "--agent",
+    "scout",
+    "--model",
+    "flag-model",
+    "Explain.",
+  ]);
+  const discovery = discoveryWith([{ model: "agent-model", name: "scout" }]);
+  const config = await Effect.runPromise(
+    resolveConfig(
+      parsed,
+      { POPEYE_BASE_URL: "http://127.0.0.1:1234/v1", POPEYE_MODEL: "env-model" },
+      discovery,
+    ),
+  );
+  expect(config).toMatchObject({ model: "flag-model" });
+
+  const noFlag = await parseWithAgent(["-p", "--agent", "scout", "Explain."]);
+  const fromAgent = await Effect.runPromise(
+    resolveConfig(
+      noFlag,
+      { POPEYE_BASE_URL: "http://127.0.0.1:1234/v1", POPEYE_MODEL: "env-model" },
+      discovery,
+    ),
+  );
+  expect(fromAgent).toMatchObject({ model: "agent-model" });
+
+  const noAgentModel = await parseWithAgent(["-p", "--agent", "scout", "Explain."]);
+  const fromEnv = await Effect.runPromise(
+    resolveConfig(
+      noAgentModel,
+      { POPEYE_BASE_URL: "http://127.0.0.1:1234/v1", POPEYE_MODEL: "env-model" },
+      discoveryWith([{ name: "scout" }]),
+    ),
+  );
+  expect(fromEnv).toMatchObject({ model: "env-model" });
+});
+
+test("an agent without a model key and no env model still resolves the agent model path", async () => {
+  const parsed = await parseWithAgent(["-p", "--agent", "scout", "Explain."]);
+  const exit = await Effect.runPromiseExit(
+    resolveConfig(
+      parsed,
+      { POPEYE_BASE_URL: "http://127.0.0.1:1234/v1" },
+      discoveryWith([{ name: "scout" }]),
+    ),
+  );
+  // Agent model absent and POPEYE_MODEL absent: still missing_model, and the
+  // error shape is unchanged for runs without --agent.
+  expect(Exit.isFailure(exit)).toBe(true);
+  if (Exit.isFailure(exit)) {
+    expect(String(exit.cause)).toContain("Missing model");
+  }
+});
+
+test("unknown --agent names fail with unknown_agent listing available agents", async () => {
+  const parsed = await parseWithAgent(["-p", "--agent", "ghost", "Explain."]);
+  const error = await Effect.runPromise(
+    Effect.flip(
+      resolveConfig(
+        parsed,
+        { POPEYE_BASE_URL: "http://127.0.0.1:1234/v1", POPEYE_MODEL: "m" },
+        discoveryWith([{ name: "scout" }, { name: "planner", scope: "project" }]),
+      ),
+    ),
+  );
+  expect(error).toMatchObject({ _tag: "CliConfigError", reason: "unknown_agent" });
+  expect(error.message).toContain('"ghost"');
+  expect(error.message).toContain("scout (user)");
+  expect(error.message).toContain("planner (project)");
+
+  const emptyDiscovery = await Effect.runPromise(
+    Effect.flip(
+      resolveConfig(parsed, { POPEYE_BASE_URL: "http://127.0.0.1:1234/v1", POPEYE_MODEL: "m" }),
+    ),
+  );
+  expect(emptyDiscovery.message).toContain("Available agents: none");
+});
+
+test("an empty --agent value is refused as invalid_agent", async () => {
+  const parsed = await parseWithAgent(["-p", "--agent", "", "Explain."]);
+  const error = await Effect.runPromise(
+    Effect.flip(
+      resolveConfig(parsed, { POPEYE_BASE_URL: "http://127.0.0.1:1234/v1", POPEYE_MODEL: "m" }),
+    ),
+  );
+  expect(error).toMatchObject({ _tag: "CliConfigError", reason: "invalid_agent" });
+});
+
+test("a resolved agent is carried on the run config with its body and tools", async () => {
+  const parsed = await parseWithAgent(["-p", "--agent", "scout", "Explain."]);
+  const config = await Effect.runPromise(
+    resolveConfig(
+      parsed,
+      { POPEYE_BASE_URL: "http://127.0.0.1:1234/v1", POPEYE_MODEL: "m" },
+      discoveryWith([{ body: "Be terse.", name: "scout", tools: ["read", "grep"] }]),
+    ),
+  );
+  if (config.action !== "run") {
+    throw new Error("Expected run config.");
+  }
+  expect(config.agent).toMatchObject({
+    body: "Be terse.",
+    filePath: "/agents/scout.md",
+    model: undefined,
+    name: "scout",
+    tools: ["read", "grep"],
+  });
+});

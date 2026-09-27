@@ -8,15 +8,22 @@ import { join } from "node:path";
 
 import { Data, Effect } from "effect";
 
+import type { AgentDiscoveryResult } from "../agents/loader.js";
 import type { CliMode, HcnEffort, ParsedArgs } from "./args.js";
 
 export type CliConfigErrorReason =
+  | "agent_dir_unreadable"
+  | "agent_duplicate_name"
+  | "agent_project_unresolvable"
+  | "agent_symlink_escape"
+  | "invalid_agent"
   | "invalid_base_url"
   | "invalid_model"
   | "missing_api_key"
   | "missing_base_url"
   | "missing_fake_provider_script"
   | "missing_model"
+  | "unknown_agent"
   | "unexpressible_flag";
 
 export class CliConfigError extends Data.TaggedError("CliConfigError")<{
@@ -25,9 +32,22 @@ export class CliConfigError extends Data.TaggedError("CliConfigError")<{
   readonly reason: CliConfigErrorReason;
 }> {}
 
+/** The resolved Agent definition a session runs as (RFC-04). */
+export interface CliAgentSelection {
+  /** Trimmed markdown body; empty string appends nothing. */
+  readonly body: string;
+  readonly filePath: string;
+  /** Informational: already merged into CliRunConfig.model. */
+  readonly model: string | undefined;
+  readonly name: string;
+  /** Normalized tool names; undefined means no restriction. */
+  readonly tools: ReadonlyArray<string> | undefined;
+}
+
 export interface CliRunConfig {
   readonly action: "run";
   readonly access: string | undefined;
+  readonly agent: CliAgentSelection | undefined;
   readonly apiKey: string | undefined;
   readonly appendSystemPrompt: string | undefined;
   readonly baseUrl: string;
@@ -58,6 +78,15 @@ export interface CliRunConfig {
 export type CliConfig = CliRunConfig | { readonly action: "help" } | { readonly action: "version" };
 
 export type CliEnvironment = Readonly<Record<string, string | undefined>>;
+
+const USER_AGENTS_DIR_DEFAULT = join(homedir(), ".popeye", "agents");
+
+/**
+ * User-scope Agent definition directory. POPEYE_AGENTS_DIR is
+ * operator-controlled trusted input, in the posture of POPEYE_USER_PLUGIN_DIR.
+ */
+export const resolveUserAgentsDir = (env: CliEnvironment): string =>
+  configured(env.POPEYE_AGENTS_DIR) ?? USER_AGENTS_DIR_DEFAULT;
 
 const BASE_URL_SETUP = "Set --base-url <url> or POPEYE_BASE_URL.";
 // Local OpenAI-compatible servers ignore the key, but pi-ai requires a non-empty value.
@@ -93,10 +122,38 @@ const configError = (
 export const resolveConfig = (
   parsed: ParsedArgs,
   env: CliEnvironment,
+  agentDiscovery: AgentDiscoveryResult | undefined = undefined,
 ): Effect.Effect<CliConfig, CliConfigError> =>
   Effect.gen(function* () {
     if (parsed.action !== "run") {
       return parsed;
+    }
+    if (parsed.agent !== undefined && parsed.agent.length === 0) {
+      return yield* configError(
+        "invalid_agent",
+        'Invalid --agent value "". Provide a non-empty name.',
+      );
+    }
+    const agentName = configured(parsed.agent);
+    let agent: CliAgentSelection | undefined;
+    if (agentName !== undefined) {
+      const discovered = agentDiscovery?.agents.get(agentName);
+      if (discovered === undefined) {
+        const available = [...(agentDiscovery?.agents.values() ?? [])]
+          .map((definition) => `${definition.name} (${definition.scope})`)
+          .join(", ");
+        return yield* configError(
+          "unknown_agent",
+          `Unknown agent ${JSON.stringify(agentName)}. Available agents: ${available.length > 0 ? available : "none"}.`,
+        );
+      }
+      agent = {
+        body: discovered.body,
+        filePath: discovered.filePath,
+        model: discovered.model,
+        name: discovered.name,
+        tools: discovered.tools,
+      };
     }
     // Flat journal dir with no workspace binding risks resuming a stranger
     // session: refuse before touching any session state.
@@ -112,7 +169,8 @@ export const resolveConfig = (
         'Invalid --model value "". Provide a non-empty model.',
       );
     }
-    const model = parsed.model ?? configured(env.POPEYE_MODEL);
+    // Model precedence: --model flag > agent file model > POPEYE_MODEL env.
+    const model = parsed.model ?? configured(agent?.model) ?? configured(env.POPEYE_MODEL);
     if (model === undefined) {
       return yield* configError("missing_model", `Missing model. ${MODEL_SETUP}`);
     }
@@ -156,6 +214,7 @@ export const resolveConfig = (
     return {
       action: "run",
       access: configured(parsed.access),
+      agent,
       apiKey,
       appendSystemPrompt: configured(parsed.appendSystemPrompt),
       baseUrl,

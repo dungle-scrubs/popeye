@@ -248,3 +248,10 @@ test("empty grant lists and non-positive windows refuse instead of widening", as
     expect(Exit.isFailure(failure)).toBe(true);
   }
 });
+
+test("--agent parses an agent definition name", async () => {
+  const parsed = await parseRunArgs(["-p", "--agent", "scout", "Explain."]);
+  expect(parsed.agent).toBe("scout");
+  const absent = await parseRunArgs(["-p", "Explain."]);
+  expect(absent.agent).toBeUndefined();
+});
