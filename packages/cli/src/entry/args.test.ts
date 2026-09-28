@@ -2,7 +2,7 @@ import { Effect, Exit } from "effect";
 import { expect, test } from "vitest";
 
 import type { ParsedRunArgs } from "./args.js";
-import { parseArgs, withStdinPrompt } from "./args.js";
+import { coerceResumeValue, parseArgs, withStdinPrompt } from "./args.js";
 
 const parseRunArgs = async (argv: ReadonlyArray<string>): Promise<ParsedRunArgs> => {
   const parsed = await Effect.runPromise(parseArgs(argv));
@@ -254,4 +254,71 @@ test("--agent parses an agent definition name", async () => {
   expect(parsed.agent).toBe("scout");
   const absent = await parseRunArgs(["-p", "Explain."]);
   expect(absent.agent).toBeUndefined();
+});
+
+test("coerceResumeValue folds a bare --resume and its next token into --resume=<value>", () => {
+  expect(coerceResumeValue(["--resume", "-AbCdEfGhIjKl"])).toEqual(["--resume=-AbCdEfGhIjKl"]);
+  expect(coerceResumeValue(["--resume", "--AbCdEfGhIjKl"])).toEqual(["--resume=--AbCdEfGhIjKl"]);
+  expect(coerceResumeValue(["--resume", "session-1"])).toEqual(["--resume=session-1"]);
+  expect(
+    coerceResumeValue([
+      "-p",
+      "--mode",
+      "json",
+      "--resume",
+      "-AbCdEfGhIjKl",
+      "--session-dir",
+      "/tmp/x",
+    ]),
+  ).toEqual(["-p", "--mode", "json", "--resume=-AbCdEfGhIjKl", "--session-dir", "/tmp/x"]);
+  // A trailing --resume with no value is left untouched so parseArgs can
+  // report the missing value as it always has.
+  expect(coerceResumeValue(["-p", "--resume"])).toEqual(["-p", "--resume"]);
+  // Tokens after a bare -- are positionals, never an option.
+  expect(coerceResumeValue(["-p", "--", "--resume", "notes"])).toEqual([
+    "-p",
+    "--",
+    "--resume",
+    "notes",
+  ]);
+  // --resume already carries an =value form: passthrough.
+  expect(coerceResumeValue(["--resume=-AbCdEfGhIjKl"])).toEqual(["--resume=-AbCdEfGhIjKl"]);
+});
+
+test("parseArgs accepts a Session ID that starts with a dash after the bare --resume flag", async () => {
+  const id = "-AbCdEfGhIjKlMnOpQrSt";
+  const parsed = await parseRunArgs(["-p", "--resume", id, "Continue."]);
+
+  expect(parsed.resume).toBe(id);
+});
+
+test("parseArgs accepts a Session ID that starts with -- after the bare --resume flag", async () => {
+  const parsed = await parseRunArgs(["-p", "--resume", "--AbCdEfGhIjKl", "Continue."]);
+
+  expect(parsed.resume).toBe("--AbCdEfGhIjKl");
+});
+
+test("parseArgs still parses --resume with an equals-form Session ID", async () => {
+  const id = "-AbCdEfGhIjKlMnOpQrSt";
+  const parsed = await parseRunArgs(["-p", `--resume=${id}`, "Continue."]);
+
+  expect(parsed.resume).toBe(id);
+});
+
+test("parseArgs still parses --resume followed by a plain value", async () => {
+  const parsed = await parseRunArgs(["-p", "--resume", "abc", "Continue."]);
+
+  expect(parsed.resume).toBe("abc");
+});
+
+test("parseArgs reports a missing --resume value when --resume is the last token", async () => {
+  const error = await Effect.runPromise(
+    Effect.flip(parseArgs(["-p", "--session-dir", "/tmp/popeye-x", "--resume"])),
+  );
+
+  expect(error).toMatchObject({
+    _tag: "CliArgsError",
+    message: expect.stringContaining("argument missing"),
+    reason: "invalid_arguments",
+  });
 });

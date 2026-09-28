@@ -119,6 +119,36 @@ const splitListStrict = (
   return Effect.succeed(names);
 };
 
+/**
+ * Session IDs are random `base64url(12)` so about one in 64 starts with `-`.
+ * `util.parseArgs` then refuses `--resume -XYZ...` as ambiguous and aborts the
+ * whole parse. Folding the flag and its bare value into `--resume=<value>`
+ * short-circuits the ambiguity check; the value travels through unchanged.
+ * A trailing `--resume` with nothing after it stays untouched so parseArgs
+ * still reports the missing value the same way it did before. Tokens after a
+ * bare `--` are positionals and pass through unchanged.
+ */
+export const coerceResumeValue = (argv: ReadonlyArray<string>): ReadonlyArray<string> => {
+  const normalized: Array<string> = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index] as string;
+    if (token === "--") {
+      normalized.push(...argv.slice(index));
+      break;
+    }
+    if (token === "--resume") {
+      const next = argv[index + 1];
+      if (next !== undefined) {
+        normalized.push(`--resume=${next}`);
+        index += 1;
+        continue;
+      }
+    }
+    normalized.push(token);
+  }
+  return normalized;
+};
+
 export const parseArgs = (argv: ReadonlyArray<string>): Effect.Effect<ParsedArgs, CliArgsError> => {
   if (argv.some((argument) => argument === "--api-key" || argument.startsWith("--api-key="))) {
     return Effect.fail(secretFlagError());
@@ -128,7 +158,7 @@ export const parseArgs = (argv: ReadonlyArray<string>): Effect.Effect<ParsedArgs
     try: () =>
       parseNodeArgs({
         allowPositionals: true,
-        args: [...argv],
+        args: [...coerceResumeValue(argv)],
         options: {
           access: { type: "string" },
           agent: { type: "string" },
