@@ -133,6 +133,66 @@ The emitter orders Hooks by descending priority, then namespaced key. Merge beha
 typed `GateRejected`. `drop` failures do not affect the caller and emit a Tap diagnostic. A timeout
 uses the same policy as any other failure.
 
+### Live callers
+
+A declared Hook point runs only when some code in this repository emits it. A Hook contributed to
+a point with no caller never runs.
+
+| Hook point | Live callers |
+| --- | --- |
+| `context` | none |
+| `provider-request` | none |
+| `input-transform` | none |
+| `input-handling` | none |
+| `tool-call-gate` | [`tool-invocation-pipeline.ts`](../packages/cli/src/tools/tool-invocation-pipeline.ts), before each Tool call |
+| `tool-result` | none |
+| `resource-discovery` | none |
+| `compaction-gate` | [`compose.ts`](../packages/cli/src/compose.ts) and [`runtime.ts`](../packages/cli/src/plugins/runtime.ts), for manual and overflow Compaction |
+| `trust` | [`trust.ts`](../packages/plugins/src/trust.ts), when an external Plugin loads |
+| `turn-lifecycle` | none: diagnostic only |
+| `progress` | none: diagnostic only |
+| `session-lifecycle` | Kernel callers: end of `create` and end of `resume` in [`sessions.ts`](../packages/kernel/src/sessions.ts), end of `closeSession` in [`driver.ts`](../packages/kernel/src/driver.ts); plus a Head's normal exit (see below) |
+
+`session-lifecycle` reaches Plugins through
+[`generationLifecycleTap`](../packages/cli/src/compose.ts). The Kernel receives it as a function
+(`DriverDefaultOptions.lifecycle`) and never imports the Plugin package. `created` is emitted
+after the Journal Session exists and its Mailbox is active. `resumed` is emitted after recovery
+succeeds; a failed resume emits nothing. `closed` is emitted after the close settles and its
+Snapshot is read. Fork emits `created` for the new Session. Branch and Session-name changes emit
+nothing.
+
+### Diagnostic versus durable signals
+
+Every `Tap` point is **diagnostic**. Each Hook has a bounded queue of 64 items. A full queue drops
+the oldest item and emits `hook_tap_dropped`. A Plugin that observes `turn-lifecycle`, `progress`,
+or `session-lifecycle` sees a hint, not a record. Never build a guarantee on a Tap.
+
+The **durable** Session lifecycle signal is the reflection send
+([ADR-0002](adr/0002-reflection-producer.md)). It is on only when `POPEYE_REFLECT_INTAKE` names an
+executable file. It reports from the same seams as `session-lifecycle`, but it does not ride the
+Tap. The Kernel spawns `<POPEYE_REFLECT_INTAKE> hook popeye <event>` directly and writes one start
+record per activation. The next Popeye process on the same Session directory reconciles a start
+record whose process died without a close. The send is best effort. A gap shows at the intake as
+a revision without a clean end (RI-301), never as a clean close.
+
+Close contract:
+
+- `closeSession` (the RPC `close` command) reports `closed` with its drain fact.
+- The print, json, and hcn Heads report a clean close when their Session loop returns normally.
+  They never call `closeSession`.
+- The RPC Head reports a clean close for every Session still open when its input ends normally.
+- A Session gets at most one close report per activation.
+
+Paths that end a Session with no close report. The next sweep reports each one as killed:
+
+- a failed or defective Session loop in the print, json, or hcn Head;
+- RPC input that ends with an oversized frame, and an RPC writer failure;
+- a crash or SIGKILL of the Popeye process;
+- a program that composes `DriverDefault` without a Head, and never calls `closeSession`.
+
+A run with `POPEYE_REFLECT_INTAKE` unset is an uncovered path: nothing is sent and no start record
+is written.
+
 ### Typed gate decisions
 
 The Tool-call gate and Trust gate return one of these values:

@@ -72,6 +72,7 @@ import {
 import { type InvokeCommandError, PluginHost, PluginHostNone } from "./plugin-host.js";
 import { type Progress, ProgressHub, ProgressHubLive, TurnPhaseSchema } from "./progress.js";
 import { Provider, type ThinkingLevel, ThinkingLevelSchema } from "./provider.js";
+import { makeSessionLifecycle, type SessionLifecycleService } from "./session-lifecycle.js";
 import { makeSessionStoreForTest } from "./session-store.js";
 import { deriveSettings as deriveViewSettings, requireRevision } from "./session-view.js";
 import {
@@ -127,9 +128,19 @@ interface DriverSnapshotCore {
 
 export interface DriverDefaultOptions {
   readonly compaction?: CompactionPolicyOptions;
+  /**
+   * Reports Session lifecycle facts at the create, resume, and close seams (ADR-0002). Shared by
+   * Sessions and the Driver; `sessions.lifecycle`, when set, overrides it for Sessions only.
+   */
+  readonly lifecycle?: SessionLifecycleService;
   readonly mailbox?: MailboxOptions;
   readonly progressCapacity?: number;
   readonly sessions?: SessionsOptions;
+}
+
+export interface DriverLiveOptions {
+  /** Reports each settled closeSession (ADR-0002). A fresh no-op report when absent. */
+  readonly lifecycle?: SessionLifecycleService;
 }
 
 export interface DriverService {
@@ -292,13 +303,21 @@ const unansweredToolCalls = (
 const makeSnapshot = (core: DriverSnapshotCore, revision: number): DriverSnapshot =>
   DriverSnapshotSchema.make({ ...core, entries: [...core.entries], revision });
 
-export const DriverLive: Layer.Layer<
-  Driver,
-  never,
-  Compaction | Journal | Mailbox | PluginHost | ProgressHub | Provider | Sessions | TurnOrchestrator
-> = Layer.effect(
-  Driver,
+type DriverRequirements =
+  | Compaction
+  | Journal
+  | Mailbox
+  | PluginHost
+  | ProgressHub
+  | Provider
+  | Sessions
+  | TurnOrchestrator;
+
+const makeDriverService = (
+  options: DriverLiveOptions,
+): Effect.Effect<DriverService, never, DriverRequirements> =>
   Effect.gen(function* () {
+    const lifecycle = options.lifecycle ?? makeSessionLifecycle();
     const compaction = yield* Compaction;
     const journal = yield* Journal;
     const goals = makeGoalAccess(journal);
@@ -476,7 +495,10 @@ export const DriverLive: Layer.Layer<
               .pipe(Effect.map((revision) => makeSnapshot(core, revision))),
           ),
         );
-        return { drainedWithinGrace: settled !== undefined, snapshot };
+        const drainedWithinGrace = settled !== undefined;
+        // Reported only after the close settled and its Snapshot read succeeded.
+        yield* lifecycle.closed(sessionId, drainedWithinGrace, store.listSessions());
+        return { drainedWithinGrace, snapshot };
       });
 
     return {
@@ -564,8 +586,14 @@ export const DriverLive: Layer.Layer<
       steer: (sessionId, content) => orchestrator.steer(sessionId, content),
       subscribeProgress: (sessionId) => progress.subscribe(sessionId),
     } satisfies DriverService;
-  }),
-);
+  });
+
+export const DriverLiveWith = (
+  options: DriverLiveOptions = {},
+): Layer.Layer<Driver, never, DriverRequirements> =>
+  Layer.effect(Driver, makeDriverService(options));
+
+export const DriverLive = DriverLiveWith();
 
 export const DriverDefault = (
   options: DriverDefaultOptions = {},
@@ -576,8 +604,9 @@ export const DriverDefault = (
   const shared = Layer.merge(mailbox, progress);
   const compaction = CompactionLive(options.compaction).pipe(Layer.provide(shared));
   const kernel = Layer.mergeAll(shared, compaction);
-  const sessions = SessionsLive(options.sessions).pipe(Layer.provide(kernel));
+  const lifecycle = options.lifecycle ?? makeSessionLifecycle();
+  const sessions = SessionsLive({ lifecycle, ...options.sessions }).pipe(Layer.provide(kernel));
   const turns = TurnOrchestratorLive().pipe(Layer.provide(Layer.merge(kernel, pluginHost)));
   const dependencies = Layer.mergeAll(kernel, pluginHost, sessions, turns);
-  return DriverLive.pipe(Layer.provide(dependencies));
+  return DriverLiveWith({ lifecycle }).pipe(Layer.provide(dependencies));
 };

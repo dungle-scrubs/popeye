@@ -26,6 +26,8 @@ export {
   DriverDefault,
   type DriverDefaultOptions,
   DriverLive,
+  type DriverLiveOptions,
+  DriverLiveWith,
   type DriverService,
   type DriverSnapshot,
   DriverSnapshotSchema,
@@ -131,6 +133,27 @@ export {
   type RecoveryEngineService,
 } from "./recovery-engine.js";
 export {
+  type CloseFacts,
+  closePayload,
+  hookArgs,
+  type Liveness,
+  makeReflectionProducer,
+  processLiveness,
+  REFLECT_INTAKE_ENV,
+  type ReflectionEnvironment,
+  type ReflectionFaultPoint,
+  type ReflectionProducer,
+  type ReflectionProducerOptions,
+  type ReflectionStartEvent,
+  reconciledPayload,
+  reflectionExecutable,
+  reflectionProducerFromEnv,
+  type SpawnHook,
+  type StartRecord,
+  spawnDetachedHook,
+  startPayload,
+} from "./reflection-producer.js";
+export {
   type AccountingCount,
   type AccountingCounts,
   accountingRows,
@@ -145,6 +168,15 @@ export {
   SessionConductorLive,
   type SessionConductorService,
 } from "./session-conductor.js";
+export {
+  type JournalSessions,
+  makeSessionLifecycle,
+  SessionLifecycle,
+  type SessionLifecycleOptions,
+  type SessionLifecycleService,
+  type SessionLifecycleTap,
+  type SessionLifecycleTapInput,
+} from "./session-lifecycle.js";
 export {
   branchContains,
   deriveSettings,

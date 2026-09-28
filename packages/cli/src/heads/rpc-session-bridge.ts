@@ -23,8 +23,8 @@ import type { EntryId, SessionId } from "@dungle-scrubs/popeye-journal";
 import { JournalError, JournalNotFound } from "@dungle-scrubs/popeye-journal";
 import type { InteractionRequest, InteractionResponse } from "@dungle-scrubs/popeye-protocol";
 import { snapshotView } from "@dungle-scrubs/popeye-protocol";
-import { Effect, Fiber, Stream } from "effect";
-import type { Driver } from "../compose.js";
+import { Effect, Fiber, Option, Stream } from "effect";
+import { type Driver, SessionLifecycle } from "../compose.js";
 import type { HeadWriteError } from "./head-wire.js";
 import { protocolSnapshot, type SnapshotAuditFields } from "./head-wire.js";
 import type { RpcInteractionsService } from "./rpc.js";
@@ -82,6 +82,12 @@ export interface RpcInteractiveHead {
 export interface RpcSessionBridge {
   readonly handle: (command: BridgeCommand) => Effect.Effect<void, unknown>;
   readonly cleanup: Effect.Effect<void>;
+  /**
+   * Normal end of input only: a clean close report for every Session this process opened and
+   * has not closed (ADR-0002). It never calls closeSession, and an explicit close already
+   * reported is not reported again.
+   */
+  readonly reportEndOfInput: Effect.Effect<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -474,6 +480,14 @@ export const makeRpcSessionBridge = (options: {
       return Effect.die("RPC command routing is incomplete.");
     });
 
+  const reportEndOfInput: RpcSessionBridge["reportEndOfInput"] = Effect.serviceOption(
+    SessionLifecycle,
+  ).pipe(
+    Effect.flatMap((lifecycle) =>
+      Option.isSome(lifecycle) ? lifecycle.value.headExitAll(driver.listSessions()) : Effect.void,
+    ),
+  );
+
   const cleanup: RpcSessionBridge["cleanup"] = Effect.all(
     [
       Effect.forEach(
@@ -493,5 +507,5 @@ export const makeRpcSessionBridge = (options: {
     ),
   );
 
-  return { cleanup, handle };
+  return { cleanup, handle, reportEndOfInput };
 };
