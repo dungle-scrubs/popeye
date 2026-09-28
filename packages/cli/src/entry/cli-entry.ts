@@ -21,6 +21,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
 
 import { JournalStore, type JournalStoreEnv, SessionIdSchema } from "@dungle-scrubs/popeye-journal";
@@ -33,9 +34,13 @@ import type { AssistantItem, Driver, ProviderService } from "../compose.js";
 import {
   AssistantStopReasonSchema,
   GenerationDriverDefault,
+  generationLifecycleTap,
+  makeSessionLifecycle,
   PiAiProviderLive,
   Provider,
   ProviderError,
+  reflectionProducerFromEnv,
+  SessionLifecycle,
   ToolRegistry,
 } from "../compose.js";
 import { runHcnHead } from "../heads/hcn.js";
@@ -147,6 +152,12 @@ Options:
 
 Loopback endpoints need no API key; the CLI supplies its local placeholder automatically.
 Hosted endpoints require POPEYE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.
+
+Environment:
+  POPEYE_REFLECT_INTAKE    Absolute path of the reflect-intake executable. When set, each
+                           Session create, resume, and close is reported to
+                           "<path> hook popeye <event>" (docs/adr/0002). Unset, empty,
+                           relative, or not an executable file: nothing is reported.
 
 Exit status:
   0  Turn completed or truncated.
@@ -464,12 +475,29 @@ const runWithConfig = (
           : Layer.succeed(Provider, provider);
       const dependencies = Layer.mergeAll(journalLayer, providerLayer, tools);
       const currentGen = yield* cliRuntime.currentGeneration;
-      const driver = GenerationDriverDefault(currentGen).pipe(Layer.provide(dependencies));
+      // ADR-0002: one lifecycle report per process. The Tap broadcast is diagnostic; the
+      // reflection send exists only when POPEYE_REFLECT_INTAKE names an executable file.
+      const reflection = reflectionProducerFromEnv(
+        env,
+        join(resolve(config.sessionDir), "reflection"),
+      );
+      const lifecycle = makeSessionLifecycle({
+        ...(reflection === undefined ? {} : { producer: reflection }),
+        tap: generationLifecycleTap(currentGen),
+      });
+      const driver = GenerationDriverDefault(currentGen, { lifecycle }).pipe(
+        Layer.provide(dependencies),
+      );
       const pluginLive =
         config.mode === "rpc"
           ? PluginInteractionsRpcLive.pipe(Layer.provide(RpcInteractionsLive))
           : PluginInteractionsNullLive;
-      const runtime = Layer.mergeAll(driver, RpcInteractionsLive, pluginLive);
+      const runtime = Layer.mergeAll(
+        driver,
+        RpcInteractionsLive,
+        pluginLive,
+        Layer.succeed(SessionLifecycle, lifecycle),
+      );
       let head: Effect.Effect<
         HeadExitCode,
         CliRunError | HeadWriteError,

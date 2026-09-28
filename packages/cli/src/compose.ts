@@ -14,7 +14,10 @@ import {
   type DriverSnapshot,
   defineTool,
   InvokeCommandError,
+  type JournalSessions,
   kernelPackage,
+  makeReflectionProducer,
+  makeSessionLifecycle,
   PiAiProviderLive,
   type PluginCommandContext,
   type PluginCompactionGateRequest,
@@ -25,7 +28,12 @@ import {
   Provider,
   ProviderError,
   type ProviderService,
+  type ReflectionProducer,
   type RegisteredTool,
+  reflectionProducerFromEnv,
+  SessionLifecycle,
+  type SessionLifecycleService,
+  type SessionLifecycleTap,
   type SessionToolView,
   type Tool,
   ToolError,
@@ -52,13 +60,17 @@ export type {
   AssistantItem,
   DriverService,
   DriverSnapshot,
+  JournalSessions,
   PluginCommandContext,
   PluginCompactionGateRequest,
   PluginCompactionGateResult,
   PluginHostService,
   Progress,
   ProviderService,
+  ReflectionProducer,
   RegisteredTool,
+  SessionLifecycleService,
+  SessionLifecycleTap,
   SessionToolView,
   Tool,
   ToolRegistryService,
@@ -71,10 +83,14 @@ export {
   Driver,
   defineTool,
   InvokeCommandError,
+  makeReflectionProducer,
+  makeSessionLifecycle,
   PiAiProviderLive,
   PluginHost,
   Provider,
   ProviderError,
+  reflectionProducerFromEnv,
+  SessionLifecycle,
   ToolError,
   ToolRegistry,
   ToolRegistryLive,
@@ -219,10 +235,29 @@ const pluginHostService = (generation: PluginGeneration): PluginHostService => {
 export const GenerationPluginHostLive = (generation: PluginGeneration): Layer.Layer<PluginHost> =>
   Layer.succeed(PluginHost, pluginHostService(generation));
 
+/**
+ * The `session-lifecycle` Tap broadcast for one Plugin generation. Diagnostic only: Tap delivery
+ * may drop, so the durable reflection send never rides it (ADR-0002).
+ */
+export const generationLifecycleTap =
+  (generation: PluginGeneration): SessionLifecycleTap =>
+  (input) =>
+    generation.emitter
+      .emit("session-lifecycle", input, createCapabilityGrants(input.sessionId))
+      .pipe(Effect.asVoid);
+
 export const GenerationDriverDefault = (
   generation: PluginGeneration,
   options: DriverDefaultOptions = {},
-) => DriverDefault(options, GenerationPluginHostLive(generation));
+) =>
+  DriverDefault(
+    {
+      ...options,
+      lifecycle:
+        options.lifecycle ?? makeSessionLifecycle({ tap: generationLifecycleTap(generation) }),
+    },
+    GenerationPluginHostLive(generation),
+  );
 
 export const FirstPartyPluginHostLive = (
   options: FirstPartyPluginHostOptions = {},

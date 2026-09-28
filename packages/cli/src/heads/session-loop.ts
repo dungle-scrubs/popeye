@@ -18,10 +18,10 @@
  */
 
 import type { SessionId } from "@dungle-scrubs/popeye-journal";
-import { Data, Deferred, Effect, Fiber, Ref, Stream } from "effect";
+import { Data, Deferred, Effect, Fiber, Option, Ref, Stream } from "effect";
 
 import type { DriverSnapshot, Progress, TurnOptions, TurnResult } from "../compose.js";
-import { Driver } from "../compose.js";
+import { Driver, SessionLifecycle } from "../compose.js";
 import type { HeadExitCode } from "./head-wire.js";
 
 export type HeadProgressHandler = (progress: Progress) => Effect.Effect<void, unknown>;
@@ -76,6 +76,9 @@ export interface SessionLoopOptions {
  * only when onProgress is supplied. The Session is created or resumed once, then
  * reused for all prompts. Returns the first non-zero exit code, or 0 if all Turns
  * completed. Requires Driver in context.
+ * On a normal return, and only then, the loop reports a clean close for its Session through
+ * SessionLifecycle when one is provided (ADR-0002). It never calls closeSession. A failure or a
+ * defect skips the report, so reconciliation later reads the run as killed.
  */
 export const runSessionLoop = (
   options: SessionLoopOptions,
@@ -88,6 +91,20 @@ export const runSessionLoop = (
     if (options.onSession !== undefined) {
       yield* options.onSession(session.id);
     }
+    const exitCode = yield* runPrompts(driver, session, options);
+    const lifecycle = yield* Effect.serviceOption(SessionLifecycle);
+    if (Option.isSome(lifecycle)) {
+      yield* lifecycle.value.headExit(session.id, driver.listSessions());
+    }
+    return exitCode;
+  });
+
+const runPrompts = (
+  driver: Driver["Type"],
+  session: { readonly id: SessionId },
+  options: SessionLoopOptions,
+): Effect.Effect<HeadExitCode, unknown> =>
+  Effect.gen(function* () {
     let entryCountBefore = (yield* driver.getSnapshot(session.id)).entries.length;
 
     if (options.prompts.length === 0 && options.sessionId !== undefined) {

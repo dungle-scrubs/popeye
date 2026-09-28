@@ -878,6 +878,7 @@ export const runRpcHead = (options: RpcHeadOptions) => {
         );
 
         const connection = run.pipe(
+          Effect.as("end-of-input" as const),
           Effect.catchIf(
             (error): error is ProtocolError => error instanceof ProtocolError,
             (error) =>
@@ -887,9 +888,14 @@ export const runRpcHead = (options: RpcHeadOptions) => {
                   reason: error.reason,
                 }),
                 Effect.zipRight(writeProtocolError(transport, undefined, error)),
+                Effect.as("protocol-error" as const),
               ),
           ),
-          Effect.zipRight(dispatcher.finish),
+          // Queued commands, an explicit close among them, finish before the end-of-input report.
+          Effect.tap(() => dispatcher.finish),
+          Effect.flatMap((ending) =>
+            ending === "end-of-input" ? bridge.reportEndOfInput : Effect.void,
+          ),
         );
         const writerFailure = transport.failure.pipe(
           Effect.tapError(() => Effect.sync(() => options.input.destroy())),

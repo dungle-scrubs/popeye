@@ -16,6 +16,7 @@ import {
 import { Context, Effect, Layer, Schema } from "effect";
 import { Mailbox, type MailboxFailure } from "./mailbox.js";
 import { type RecoveryReport, RecoveryReportSchema } from "./recovery.js";
+import { makeSessionLifecycle, type SessionLifecycleService } from "./session-lifecycle.js";
 import { makeSessionStoreForTest } from "./session-store.js";
 import { ToolRegistry } from "./tool.js";
 
@@ -46,6 +47,8 @@ export type ResumedSessionInfo = Schema.Schema.Type<typeof ResumedSessionInfoSch
 export type SessionsFailure = JournalFailure | MailboxFailure;
 
 export interface SessionsOptions {
+  /** Reports created and resumed Sessions (ADR-0002). A fresh no-op report when absent. */
+  readonly lifecycle?: SessionLifecycleService;
   readonly recoveryDiagnosticSink?: (report: RecoveryReport) => Effect.Effect<void>;
 }
 
@@ -88,6 +91,7 @@ export const SessionsLive = (
       const recoveryDiagnosticSink =
         options.recoveryDiagnosticSink ?? defaultRecoveryDiagnosticSink;
       const store = makeSessionStoreForTest(journal, { recoveryDiagnosticSink });
+      const lifecycle = options.lifecycle ?? makeSessionLifecycle();
 
       return {
         create: () =>
@@ -95,6 +99,8 @@ export const SessionsLive = (
             const { id, leaf } = yield* store.createSession();
             const revision = yield* store.countDurableLines(id);
             yield* mailbox.activate(id);
+            // The Journal Session is durable and active before any signal leaves the process.
+            yield* lifecycle.created(id, store.listSessions());
             return { id, leaf, revision };
           }),
         list: () => store.listSessions(),
@@ -110,6 +116,8 @@ export const SessionsLive = (
                   return yield* store.resume(sessionId, available);
                 }),
             });
+            // Only a resume whose recovery succeeded reports; a failed resume has no fact.
+            yield* lifecycle.resumed(sessionId, store.listSessions());
             return {
               id: sessionId,
               leaf: recovered.value.leaf,

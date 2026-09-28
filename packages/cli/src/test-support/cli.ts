@@ -19,7 +19,10 @@ export const cleanCliEnvironment = (): NodeJS.ProcessEnv => {
     "POPEYE_FAKE_PROVIDER",
     "POPEYE_FAKE_PROVIDER_SCRIPT",
     "POPEYE_MODEL",
+    "POPEYE_REFLECT_INTAKE",
     "POPEYE_USER_PLUGIN_DIR",
+    "REFLECT_INTAKE_WORK_PARENT",
+    "HCN_INVOCATION_ID",
   ]) {
     delete env[key];
   }
