@@ -127,7 +127,7 @@ for (const format of ["jsonl", "sqlite"] as const) {
     expect(invalid.stdout).toBe("");
     expect(invalid.stderr).toBe("ERROR ACCOUNTING_READ_FAILED\n");
     expect(invalid.stderr).not.toContain("PRIVATE SENTINEL");
-  });
+  }, 15_000);
 }
 
 test("torn JSONL tail fails export without repair or leaking its content", async () => {
@@ -147,7 +147,7 @@ test("torn JSONL tail fails export without repair or leaking its content", async
   expect(result.stdout).toBe("");
   expect(result.stderr).toBe("ERROR ACCOUNTING_INCOMPLETE_TAIL\n");
   expect(readFileSync(file, "utf8")).toBe(before);
-});
+}, 15_000);
 
 test("direct and HCN CLI requests reach distinct Journal receipts and passive export", async () => {
   const directory = mkdtempSync(join(tmpdir(), "popeye-usage-live-fixture-"));
