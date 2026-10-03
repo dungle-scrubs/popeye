@@ -48,7 +48,8 @@ export interface CliRunConfig {
   readonly action: "run";
   readonly access: string | undefined;
   readonly agent: CliAgentSelection | undefined;
-  readonly apiKey: string | undefined;
+  /** Endpoint credential: POPEYE_API_KEY, the recognized host's provider key, or the loopback placeholder. */
+  readonly apiKey: string;
   readonly appendSystemPrompt: string | undefined;
   readonly baseUrl: string;
   readonly baseUrlHost: string;
@@ -103,11 +104,6 @@ const isLoopbackHost = (hostname: string): boolean =>
   hostname.endsWith(".localhost") ||
   (isIP(hostname) === 4 && hostname.startsWith("127."));
 
-const resolveApiKey = (env: CliEnvironment): string | undefined =>
-  configured(env.POPEYE_API_KEY) ??
-  configured(env.OPENAI_API_KEY) ??
-  configured(env.ANTHROPIC_API_KEY);
-
 const configError = (
   reason: CliConfigErrorReason,
   message: string,
@@ -118,6 +114,58 @@ const configError = (
     message,
     reason,
   });
+
+/**
+ * Provider key environment variables, each read only for its own official API origin.
+ * Every other non-loopback endpoint requires POPEYE_API_KEY.
+ */
+export const PROVIDER_API_KEYS: ReadonlyArray<{
+  readonly origin: string;
+  readonly variable: string;
+}> = [
+  { origin: "https://api.openai.com", variable: "OPENAI_API_KEY" },
+  { origin: "https://api.anthropic.com", variable: "ANTHROPIC_API_KEY" },
+];
+
+const PROVIDER_KEY_SCOPE = `${new Intl.ListFormat("en", { type: "conjunction" }).format(
+  PROVIDER_API_KEYS.map((entry) => entry.variable),
+)} are sent only to their own API hosts.`;
+
+// pi-ai treats a whitespace-only apiKey as absent and substitutes its provider-keyed, host-blind
+// environment lookup, so a credential counts only when it has a non-whitespace character.
+const configuredCredential = (value: string | undefined): string | undefined =>
+  value === undefined || value.trim().length === 0 ? undefined : value;
+
+const resolveApiKey = (
+  env: CliEnvironment,
+  endpoint: URL,
+): Effect.Effect<string, CliConfigError> => {
+  const explicit = configuredCredential(env.POPEYE_API_KEY);
+  if (explicit !== undefined) {
+    return Effect.succeed(explicit);
+  }
+  if (isLoopbackHost(endpoint.hostname)) {
+    return Effect.succeed(LOCAL_API_KEY_PLACEHOLDER);
+  }
+  const recognized = PROVIDER_API_KEYS.find((entry) => entry.origin === endpoint.origin);
+  if (recognized === undefined) {
+    return Effect.fail(
+      configError(
+        "missing_api_key",
+        `Endpoint ${endpoint.origin} requires POPEYE_API_KEY. ${PROVIDER_KEY_SCOPE}`,
+      ),
+    );
+  }
+  const providerKey = configuredCredential(env[recognized.variable]);
+  return providerKey === undefined
+    ? Effect.fail(
+        configError(
+          "missing_api_key",
+          `Endpoint ${endpoint.origin} requires POPEYE_API_KEY or ${recognized.variable}.`,
+        ),
+      )
+    : Effect.succeed(providerKey);
+};
 
 export const resolveConfig = (
   parsed: ParsedArgs,
@@ -193,15 +241,7 @@ export const resolveConfig = (
         ),
       try: () => new URL(baseUrl),
     });
-    const apiKey =
-      resolveApiKey(env) ??
-      (isLoopbackHost(endpoint.hostname) ? LOCAL_API_KEY_PLACEHOLDER : undefined);
-    if (!isLoopbackHost(endpoint.hostname) && apiKey === undefined) {
-      return yield* configError(
-        "missing_api_key",
-        "Hosted endpoint requires POPEYE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.",
-      );
-    }
+    const apiKey = yield* resolveApiKey(env, endpoint);
     const fakeProviderScript =
       env.POPEYE_FAKE_PROVIDER === "1" ? configured(env.POPEYE_FAKE_PROVIDER_SCRIPT) : undefined;
     if (env.POPEYE_FAKE_PROVIDER === "1" && fakeProviderScript === undefined) {
