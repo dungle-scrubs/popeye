@@ -416,7 +416,8 @@ test.skipIf(liveConfig === undefined)(
     for (const [index, progress] of output.progress.entries()) {
       if (progress._tag === "phaseChanged") {
         phase = progress.phase;
-        if (progress.phase === "STREAMING") {
+        // A Turn can span several provider rounds, so text must follow the first STREAMING.
+        if (progress.phase === "STREAMING" && streamingIndex < 0) {
           streamingIndex = index;
         }
       }
@@ -575,9 +576,25 @@ test.skipIf(liveConfig === undefined)(
         id: "after-abort",
         sessionId,
       });
+      // The follow-up's text and latency belong to the model: a reasoning model can think for
+      // a minute, and a Goal it sets holds the prompt response for the whole Goal chain. The
+      // Session proves usable by streaming a new Turn and settling it on a second abort, which
+      // also pauses any Goal that Turn set.
+      const followUpStreaming = await rpc.readFrame(
+        (frame) =>
+          frame._tag === "phaseChanged" &&
+          frame.phase === "STREAMING" &&
+          frame.sessionId === sessionId,
+      );
+      await Effect.runPromise(decodeProgress(followUpStreaming));
+      rpc.writeCommand({ _tag: "abort", id: "abort-follow-up", sessionId });
+      expect(await rpc.readResponse("abort-follow-up")).toMatchObject({
+        id: "abort-follow-up",
+        result: { _tag: "abortTurnAborted", aborted: true },
+      });
       const followUp = await rpcSnapshot(await rpc.readResponse("after-abort"), "after-abort");
-      expect(assistantTexts(followUp).at(-1)).toMatch(/SESSION-USABLE/iu);
-      expect(assistantStopReasons(followUp).at(-1)).toBe("done");
+      expect(assistantStopReasons(followUp).at(-1)).toBe("aborted");
+      expect(followUp.revision).toBeGreaterThan(promptResponse.revision);
     } finally {
       rpc.close();
     }
