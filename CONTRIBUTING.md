@@ -32,7 +32,7 @@ endpoint behind `http://127.0.0.1:1234/v1`:
 ```bash
 POPEYE_LIVE_ENDPOINT=http://127.0.0.1:1234/v1 \
 POPEYE_LIVE_MODEL=<model-id> \
-pnpm vitest run --project @popeye/cli src/entry/live.test.ts
+pnpm vitest run --project @dungle-scrubs/popeye src/entry/live.test.ts
 ```
 
 `AGENTS.local.md` (untracked, never committed) holds the current
