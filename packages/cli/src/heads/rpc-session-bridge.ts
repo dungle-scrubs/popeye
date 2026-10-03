@@ -28,6 +28,7 @@ import { type Driver, SessionLifecycle } from "../compose.js";
 import type { HeadWriteError } from "./head-wire.js";
 import { protocolSnapshot, type SnapshotAuditFields } from "./head-wire.js";
 import type { RpcInteractionsService } from "./rpc.js";
+import { RPC_NO_TURN_ADMISSION, type RpcTurnAdmission } from "./rpc-dispatch.js";
 
 // ---------------------------------------------------------------------------
 // Types shared with router (imported by rpc.ts for dispatch routing)
@@ -80,7 +81,10 @@ export interface RpcInteractiveHead {
 }
 
 export interface RpcSessionBridge {
-  readonly handle: (command: BridgeCommand) => Effect.Effect<void, unknown>;
+  readonly handle: (
+    command: BridgeCommand,
+    admission?: RpcTurnAdmission,
+  ) => Effect.Effect<void, unknown>;
   readonly cleanup: Effect.Effect<void>;
   /**
    * Normal end of input only: a clean close report for every Session this process opened and
@@ -181,7 +185,7 @@ export const makeRpcSessionBridge = (options: {
   ): Effect.Effect<void, HeadWriteError> =>
     writeSnapshotResponse(transport, id, snapshot, isAttached, snapshotAudit);
 
-  const handle: RpcSessionBridge["handle"] = (command) =>
+  const handle: RpcSessionBridge["handle"] = (command, admission = RPC_NO_TURN_ADMISSION) =>
     Effect.suspend((): Effect.Effect<void, unknown> => {
       if (command._tag === "attach") {
         const sessionId = command.sessionId as string;
@@ -386,15 +390,21 @@ export const makeRpcSessionBridge = (options: {
       }
       if (command._tag === "prompt") {
         return driver
-          .prompt(command.sessionId as unknown as SessionId, command.content as string, {
-            ...(command.deliveryMode === undefined
-              ? {}
-              : { deliveryMode: command.deliveryMode as "steer" | "followUp" }),
-            ...(command.expectedRevision === undefined
-              ? {}
-              : { expectedRevision: command.expectedRevision }),
-          })
+          .prompt(
+            command.sessionId as unknown as SessionId,
+            command.content as string,
+            {
+              ...(command.deliveryMode === undefined
+                ? {}
+                : { deliveryMode: command.deliveryMode as "steer" | "followUp" }),
+              ...(command.expectedRevision === undefined
+                ? {}
+                : { expectedRevision: command.expectedRevision }),
+            },
+            admission.admitted,
+          )
           .pipe(
+            Effect.ensuring(admission.released),
             Effect.zipRight(driver.getSnapshot(command.sessionId as unknown as SessionId)),
             Effect.flatMap((snapshot) =>
               writeSnapshot(command.id, snapshot, attached.has(command.sessionId as string)),

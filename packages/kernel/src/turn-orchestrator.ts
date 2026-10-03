@@ -177,6 +177,7 @@ export interface TurnOrchestratorService {
     leasedGeneration?: unknown,
     options?: TurnOptions,
     resolveOptions?: TurnOptionsResolver,
+    onAdmitted?: Effect.Effect<void>,
   ) => Effect.Effect<TurnResult, TurnFailure>;
   readonly steer: (
     sessionId: SessionId,
@@ -1507,12 +1508,14 @@ export const TurnOrchestratorLive = (): Layer.Layer<
         options: TurnOptions,
         leasedGeneration: unknown,
         resolveOptions: TurnOptionsResolver,
+        onAdmitted: Effect.Effect<void>,
       ): Effect.Effect<TurnResult, TurnFailure> =>
         Effect.gen(function* () {
           const offered = yield* offerTurnRegistration(sessionId);
           if (offered.queued) {
             yield* progress.publish(sessionId, { _tag: "turnQueued", content });
           }
+          yield* onAdmitted;
           return yield* enqueueTurn(
             sessionId,
             content,
@@ -1531,10 +1534,12 @@ export const TurnOrchestratorLive = (): Layer.Layer<
         options: TurnOptions,
         leasedGeneration: unknown,
         resolveOptions: TurnOptionsResolver,
+        onAdmitted: Effect.Effect<void>,
       ): Effect.Effect<TurnResult, TurnFailure | TurnQueueFull> =>
         Effect.gen(function* () {
           const item = yield* offerFollowUp(sessionId, content);
           yield* progress.publish(sessionId, { _tag: "followUpQueued", content });
+          yield* onAdmitted;
           return yield* enqueueTurn(
             sessionId,
             content,
@@ -1634,6 +1639,7 @@ export const TurnOrchestratorLive = (): Layer.Layer<
         leasedGeneration: unknown,
         options: TurnOptions,
         resolveOptions: TurnOptionsResolver,
+        onAdmitted: Effect.Effect<void>,
       ): Effect.Effect<TurnResult, TurnFailure> =>
         Effect.suspend(() =>
           Ref.get(active).pipe(
@@ -1647,8 +1653,16 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                       options,
                       leasedGeneration,
                       resolveOptions,
+                      onAdmitted,
                     )
-                  : enqueueFollowUp(sessionId, content, options, leasedGeneration, resolveOptions);
+                  : enqueueFollowUp(
+                      sessionId,
+                      content,
+                      options,
+                      leasedGeneration,
+                      resolveOptions,
+                      onAdmitted,
+                    );
               }
               if (turn === undefined) {
                 return enqueueRegisteredTurn(
@@ -1657,6 +1671,7 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                   options,
                   leasedGeneration,
                   resolveOptions,
+                  onAdmitted,
                 );
               }
               return offerSteering(turn, sessionId, content, options, resolveOptions).pipe(
@@ -1668,9 +1683,10 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                       options,
                       leasedGeneration,
                       resolveOptions,
+                      onAdmitted,
                     );
                   }
-                  return awaitTurn(turn);
+                  return onAdmitted.pipe(Effect.zipRight(awaitTurn(turn)));
                 }),
               );
             }),
@@ -1784,6 +1800,7 @@ export const TurnOrchestratorLive = (): Layer.Layer<
           leasedGeneration?: unknown,
           options: TurnOptions = {},
           resolveOptions: TurnOptionsResolver = keepTurnOptions,
+          onAdmitted: Effect.Effect<void> = Effect.void,
         ): Effect.Effect<TurnResult, TurnFailure> => {
           validateTurnOptions(options, compaction.policy);
           return Effect.gen(function* () {
@@ -1796,6 +1813,7 @@ export const TurnOrchestratorLive = (): Layer.Layer<
               leasedGeneration,
               options,
               resolveOptions,
+              onAdmitted,
             );
             const chain = (yield* Ref.get(goalChains)).get(sessionId);
             return chain !== undefined && (chain !== priorChain || priorPending)

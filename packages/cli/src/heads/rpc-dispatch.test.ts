@@ -6,6 +6,11 @@ import {
   RPC_CONTROL_FORK_CAPACITY,
   RPC_SESSION_QUEUE_CAPACITY,
   RPC_SESSIONLESS_QUEUE_CAPACITY,
+  RPC_STEER_FORK_CAPACITY,
+  type RpcDispatchContext,
+  type RpcDispatchFrame,
+  type RpcDispatchRoute,
+  type RpcTurnAdmission,
   serializedWriter,
 } from "./rpc-dispatch.js";
 
@@ -554,4 +559,237 @@ test("interrupting a writer that holds the permit releases the next writer", asy
 
   expect(Exit.isInterrupted(interrupted)).toBe(true);
   expect(writes).toEqual(["blocked\n", "next\n"]);
+});
+
+const dispatchFrame = (
+  route: RpcDispatchRoute,
+  run: RpcDispatchFrame["run"],
+  onBoundExceeded: RpcDispatchFrame["onBoundExceeded"] = () =>
+    Effect.die("A dispatch bound unexpectedly overflowed."),
+): RpcDispatchFrame => ({
+  eofBehavior: route._tag === "turn" || route._tag === "steer" ? "interrupt" : "drain",
+  onBoundExceeded,
+  route,
+  run,
+});
+
+/** Turn frame that signals the given admission steps, then blocks until release. */
+const blockingTurnFrame = (
+  steps: ReadonlyArray<"admitted" | "released">,
+  started: Deferred.Deferred<void>,
+  release: Deferred.Deferred<void>,
+) =>
+  dispatchFrame({ _tag: "turn", sessionId: "s" }, (_context, admission: RpcTurnAdmission) =>
+    Effect.forEach(steps, (step) => admission[step], { discard: true }).pipe(
+      Effect.zipRight(Deferred.succeed(started, undefined)),
+      Effect.zipRight(Deferred.await(release)),
+    ),
+  );
+
+const recordingSteerFrame = (contexts: Array<RpcDispatchContext>, ran: Deferred.Deferred<void>) =>
+  dispatchFrame({ _tag: "steer", sessionId: "s" }, (context) =>
+    Effect.sync(() => void contexts.push(context)).pipe(
+      Effect.zipRight(Deferred.succeed(ran, undefined)),
+    ),
+  );
+
+test("a steer frame bypasses its Session queue once the running turn frame is admitted", async () => {
+  const contexts: Array<RpcDispatchContext> = [];
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const steerRan = yield* Deferred.make<void>();
+        const dispatcher = yield* makeRpcDispatcher(healthyWriterState);
+        yield* dispatcher.dispatch(blockingTurnFrame(["admitted"], started, release));
+        yield* Deferred.await(started);
+        yield* dispatcher.dispatch(recordingSteerFrame(contexts, steerRan));
+        yield* Deferred.await(steerRan);
+        yield* Deferred.succeed(release, undefined);
+        yield* dispatcher.awaitIdle;
+      }),
+    ),
+  );
+  expect(contexts).toEqual([{ bypass: true, queueDepth: 0, session: "control" }]);
+});
+
+for (const [name, steps] of [
+  ["is not yet admitted", []],
+  ["has released its admission", ["admitted", "released"]],
+] as const) {
+  test(`a steer frame queues while the running turn frame ${name}`, async () => {
+    const contexts: Array<RpcDispatchContext> = [];
+    const ranBeforeRelease = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const started = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const steerRan = yield* Deferred.make<void>();
+          const dispatcher = yield* makeRpcDispatcher(healthyWriterState);
+          yield* dispatcher.dispatch(blockingTurnFrame(steps, started, release));
+          yield* Deferred.await(started);
+          yield* dispatcher.dispatch(recordingSteerFrame(contexts, steerRan));
+          const before = contexts.length;
+          yield* Deferred.succeed(release, undefined);
+          yield* Deferred.await(steerRan);
+          yield* dispatcher.awaitIdle;
+          return before;
+        }),
+      ),
+    );
+    expect(ranBeforeRelease).toBe(0);
+    expect(contexts).toEqual([{ bypass: false, queueDepth: 0, session: "s" }]);
+  });
+}
+
+test("a steer frame queues behind a non-turn frame even when that frame signals admission", async () => {
+  const events: Array<string> = [];
+  const contexts: Array<RpcDispatchContext> = [];
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const steerRan = yield* Deferred.make<void>();
+        const dispatcher = yield* makeRpcDispatcher(healthyWriterState);
+        yield* dispatcher.dispatch(
+          dispatchFrame({ _tag: "session", sessionId: "s" }, (_context, admission) =>
+            admission.admitted.pipe(
+              Effect.zipRight(Deferred.succeed(started, undefined)),
+              Effect.zipRight(Deferred.await(release)),
+              Effect.zipRight(Effect.sync(() => void events.push("blocker"))),
+            ),
+          ),
+        );
+        yield* Deferred.await(started);
+        yield* dispatcher.dispatch(
+          dispatchFrame({ _tag: "steer", sessionId: "s" }, (context) =>
+            Effect.sync(() => {
+              events.push("steer");
+              contexts.push(context);
+            }).pipe(Effect.zipRight(Deferred.succeed(steerRan, undefined))),
+          ),
+        );
+        yield* Deferred.succeed(release, undefined);
+        yield* Deferred.await(steerRan);
+        yield* dispatcher.awaitIdle;
+      }),
+    ),
+  );
+  expect(events).toEqual(["blocker", "steer"]);
+  expect(contexts).toEqual([{ bypass: false, queueDepth: 0, session: "s" }]);
+});
+
+test("a steer frame queues when its Session has no queue yet", async () => {
+  const contexts: Array<RpcDispatchContext> = [];
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const steerRan = yield* Deferred.make<void>();
+        const dispatcher = yield* makeRpcDispatcher(healthyWriterState);
+        yield* dispatcher.dispatch(recordingSteerFrame(contexts, steerRan));
+        yield* Deferred.await(steerRan);
+        yield* dispatcher.awaitIdle;
+      }),
+    ),
+  );
+  expect(contexts).toEqual([{ bypass: false, queueDepth: 0, session: "s" }]);
+});
+
+test("the turn admission clears when the turn frame ends without releasing it", async () => {
+  const contexts: Array<RpcDispatchContext> = [];
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const dispatcher = yield* makeRpcDispatcher(healthyWriterState);
+        yield* dispatcher.dispatch(
+          dispatchFrame(
+            { _tag: "turn", sessionId: "s" },
+            (_context, admission) => admission.admitted,
+          ),
+        );
+        yield* dispatcher.awaitIdle;
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const steerRan = yield* Deferred.make<void>();
+        yield* dispatcher.dispatch(
+          dispatchFrame({ _tag: "session", sessionId: "s" }, () =>
+            Deferred.succeed(started, undefined).pipe(Effect.zipRight(Deferred.await(release))),
+          ),
+        );
+        yield* Deferred.await(started);
+        yield* dispatcher.dispatch(recordingSteerFrame(contexts, steerRan));
+        yield* Deferred.succeed(release, undefined);
+        yield* Deferred.await(steerRan);
+        yield* dispatcher.awaitIdle;
+      }),
+    ),
+  );
+  expect(contexts).toEqual([{ bypass: false, queueDepth: 0, session: "s" }]);
+});
+
+test("bypassed steer frames have their own bound and leave control frames available", async () => {
+  let steerStarted = 0;
+  const outcome = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const turnStarted = yield* Deferred.make<void>();
+        const releaseTurn = yield* Deferred.make<void>();
+        const allSteersStarted = yield* Deferred.make<void>();
+        const releaseSteers = yield* Deferred.make<void>();
+        const rejected = yield* Deferred.make<unknown>();
+        const controlRan = yield* Deferred.make<RpcDispatchContext>();
+        const dispatcher = yield* makeRpcDispatcher(healthyWriterState);
+        yield* dispatcher.dispatch(blockingTurnFrame(["admitted"], turnStarted, releaseTurn));
+        yield* Deferred.await(turnStarted);
+        yield* Effect.forEach(
+          Array.from({ length: RPC_STEER_FORK_CAPACITY }),
+          () =>
+            dispatcher.dispatch(
+              dispatchFrame({ _tag: "steer", sessionId: "s" }, () =>
+                Effect.sync(() => {
+                  steerStarted += 1;
+                }).pipe(
+                  Effect.tap(() =>
+                    steerStarted === RPC_STEER_FORK_CAPACITY
+                      ? Deferred.succeed(allSteersStarted, undefined)
+                      : Effect.void,
+                  ),
+                  Effect.zipRight(Deferred.await(releaseSteers)),
+                ),
+              ),
+            ),
+          { discard: true },
+        );
+        yield* Deferred.await(allSteersStarted);
+        yield* dispatcher.dispatch(
+          dispatchFrame(
+            { _tag: "steer", sessionId: "s" },
+            () => Effect.die("The rejected steer frame ran."),
+            (error) => Deferred.succeed(rejected, error).pipe(Effect.asVoid),
+          ),
+        );
+        const rejection = yield* Deferred.await(rejected);
+        yield* dispatcher.dispatch(
+          dispatchFrame({ _tag: "control" }, (context) =>
+            Deferred.succeed(controlRan, context).pipe(Effect.asVoid),
+          ),
+        );
+        const control = yield* Deferred.await(controlRan);
+        yield* Deferred.succeed(releaseSteers, undefined);
+        yield* Deferred.succeed(releaseTurn, undefined);
+        yield* dispatcher.awaitIdle;
+        return { control, rejection };
+      }),
+    ),
+  );
+  expect(RPC_STEER_FORK_CAPACITY).toBe(64);
+  expect(outcome.rejection).toMatchObject({
+    bound: "steer_forks",
+    limit: 64,
+    message: "RPC steer_forks bound exceeded its limit of 64.",
+  });
+  expect(outcome.control).toEqual({ bypass: true, queueDepth: 0, session: "control" });
+  expect(steerStarted).toBe(64);
 });

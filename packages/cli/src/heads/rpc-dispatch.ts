@@ -3,7 +3,9 @@
  * It exists so FIFO per Session, FIFO for sessionless commands, and immediate control bypass
  * hide behind one seam: dispatch({ route, run, onBoundExceeded, eofBehavior }). The dispatch
  * workers preserve connection-level order for sessionless commands, concurrent execution across
- * Sessions, and immediate bypass for control frames (abort/interaction-response).
+ * Sessions, immediate bypass for control frames (abort, close, interaction-response, steer, and
+ * Goal pause or clear commands), and bypass for steer-mode prompts while their Session queue runs
+ * a prompt the Kernel has admitted.
  * Why this module: routing and queue bounds were inline in rpc.ts; dispatch policy now lives
  * here behind one interface, and RpcHead is the only caller. Interrupting an interruptible write
  * releases its permit after finalizers; an uninterruptible write keeps its permit until it reaches
@@ -20,6 +22,7 @@ import { Cause, Data, Deferred, Effect, Fiber, FiberSet, Queue, Ref } from "effe
 import type { HeadWriteError, HeadWriter } from "./head-wire.js";
 
 export const RPC_CONTROL_FORK_CAPACITY = 64;
+export const RPC_STEER_FORK_CAPACITY = 64;
 export const RPC_SESSION_MAP_CAPACITY = 1_024;
 export const RPC_SESSION_QUEUE_CAPACITY = 64;
 export const RPC_SESSIONLESS_QUEUE_CAPACITY = 64;
@@ -28,7 +31,8 @@ export type RpcDispatchBound =
   | "control_forks"
   | "session_map"
   | "session_queue"
-  | "sessionless_queue";
+  | "sessionless_queue"
+  | "steer_forks";
 
 export class RpcDispatchBoundExceeded extends Data.TaggedError("RpcDispatchBoundExceeded")<{
   readonly bound: RpcDispatchBound;
@@ -45,7 +49,27 @@ export interface RpcDispatchContext {
 export type RpcDispatchRoute =
   | { readonly _tag: "control" }
   | { readonly _tag: "session"; readonly sessionId: string }
-  | { readonly _tag: "sessionless" };
+  | { readonly _tag: "sessionless" }
+  /** Bypasses as a steer fork while its Session queue runs an admitted prompt; otherwise queues. */
+  | { readonly _tag: "steer"; readonly sessionId: string }
+  /** Queues like "session"; while it runs, its prompt's Kernel admission enables steer bypass. */
+  | { readonly _tag: "turn"; readonly sessionId: string };
+
+/**
+ * Signals a queued turn or steer frame gives its Session queue. Every other frame, and every
+ * bypassed frame, receives RPC_NO_TURN_ADMISSION.
+ */
+export interface RpcTurnAdmission {
+  /** Pass to Driver.prompt as onAdmitted: the Kernel runs it once it has accepted the prompt. */
+  readonly admitted: Effect.Effect<void>;
+  /** Run when the Driver's wait on the Turn ends, before the frame does any further work. */
+  readonly released: Effect.Effect<void>;
+}
+
+export const RPC_NO_TURN_ADMISSION: RpcTurnAdmission = {
+  admitted: Effect.void,
+  released: Effect.void,
+};
 
 export interface RpcDispatchFrame {
   readonly eofBehavior: "drain" | "interrupt";
@@ -54,7 +78,10 @@ export interface RpcDispatchFrame {
     context: RpcDispatchContext,
   ) => Effect.Effect<void, HeadWriteError>;
   readonly route: RpcDispatchRoute;
-  readonly run: (context: RpcDispatchContext) => Effect.Effect<void, unknown>;
+  readonly run: (
+    context: RpcDispatchContext,
+    admission: RpcTurnAdmission,
+  ) => Effect.Effect<void, unknown>;
 }
 
 export interface RpcDispatcher {
@@ -65,6 +92,8 @@ export interface RpcDispatcher {
 
 interface SessionQueue {
   readonly queue: Queue.Queue<QueuedFrame>;
+  /** True from the running turn frame's admitted signal until its released signal or its end. */
+  turnAdmitted: boolean;
 }
 
 interface QueuedFrame {
@@ -87,6 +116,7 @@ export const makeRpcDispatcher = (
     const sessionQueues = new Map<string, SessionQueue>();
     const sessionlessQueue = yield* Queue.dropping<QueuedFrame>(RPC_SESSIONLESS_QUEUE_CAPACITY);
     const controlForks = yield* Ref.make(0);
+    const steerForks = yield* Ref.make(0);
     const initiallyIdle = yield* Deferred.make<void>();
     yield* Deferred.succeed(initiallyIdle, undefined);
     const inFlight = yield* Ref.make<InFlightState>({ count: 0, idle: initiallyIdle });
@@ -113,7 +143,8 @@ export const makeRpcDispatcher = (
     const runFrame = (
       frame: RpcDispatchFrame,
       context: RpcDispatchContext,
-    ): Effect.Effect<void, unknown> => frame.run(context).pipe(Effect.ensuring(complete));
+    ): Effect.Effect<void, unknown> =>
+      frame.run(context, RPC_NO_TURN_ADMISSION).pipe(Effect.ensuring(complete));
 
     const runInterruptibleFrame = (
       frame: RpcDispatchFrame,
@@ -143,9 +174,32 @@ export const makeRpcDispatcher = (
           ),
         );
 
-    const runQueuedFrame = (queue: Queue.Queue<QueuedFrame>): Effect.Effect<never, unknown> =>
+    const withTurnAdmission = (owner: SessionQueue, frame: RpcDispatchFrame): RpcDispatchFrame => {
+      if (frame.route._tag !== "turn" && frame.route._tag !== "steer") {
+        return frame;
+      }
+      const released = Effect.sync(() => {
+        owner.turnAdmitted = false;
+      });
+      const admission: RpcTurnAdmission = {
+        admitted: Effect.sync(() => {
+          owner.turnAdmitted = true;
+        }),
+        released,
+      };
+      return {
+        ...frame,
+        run: (context) => frame.run(context, admission).pipe(Effect.ensuring(released)),
+      };
+    };
+
+    const runQueuedFrame = (owner: SessionQueue): Effect.Effect<never, unknown> =>
       Effect.forever(
-        Queue.take(queue).pipe(
+        Queue.take(owner.queue).pipe(
+          Effect.map(({ context, frame }) => ({
+            context,
+            frame: withTurnAdmission(owner, frame),
+          })),
           Effect.flatMap(({ context, frame }) =>
             (frame.eofBehavior === "interrupt"
               ? runInterruptibleFrame(frame, context)
@@ -166,7 +220,10 @@ export const makeRpcDispatcher = (
         ),
       );
 
-    yield* FiberSet.run(queueWorkers, runQueuedFrame(sessionlessQueue));
+    yield* FiberSet.run(
+      queueWorkers,
+      runQueuedFrame({ queue: sessionlessQueue, turnAdmitted: false }),
+    );
 
     const sessionQueue = (sessionId: string): Effect.Effect<SessionQueue> =>
       Effect.gen(function* () {
@@ -175,9 +232,9 @@ export const makeRpcDispatcher = (
           return existing;
         }
         const queue = yield* Queue.dropping<QueuedFrame>(RPC_SESSION_QUEUE_CAPACITY);
-        const created = { queue } satisfies SessionQueue;
+        const created: SessionQueue = { queue, turnAdmitted: false };
         sessionQueues.set(sessionId, created);
-        yield* FiberSet.run(queueWorkers, runQueuedFrame(queue));
+        yield* FiberSet.run(queueWorkers, runQueuedFrame(created));
         return created;
       });
 
@@ -225,6 +282,34 @@ export const makeRpcDispatcher = (
       );
     });
 
+    const dispatchBypass = (
+      frame: RpcDispatchFrame,
+      forks: Ref.Ref<number>,
+      bound: "control_forks" | "steer_forks",
+      limit: number,
+    ): Effect.Effect<void, HeadWriteError> =>
+      Effect.gen(function* () {
+        const admitted = yield* Ref.modify(forks, (current) =>
+          current >= limit ? [false, current] : [true, current + 1],
+        );
+        const context = { bypass: true, queueDepth: 0, session: "control" };
+        if (!admitted) {
+          const error = new RpcDispatchBoundExceeded({
+            bound,
+            limit,
+            message: `RPC ${bound} bound exceeded its limit of ${limit}.`,
+          });
+          return yield* reject(frame, error, context);
+        }
+        yield* admit;
+        yield* FiberSet.run(
+          controlHandlers,
+          runFrame(frame, context).pipe(
+            Effect.ensuring(Ref.update(forks, (current) => current - 1)),
+          ),
+        );
+      });
+
     return {
       awaitIdle,
       dispatch: (frame) =>
@@ -232,27 +317,12 @@ export const makeRpcDispatcher = (
           Effect.zipRight(
             Effect.suspend(() => {
               if (frame.route._tag === "control") {
-                return Effect.gen(function* () {
-                  const admitted = yield* Ref.modify(controlForks, (current) =>
-                    current >= RPC_CONTROL_FORK_CAPACITY ? [false, current] : [true, current + 1],
-                  );
-                  const context = { bypass: true, queueDepth: 0, session: "control" };
-                  if (!admitted) {
-                    const error = new RpcDispatchBoundExceeded({
-                      bound: "control_forks",
-                      limit: RPC_CONTROL_FORK_CAPACITY,
-                      message: `RPC control_forks bound exceeded its limit of ${RPC_CONTROL_FORK_CAPACITY}.`,
-                    });
-                    return yield* reject(frame, error, context);
-                  }
-                  yield* admit;
-                  yield* FiberSet.run(
-                    controlHandlers,
-                    runFrame(frame, context).pipe(
-                      Effect.ensuring(Ref.update(controlForks, (current) => current - 1)),
-                    ),
-                  );
-                });
+                return dispatchBypass(
+                  frame,
+                  controlForks,
+                  "control_forks",
+                  RPC_CONTROL_FORK_CAPACITY,
+                );
               }
               if (frame.route._tag === "sessionless") {
                 return offer(
@@ -265,6 +335,9 @@ export const makeRpcDispatcher = (
               }
               const sessionId = frame.route.sessionId;
               const existing = sessionQueues.get(sessionId);
+              if (frame.route._tag === "steer" && existing?.turnAdmitted === true) {
+                return dispatchBypass(frame, steerForks, "steer_forks", RPC_STEER_FORK_CAPACITY);
+              }
               if (existing !== undefined) {
                 return offer(
                   existing.queue,
