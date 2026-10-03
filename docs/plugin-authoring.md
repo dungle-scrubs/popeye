@@ -1,20 +1,27 @@
 # Plugin authoring
 
 A Plugin is the only unit of behavior addition in popeye. It returns a Schema-validated manifest and
-an array of Contributions. The shipped compact and Session-name features use this public interface.
+an array of Contributions. The shipped compact, goal, reload, and Session-name features use this
+public interface.
 Read their source at
 [`packages/cli/src/features`](../packages/cli/src/features) beside this guide.
 
 ## Current host boundary
 
-`@popeye/plugins` publishes the manifest, registry, Hook emitter, Trust, discovery, loading, and
-generation APIs. The v1 CLI package publishes Head functions rather than an executable. Its
-first-party host statically composes the compact and Session-name Plugins. An application that uses
-dynamic discovery must wire `makeGenerationRuntime` into its own host.
+`@dungle-scrubs/popeye-plugins` publishes the manifest, registry, Hook emitter, Trust, discovery,
+loading, and generation APIs. The CLI package `@dungle-scrubs/popeye` ships the `popeye` executable
+and exports its Head functions. The executable composes the first-party `compact`, `goal`, `reload`,
+and `session-name` Plugins, then discovers and loads Plugins from the user-global directory,
+`--plugin` paths, and the project's `.popeye/plugins/`. An application that embeds the Plugin APIs
+in its own host must wire `makeGenerationRuntime` itself.
 
-npm-referenced Plugin packages are not in v1. The loader accepts absolute paths to local TypeScript
-files. Project discovery reads `.popeye/plugins/`. User-global directories and explicit CLI paths come
-from the host's `PluginDiscoveryConfig`.
+The headless host ships no filesystem or shell coding Tools. The only Tool that the default Plugins
+contribute is `manage-goal`. To give the model coding Tools, load a Plugin such as the
+[minimal local coding Plugin](#minimal-local-coding-plugin).
+
+npm-referenced Plugin packages are not in v1. The loader imports local TypeScript or JavaScript files
+by absolute path. Project discovery reads `.popeye/plugins/`. User-global directories and explicit
+CLI paths come from the host's `PluginDiscoveryConfig`.
 
 ## Minimal Plugin
 
@@ -22,8 +29,8 @@ A module must export a factory as either `plugin` or `default`. The factory can 
 a Promise.
 
 ```typescript
-import { defineCommandContribution } from "@popeye/plugins";
-import type { PluginManifest } from "@popeye/plugins";
+import { defineCommandContribution } from "@dungle-scrubs/popeye-plugins";
+import type { PluginManifest } from "@dungle-scrubs/popeye-plugins";
 import { Effect, Schema } from "effect";
 
 const manifest = {
@@ -46,7 +53,144 @@ export const plugin = () => ({
 });
 ```
 
-Import from package roots. Do not import `@popeye/plugins/src/*` or another package's source files.
+Import from package roots. Do not import `@dungle-scrubs/popeye-plugins/src/*` or another package's
+source files.
+
+Node resolves a Plugin's imports from the Plugin file's location upward, so
+`@dungle-scrubs/popeye-plugins` and `effect` must be in a `node_modules` directory at or above the
+Plugin file. The registry packages do not install yet (see the README Install section). Until they
+do, keep your Plugin files in a checkout of this repository, below `packages/cli/`, where
+`pnpm install` links both packages, and load them with `--plugin <path>`. Git ignores every
+`.popeye/` directory, so `packages/cli/.popeye/local-plugins/` keeps them out of commits.
+
+## Minimal local coding Plugin
+
+The headless host ships no filesystem or shell coding Tools. This Plugin adds three: `read-file`,
+`write-file`, and `run-command`. The Tools use the working directory of the `popeye` process as the
+workspace.
+
+To run it from a checkout of this repository:
+
+1. In the checkout, run `pnpm install` and `pnpm build`.
+2. Save the Plugin below as `packages/cli/.popeye/local-plugins/local-coding.ts` in the checkout.
+3. Go to the directory that the model works in, and run the built executable with the Plugin:
+
+```sh
+popeye_checkout="$HOME/src/popeye" # the path of your checkout
+node "$popeye_checkout/packages/cli/dist/bin/popeye.js" \
+  --plugin "$popeye_checkout/packages/cli/.popeye/local-plugins/local-coding.ts" \
+  -p "Write notes/hello.txt with the text hello, then run cat notes/hello.txt."
+```
+
+The Session Journal goes to `.popeye/sessions` in that directory unless you pass `--session-dir`.
+
+```typescript
+import { exec } from "node:child_process";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { promisify } from "node:util";
+
+import { defineToolContribution } from "@dungle-scrubs/popeye-plugins";
+import type { PluginManifest, ToolExecutionResult } from "@dungle-scrubs/popeye-plugins";
+import { Data, Effect, Schema } from "effect";
+
+const workspace = process.cwd();
+const execShell = promisify(exec);
+
+// A failure that the model reads as an error result. It does not fail the Turn.
+class ToolFailure extends Data.TaggedError("ToolFailure")<{ readonly message: string }> {}
+
+// Runs a Node promise. Interrupting the Tool call aborts `signal`.
+const attempt = <A>(work: (signal: AbortSignal) => Promise<A>): Effect.Effect<A, ToolFailure> =>
+  Effect.tryPromise({
+    catch: (cause) =>
+      new ToolFailure({ message: cause instanceof Error ? cause.message : String(cause) }),
+    try: work,
+  });
+
+// Resolves a model-supplied path and refuses a path that leaves the workspace.
+const workspacePath = (path: string): Effect.Effect<string, ToolFailure> => {
+  const target = resolve(workspace, path);
+  const fromWorkspace = relative(workspace, target);
+  return fromWorkspace === ".." || fromWorkspace.startsWith(`..${sep}`) || isAbsolute(fromWorkspace)
+    ? Effect.fail(new ToolFailure({ message: `${path} is outside the workspace ${workspace}.` }))
+    : Effect.succeed(target);
+};
+
+const toolResult = (work: Effect.Effect<string, ToolFailure>): Effect.Effect<ToolExecutionResult> =>
+  work.pipe(
+    Effect.map((content) => ({ content })),
+    Effect.catchTag("ToolFailure", ({ message }) =>
+      Effect.succeed({ content: message, isError: true }),
+    ),
+  );
+
+const manifest = {
+  capabilities: [],
+  description: "Reads and writes workspace files and runs shell commands.",
+  name: "local-coding",
+  version: "1.0.0",
+} satisfies PluginManifest;
+
+export default () => ({
+  contributions: [
+    defineToolContribution({
+      description: "Read a UTF-8 text file inside the workspace.",
+      execute: ({ path }) =>
+        toolResult(
+          workspacePath(path).pipe(
+            Effect.flatMap((target) =>
+              attempt((signal) => readFile(target, { encoding: "utf8", signal })),
+            ),
+          ),
+        ),
+      name: "read-file",
+      parameters: Schema.Struct({ path: Schema.String }),
+      replay: "safe",
+    }),
+    defineToolContribution({
+      description: "Write UTF-8 text to a file inside the workspace. Creates parent directories.",
+      execute: ({ content, path }) =>
+        toolResult(
+          Effect.gen(function* () {
+            const target = yield* workspacePath(path);
+            yield* attempt(() => mkdir(dirname(target), { recursive: true }));
+            yield* attempt((signal) => writeFile(target, content, { encoding: "utf8", signal }));
+            return `Wrote ${content.length} characters to ${path}.`;
+          }),
+        ),
+      executionMode: "sequential",
+      name: "write-file",
+      parameters: Schema.Struct({ content: Schema.String, path: Schema.String }),
+    }),
+    defineToolContribution({
+      description: "Run a shell command in the workspace. Returns stdout followed by stderr.",
+      execute: ({ command }) =>
+        toolResult(
+          attempt((signal) => execShell(command, { cwd: workspace, signal, timeout: 60_000 })).pipe(
+            Effect.map(({ stderr, stdout }) => `${stdout}${stderr}`),
+          ),
+        ),
+      executionMode: "sequential",
+      name: "run-command",
+      parameters: Schema.Struct({ command: Schema.String }),
+    }),
+  ],
+  manifest,
+});
+```
+
+`read-file` and `write-file` refuse a path that resolves outside the workspace. That check is
+lexical, not a sandbox: a symlink inside the workspace can still point outside it. `run-command`
+runs any shell command with the authority of the popeye process. Load this Plugin only in a
+workspace you trust. Over RPC, the opt-in `tool-vetting` gate can ask the client to confirm each
+call.
+
+Each failure returns `{ content: <message>, isError: true }` to the model and does not fail the
+Turn: a path outside the workspace, a failed read or write, and a command that exits nonzero, runs
+longer than 60 seconds, or writes more than 1 MiB to stdout or to stderr (the Node `exec` default
+`maxBuffer`). When the Kernel interrupts a Tool call, for example on an RPC `abort`, the
+Plugin aborts the pending read or write and sends `SIGTERM` to the shell that runs the command.
 
 ## Manifest Schema
 
@@ -92,6 +236,8 @@ The current `CommandExecutionContext` contains:
 
 - `sessionId` for the active Session;
 - `compactNow(expectedRevision?)` for the public Compaction operation;
+- `getGoal()` to read the current Branch's Goal;
+- `changeGoal(action)` to append a validated Goal change;
 - `setSessionName(name, expectedRevision?)` for a non-model-visible Session-name Entry.
 
 The first-party compact and Session-name Plugins use only these operations. A Command must not
@@ -238,30 +384,33 @@ host process's authority. Use an OS or container boundary when isolation is requ
 
 ## Opt-in gate Plugins
 
-Two gates ship as linkable modules under `packages/cli/src/features/` and never load by default:
+Two gates ship as linkable modules and never load by default. Their sources are in
+`packages/cli/src/features/`, and `pnpm build` writes the loadable modules to
+`packages/cli/dist/features/`:
 
 - `trust-gate.ts` - contributes to the `trust` Hook. It raises a confirm interaction (project path, digest, change summary) with a 25s timeout and fallback `untrusted`. With the null `PluginInteractions` layer (print/json heads and startup composition in every mode) the fallback resolves immediately: unknown project code is denied without stalling. Over rpc with an interactive Head, the Head answers; `trusted` loads stage-2 project plugins, fallback `untrusted` swaps without them and the `/reload` result reports the reduced counts.
 - `tool-vetting.ts` - contributes to `tool-call-gate`. It raises a select (`allow once` / `allow for session` / `reject`) with a 25s timeout and fallback `reject`. Session memory is generation-scoped: a reload forgets prior allows (fail-closed). A rejection becomes a model-visible error `ToolResult` with `isError: true` in the call's journal position, preserving call order.
 
-Install them by symlinking or copying into a user-global Plugin directory (the host's `userPluginDir`, by default `~/.popeye/plugins/`):
+Install them by symlinking the built modules into a user-global Plugin directory (the host's `userPluginDir`, by default `~/.popeye/plugins/`). Run `pnpm build` first:
 
 ```bash
 mkdir -p ~/.popeye/plugins
-ln -s "$PWD/packages/cli/src/features/tool-vetting.ts" ~/.popeye/plugins/tool-vetting.ts
-ln -s "$PWD/packages/cli/src/features/trust-gate.ts" ~/.popeye/plugins/trust-gate.ts
-# or copy instead of symlink
-cp packages/cli/src/features/tool-vetting.ts ~/.popeye/plugins/
-cp packages/cli/src/features/trust-gate.ts ~/.popeye/plugins/
+ln -s "$PWD/packages/cli/dist/features/tool-vetting.js" ~/.popeye/plugins/tool-vetting.js
+ln -s "$PWD/packages/cli/dist/features/trust-gate.js" ~/.popeye/plugins/trust-gate.js
 ```
 
-The default first-party set is `compact`, `goal`, `reload`, and `session-name`; the gates load only when the user places them in the Plugin source directory. Remove the symlink or file to uninstall.
+Link the built `.js` modules, not the `src/features/*.ts` sources: `tool-vetting.ts` imports a
+sibling module by its `.js` name, which Node type stripping cannot resolve. Do not copy the modules:
+a copy cannot resolve `@dungle-scrubs/popeye-plugins`, `effect`, or its sibling modules.
+
+The default first-party set is `compact`, `goal`, `reload`, and `session-name`; the gates load only when the user places them in the Plugin source directory. Remove the symlink to uninstall.
 
 ## PluginInteractions author guidance
 
 `PluginInteractions` lets Plugin code ask the user. The emitter stamps the originating Plugin name via `CurrentPluginFiberRef` around every Hook and Command execution, so you do not supply `pluginName` yourself; Heads receive it for attribution and a malicious Plugin cannot impersonate another. Declare the `interaction` Capability in the manifest; without it the request resolves its declared fallback with an `interaction_ungranted` diagnostic and never reaches a Head.
 
 ```typescript
-import { PluginInteractions, DEFAULT_INTERACTION_TIMEOUT_MILLIS } from "@popeye/plugins";
+import { PluginInteractions, DEFAULT_INTERACTION_TIMEOUT_MILLIS } from "@dungle-scrubs/popeye-plugins";
 import { Effect } from "effect";
 
 const run = Effect.gen(function* () {
@@ -329,5 +478,6 @@ name across a crash boundary own that risk.
 
 Files below a `features/` directory must import popeye packages from package roots only. They must not
 use deep imports or relative imports that escape their feature package. A feature imports
-`@popeye/plugins`. The CLI composition module alone imports `@popeye/kernel` to supply public kernel
-operations. Run `pnpm check-boundaries` to enforce this rule.
+`@dungle-scrubs/popeye-plugins`. The CLI composition module alone imports
+`@dungle-scrubs/popeye-kernel` to supply public kernel operations. `pnpm check-boundaries` checks
+the relative-import part of this rule. It does not yet check imports by package name.

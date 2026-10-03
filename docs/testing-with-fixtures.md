@@ -45,7 +45,7 @@ import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Journal, JournalJsonl, SessionIdSchema } from "@popeye/journal";
+import { Journal, JournalJsonl, SessionIdSchema } from "@dungle-scrubs/popeye-journal";
 import { Effect } from "effect";
 import { expect, test } from "vitest";
 

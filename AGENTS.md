@@ -13,7 +13,7 @@ public.
 - **Endpoint:** `http://127.0.0.1:1234/v1` on loopback.
 - **Detect:** `curl -s --max-time 2 127.0.0.1:1234/v1/models`
 - **Run the live e2e:** `POPEYE_LIVE_ENDPOINT=http://127.0.0.1:1234/v1
-  POPEYE_LIVE_MODEL=<model-id> pnpm vitest run --project @popeye/cli
+  POPEYE_LIVE_MODEL=<model-id> pnpm vitest run --project @dungle-scrubs/popeye
   src/entry/live.test.ts` (model ids in `AGENTS.local.md`).
 - **Other live smoke:** `packages/kernel/src/ai/live-smoke.test.ts` gates on the same endpoint
 
@@ -24,4 +24,4 @@ work never routes to a hosted model.
 
 - Ubiquitous language: `CONTEXT.md`
 - Testing with fixtures: `docs/testing-with-fixtures.md`
-- Package graph: `@popeye/journal` (durable), `@popeye/kernel` (Turn/Driver), `@popeye/plugins`, `@popeye/protocol`, `@popeye/cli` (Heads)
+- Package graph: `@dungle-scrubs/popeye-journal` (durable), `@dungle-scrubs/popeye-kernel` (Turn/Driver), `@dungle-scrubs/popeye-plugins`, `@dungle-scrubs/popeye-protocol`, `@dungle-scrubs/popeye` (CLI, Heads)
