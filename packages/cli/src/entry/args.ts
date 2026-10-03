@@ -86,7 +86,7 @@ const promptRequired = (): CliArgsError => invalidArguments('Use popeye -p "<pro
 const secretFlagError = (): CliArgsError =>
   new CliArgsError({
     message:
-      "--api-key is not supported. Set POPEYE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.",
+      "--api-key is not supported. Set POPEYE_API_KEY, or the provider key variable for a recognized API host (see --help).",
     reason: "secret_flag",
   });
 

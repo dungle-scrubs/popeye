@@ -56,8 +56,14 @@ pnpm build
 
 ## Use it
 
-Set an OpenAI-compatible endpoint and model. Loopback endpoints such as LM Studio do not need an
-API key. Hosted endpoints also need `POPEYE_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`.
+Set an OpenAI-compatible endpoint and model. Loopback endpoints such as LM Studio need no API key;
+popeye sends a local placeholder unless `POPEYE_API_KEY` is set. `POPEYE_API_KEY` is the endpoint
+credential and overrides every other key on every endpoint. Without it, popeye reads a provider
+key only for that provider's own API host: `OPENAI_API_KEY` for `https://api.openai.com` and
+`ANTHROPIC_API_KEY` for `https://api.anthropic.com`. The match is exact (scheme, host, and port).
+Any other hosted endpoint, such as a gateway, proxy, or LAN host, requires `POPEYE_API_KEY`;
+without it, popeye exits with status 2 before it sends a request. An empty or whitespace-only key
+counts as unset.
 
 ```sh
 export POPEYE_MODEL="your-model"

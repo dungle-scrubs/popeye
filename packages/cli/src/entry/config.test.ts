@@ -130,36 +130,166 @@ test("a CLI Plugin path resolved inside the project tree stays project-local", a
   );
 });
 
-test("API keys fall back from POPEYE to OpenAI and then Anthropic", async () => {
-  const parsed = await Effect.runPromise(parseArgs(["-p", "Explain."]));
-  const popeye = await Effect.runPromise(
-    resolveConfig(parsed, {
-      ANTHROPIC_API_KEY: "anthropic-key",
-      OPENAI_API_KEY: "openai-key",
-      POPEYE_API_KEY: "popeye-key",
-      POPEYE_BASE_URL: "https://gateway.example/v1",
-      POPEYE_MODEL: "gateway-model",
-    }),
-  );
-  const openAi = await Effect.runPromise(
-    resolveConfig(parsed, {
-      ANTHROPIC_API_KEY: "anthropic-key",
-      OPENAI_API_KEY: "openai-key",
-      POPEYE_BASE_URL: "https://gateway.example/v1",
-      POPEYE_MODEL: "gateway-model",
-    }),
-  );
-  const anthropic = await Effect.runPromise(
-    resolveConfig(parsed, {
-      ANTHROPIC_API_KEY: "anthropic-key",
-      POPEYE_BASE_URL: "https://gateway.example/v1",
-      POPEYE_MODEL: "gateway-model",
-    }),
-  );
+const CUSTOM_HOST_MESSAGE_SUFFIX =
+  "requires POPEYE_API_KEY. OPENAI_API_KEY and ANTHROPIC_API_KEY are sent only to their own API hosts.";
 
-  expect(popeye).toMatchObject({ action: "run", apiKey: "popeye-key" });
-  expect(openAi).toMatchObject({ action: "run", apiKey: "openai-key" });
-  expect(anthropic).toMatchObject({ action: "run", apiKey: "anthropic-key" });
+const ALL_PROVIDER_KEYS = {
+  ANTHROPIC_API_KEY: "anthropic-key",
+  OPENAI_API_KEY: "openai-key",
+} as const;
+
+const resolveEndpoint = async (baseUrl: string, env: Record<string, string>) => {
+  const parsed = await Effect.runPromise(parseArgs(["-p", "Explain."]));
+  return Effect.runPromiseExit(
+    resolveConfig(parsed, { POPEYE_BASE_URL: baseUrl, POPEYE_MODEL: "endpoint-model", ...env }),
+  );
+};
+
+const resolvedApiKey = async (
+  baseUrl: string,
+  env: Record<string, string>,
+): Promise<string | undefined> => {
+  const exit = await resolveEndpoint(baseUrl, env);
+  if (Exit.isFailure(exit)) {
+    throw new Error(`Expected ${baseUrl} to resolve, received ${exit.cause.toString()}.`);
+  }
+  return exit.value.action === "run" ? exit.value.apiKey : undefined;
+};
+
+const configFailure = async (baseUrl: string, env: Record<string, string>) => {
+  const parsed = await Effect.runPromise(parseArgs(["-p", "Explain."]));
+  return Effect.runPromise(
+    Effect.flip(
+      resolveConfig(parsed, { POPEYE_BASE_URL: baseUrl, POPEYE_MODEL: "endpoint-model", ...env }),
+    ),
+  );
+};
+
+test("with every provider key present, each recognized API host selects its own key", async () => {
+  expect(await resolvedApiKey("https://api.openai.com/v1", ALL_PROVIDER_KEYS)).toBe("openai-key");
+  expect(await resolvedApiKey("https://api.anthropic.com/v1", ALL_PROVIDER_KEYS)).toBe(
+    "anthropic-key",
+  );
+  expect(await resolvedApiKey("https://API.OPENAI.COM/v1", ALL_PROVIDER_KEYS)).toBe("openai-key");
+});
+
+test("a recognized API host never falls back to another provider's key", async () => {
+  const anthropicHost = await configFailure("https://api.anthropic.com/v1", {
+    OPENAI_API_KEY: "openai-key",
+  });
+  const openAiHost = await configFailure("https://api.openai.com/v1", {
+    ANTHROPIC_API_KEY: "anthropic-key",
+  });
+
+  expect(anthropicHost).toMatchObject({
+    _tag: "CliConfigError",
+    message: "Endpoint https://api.anthropic.com requires POPEYE_API_KEY or ANTHROPIC_API_KEY.",
+    reason: "missing_api_key",
+  });
+  expect(openAiHost).toMatchObject({
+    _tag: "CliConfigError",
+    message: "Endpoint https://api.openai.com requires POPEYE_API_KEY or OPENAI_API_KEY.",
+    reason: "missing_api_key",
+  });
+});
+
+test("a custom hosted endpoint requires POPEYE_API_KEY even when provider keys are present", async () => {
+  const error = await configFailure("https://gateway.example/v1", ALL_PROVIDER_KEYS);
+
+  expect(error).toMatchObject({
+    _tag: "CliConfigError",
+    message: `Endpoint https://gateway.example ${CUSTOM_HOST_MESSAGE_SUFFIX}`,
+    reason: "missing_api_key",
+  });
+  expect(error.message).not.toMatch(/openai-key|anthropic-key/u);
+});
+
+test("recognized API hosts match by exact origin", async () => {
+  for (const [baseUrl, origin] of [
+    ["http://api.openai.com/v1", "http://api.openai.com"],
+    ["https://api.openai.com:8443/v1", "https://api.openai.com:8443"],
+    ["https://api.openai.com.gateway.example/v1", "https://api.openai.com.gateway.example"],
+    ["https://eu.api.openai.com/v1", "https://eu.api.openai.com"],
+    ["https://user:secret@gateway.example/v1", "https://gateway.example"],
+  ] as const) {
+    const error = await configFailure(baseUrl, ALL_PROVIDER_KEYS);
+    expect(error).toMatchObject({
+      _tag: "CliConfigError",
+      message: `Endpoint ${origin} ${CUSTOM_HOST_MESSAGE_SUFFIX}`,
+      reason: "missing_api_key",
+    });
+  }
+});
+
+test("loopback endpoints receive the local placeholder, never a provider key", async () => {
+  for (const baseUrl of [
+    "http://127.0.0.1:1234/v1",
+    "http://localhost:1234/v1",
+    "http://[::1]:1234/v1",
+  ]) {
+    expect(await resolvedApiKey(baseUrl, ALL_PROVIDER_KEYS)).toBe("local");
+  }
+});
+
+test("POPEYE_API_KEY overrides provider keys and the placeholder on every endpoint", async () => {
+  const env = { ...ALL_PROVIDER_KEYS, POPEYE_API_KEY: "popeye-key" };
+
+  for (const baseUrl of [
+    "https://api.openai.com/v1",
+    "https://api.anthropic.com/v1",
+    "https://gateway.example/v1",
+    "http://127.0.0.1:1234/v1",
+  ]) {
+    expect(await resolvedApiKey(baseUrl, env)).toBe("popeye-key");
+  }
+  expect(await resolvedApiKey("https://gateway.example/v1", { POPEYE_API_KEY: "popeye-key" })).toBe(
+    "popeye-key",
+  );
+});
+
+test("an empty POPEYE_API_KEY does not override host selection", async () => {
+  expect(
+    await resolvedApiKey("https://api.anthropic.com/v1", {
+      ...ALL_PROVIDER_KEYS,
+      POPEYE_API_KEY: "",
+    }),
+  ).toBe("anthropic-key");
+  expect(
+    await resolvedApiKey("http://127.0.0.1:1234/v1", { ...ALL_PROVIDER_KEYS, POPEYE_API_KEY: "" }),
+  ).toBe("local");
+});
+
+test("blank credentials count as unset, so pi-ai never substitutes an ambient provider key", async () => {
+  expect(
+    await resolvedApiKey("https://api.anthropic.com/v1", {
+      ...ALL_PROVIDER_KEYS,
+      POPEYE_API_KEY: " \t ",
+    }),
+  ).toBe("anthropic-key");
+  expect(
+    await resolvedApiKey("http://127.0.0.1:1234/v1", { ...ALL_PROVIDER_KEYS, POPEYE_API_KEY: " " }),
+  ).toBe("local");
+  expect(
+    await configFailure("https://gateway.example.test/v1", {
+      ...ALL_PROVIDER_KEYS,
+      POPEYE_API_KEY: " ",
+    }),
+  ).toMatchObject({
+    message: `Endpoint https://gateway.example.test ${CUSTOM_HOST_MESSAGE_SUFFIX}`,
+    reason: "missing_api_key",
+  });
+  expect(
+    await configFailure("https://api.anthropic.com/v1", {
+      ANTHROPIC_API_KEY: "  ",
+      OPENAI_API_KEY: "openai-key",
+    }),
+  ).toMatchObject({
+    message: "Endpoint https://api.anthropic.com requires POPEYE_API_KEY or ANTHROPIC_API_KEY.",
+    reason: "missing_api_key",
+  });
+  expect(
+    await resolvedApiKey("https://gateway.example.test/v1", { POPEYE_API_KEY: " popeye-key " }),
+  ).toBe(" popeye-key ");
 });
 
 test("missing model and endpoint failures name the exact flag and environment variable", async () => {
@@ -228,12 +358,12 @@ test("loopback endpoints get a provider placeholder while hosted endpoints requi
 
   expect(local).toMatchObject({
     accountingProviderClass: "local",
-    apiKey: expect.stringMatching(/.+/u),
+    apiKey: "local",
     baseUrlHost: "127.0.0.1",
   });
   expect(hosted).toMatchObject({
     _tag: "CliConfigError",
-    message: expect.stringMatching(/POPEYE_API_KEY.*OPENAI_API_KEY.*ANTHROPIC_API_KEY/u),
+    message: `Endpoint https://gateway.example ${CUSTOM_HOST_MESSAGE_SUFFIX}`,
     reason: "missing_api_key",
   });
 });
