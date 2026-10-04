@@ -947,7 +947,10 @@ export const TurnOrchestratorLive = (): Layer.Layer<
               (attempt) =>
                 Effect.gen(function* () {
                   yield* resetProviderBuffers();
-                  const attemptProgress = yield* Ref.make<ReadonlyArray<Progress>>([]);
+                  // Assistant text waits for the attempt's stream to complete, so a failed or
+                  // retried attempt's text never reaches subscribers. Thinking is published live
+                  // in the thinkingDelta branch below and is provisional.
+                  const attemptText = yield* Ref.make<ReadonlyArray<Progress>>([]);
                   yield* Effect.annotateCurrentSpan({ attempt });
                   yield* Stream.runForEach(
                     provider.streamAssistant(context, {
@@ -965,14 +968,16 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                       if (item._tag === "textDelta") {
                         const next: Progress = { _tag: "assistantText", text: item.text };
                         return Ref.update(text, (current) => current + item.text).pipe(
-                          Effect.zipRight(
-                            Ref.update(attemptProgress, (current) => [...current, next]),
-                          ),
+                          Effect.zipRight(Ref.update(attemptText, (current) => [...current, next])),
                         );
                       }
                       if (item._tag === "thinkingDelta") {
-                        const next: Progress = { _tag: "assistantThinking", text: item.text };
-                        return Ref.update(attemptProgress, (current) => [...current, next]);
+                        // Provisional: published while the round streams. A failed, retried, or
+                        // aborted attempt keeps the thinking it already published.
+                        return progress.publish(sessionId, {
+                          _tag: "assistantThinking",
+                          text: item.text,
+                        });
                       }
                       if (item._tag === "toolCall") {
                         return Ref.update(toolCalls, (current) => {
@@ -1015,8 +1020,8 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                       );
                     },
                   );
-                  const buffered = yield* Ref.get(attemptProgress);
-                  yield* Effect.forEach(buffered, (item) => progress.publish(sessionId, item));
+                  const bufferedText = yield* Ref.get(attemptText);
+                  yield* Effect.forEach(bufferedText, (item) => progress.publish(sessionId, item));
                 }),
               Effect.gen(function* () {
                 const detail = `Maximum provider round bound of ${providerRoundBound(options)} exceeded.`;

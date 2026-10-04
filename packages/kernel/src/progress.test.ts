@@ -1,8 +1,46 @@
 import { SessionIdSchema } from "@dungle-scrubs/popeye-journal";
-import { Deferred, Effect, Fiber, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, Stream } from "effect";
 import { expect, test } from "vitest";
 
 import { type Progress, ProgressHub, ProgressHubLive } from "./progress.js";
+
+test("a publisher succeeds when subscribers disconnect during thinking publication", async () => {
+  const publisherExit = await Effect.runPromise(
+    Effect.gen(function* () {
+      const progress = yield* ProgressHub;
+      const sessionId = SessionIdSchema.make("disconnect-progress");
+      const subscribers = yield* Effect.forEach([0, 1, 2, 3], () =>
+        Effect.gen(function* () {
+          const ready = yield* Deferred.make<void>();
+          const fiber = yield* Effect.fork(
+            Stream.runForEach(progress.subscribe(sessionId), () =>
+              Deferred.succeed(ready, undefined),
+            ),
+          );
+          yield* Deferred.await(ready);
+          return fiber;
+        }),
+      );
+      const started = yield* Deferred.make<void>();
+      const publisher = yield* Effect.fork(
+        Deferred.succeed(started, undefined).pipe(
+          Effect.zipRight(
+            Effect.forEach(
+              Array.from({ length: 3000 }, (_, index) => index),
+              (index) =>
+                progress.publish(sessionId, { _tag: "assistantThinking", text: String(index) }),
+            ),
+          ),
+        ),
+      );
+      yield* Deferred.await(started);
+      yield* Effect.forEach(subscribers, Fiber.interrupt);
+      return yield* Fiber.await(publisher);
+    }).pipe(Effect.provide(ProgressHubLive())),
+  );
+
+  expect(Exit.isSuccess(publisherExit)).toBe(true);
+});
 
 test("a slow subscriber reports exactly the drops since its previous delivery", async () => {
   const observed: Array<Progress> = [];

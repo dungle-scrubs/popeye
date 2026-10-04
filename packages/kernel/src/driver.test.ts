@@ -17,6 +17,7 @@ import { expect, test } from "vitest";
 
 import { entryToContextItem } from "./compaction-policy.js";
 import { Driver, DriverDefault, DriverSnapshotSchema } from "./driver.js";
+import { ProviderError } from "./errors.js";
 import type { Progress } from "./progress.js";
 import type { ProviderService, ProviderStreamOptions } from "./provider.js";
 import { type ContextItem, Provider } from "./provider.js";
@@ -806,4 +807,57 @@ test("closeSession aborts a running turn mid-stream", async () => {
   expect(result.snapshot.entries.at(-1)).toMatchObject({
     payload: { role: "assistant", stopReason: "aborted" },
   });
+});
+
+test("thinking Progress from a retried attempt is published but never enters the Snapshot", async () => {
+  const observed: Array<Progress> = [];
+  let attempts = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return Stream.fromIterable([
+          { _tag: "thinkingDelta" as const, text: "Attempt one thinking." },
+          { _tag: "textDelta" as const, text: "Discarded text." },
+        ]).pipe(
+          Stream.concat(Stream.fail(new ProviderError({ message: "Retry.", transient: true }))),
+        );
+      }
+      return Stream.fromIterable([
+        { _tag: "thinkingDelta" as const, text: "Attempt two thinking." },
+        { _tag: "textDelta" as const, text: "Kept text." },
+        { _tag: "done" as const, stopReason: "done" as const },
+      ]);
+    },
+  };
+
+  const snapshot = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const session = yield* driver.createSession();
+      const progress = yield* Effect.fork(
+        Stream.runForEach(driver.subscribeProgress(session.id), (item) =>
+          Effect.sync(() => observed.push(item)),
+        ),
+      );
+      yield* Effect.yieldNow();
+      yield* driver.prompt(session.id, "Retry once", { maxAttempts: 2, retryBaseDelayMs: 0 });
+      yield* Fiber.interrupt(progress);
+      return yield* driver.getSnapshot(session.id);
+    }).pipe(Effect.provide(driverLayer(provider))),
+  );
+
+  expect(observed.filter((item) => item._tag === "assistantThinking")).toStrictEqual([
+    { _tag: "assistantThinking", text: "Attempt one thinking." },
+    { _tag: "assistantThinking", text: "Attempt two thinking." },
+  ]);
+  expect(
+    snapshot.entries.filter((entry) => entry.kind === "message").map((entry) => entry.payload),
+  ).toMatchObject([
+    { content: "Retry once", role: "user" },
+    { content: "Kept text.", role: "assistant", stopReason: "done" },
+  ]);
+  const serialized = JSON.stringify(snapshot);
+  expect(serialized).not.toContain("Discarded text.");
+  expect(serialized).not.toContain("thinking.");
 });

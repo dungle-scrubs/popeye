@@ -437,6 +437,248 @@ test("assistant text and thinking deltas stream only during STREAMING and persis
   });
 });
 
+const deltaProgress = (observed: ReadonlyArray<Progress>): ReadonlyArray<Progress> =>
+  observed.filter(
+    (item) =>
+      item._tag === "assistantText" ||
+      item._tag === "assistantThinking" ||
+      item._tag === "providerRetryScheduled",
+  );
+
+/**
+ * Waits for the first assistantThinking frame while the Provider is still blocked. The bound only
+ * turns a buffered implementation into a clean assertion failure; it never paces the test.
+ */
+const thinkingSeenWhileStreaming = (signal: Deferred.Deferred<void>) =>
+  Deferred.await(signal).pipe(Effect.timeoutOption("2 seconds"), Effect.map(Option.isSome));
+
+test("assistantThinking Progress reaches subscribers while the provider round is still streaming", async () => {
+  const sawThinking = await Effect.runPromise(Deferred.make<void>());
+  const release = await Effect.runPromise(Deferred.make<void>());
+  const observed: Array<Progress> = [];
+  const blockingProvider: ProviderService = {
+    streamAssistant: () =>
+      Stream.make({ _tag: "thinkingDelta" as const, text: "Weighing the options." }).pipe(
+        Stream.concat(
+          Stream.fromEffect(Deferred.await(release)).pipe(
+            Stream.flatMap(() =>
+              Stream.fromIterable([
+                { _tag: "textDelta" as const, text: "Answer." },
+                { _tag: "done" as const, stopReason: "done" as const },
+              ]),
+            ),
+          ),
+        ),
+      ),
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const orchestrator = yield* TurnOrchestrator;
+      const session = yield* sessions.create();
+      const progress = yield* Effect.fork(
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
+          Effect.sync(() => observed.push(item)).pipe(
+            Effect.zipRight(
+              item._tag === "assistantThinking"
+                ? Deferred.succeed(sawThinking, undefined)
+                : Effect.void,
+            ),
+          ),
+        ),
+      );
+      yield* Effect.yieldNow();
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Think first"));
+      const thinkingSeen = yield* thinkingSeenWhileStreaming(sawThinking);
+      const releasedBeforeThinking = yield* Deferred.isDone(release);
+      const observedBeforeRelease = [...observed];
+      yield* Deferred.succeed(release, undefined);
+      const settled = yield* Fiber.join(running);
+      yield* Fiber.interrupt(progress);
+      return {
+        branch: yield* journal.readBranch(session.id),
+        observedBeforeRelease,
+        releasedBeforeThinking,
+        settled,
+        thinkingSeen,
+      };
+    }).pipe(Effect.provide(testLayer(blockingProvider))),
+  );
+
+  expect(result.thinkingSeen, "assistantThinking published before the Provider was released").toBe(
+    true,
+  );
+  expect(result.releasedBeforeThinking).toBe(false);
+  expect(deltaProgress(result.observedBeforeRelease)).toStrictEqual([
+    { _tag: "assistantThinking", text: "Weighing the options." },
+  ]);
+  expect(result.settled).toStrictEqual({ stopReason: "done" });
+  expect(deltaProgress(observed)).toStrictEqual([
+    { _tag: "assistantThinking", text: "Weighing the options." },
+    { _tag: "assistantText", text: "Answer." },
+  ]);
+  expect(result.branch.at(-1)).toMatchObject({
+    payload: { content: "Answer.", role: "assistant", stopReason: "done" },
+  });
+});
+
+test("every assistantThinking frame of a round precedes that round's buffered assistantText frames", async () => {
+  const observed: Array<Progress> = [];
+  const branch = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const orchestrator = yield* TurnOrchestrator;
+      const session = yield* sessions.create();
+      const progress = yield* Effect.fork(
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
+          Effect.sync(() => observed.push(item)),
+        ),
+      );
+      yield* Effect.yieldNow();
+      yield* orchestrator.openTurn(session.id, "Interleave");
+      yield* Fiber.interrupt(progress);
+      return yield* journal.readBranch(session.id);
+    }).pipe(
+      Effect.provide(
+        testLayer(
+          scriptedProvider([
+            { _tag: "textDelta", text: "Before. " },
+            { _tag: "thinkingDelta", text: "Second thoughts." },
+            { _tag: "textDelta", text: "After." },
+            { _tag: "done", stopReason: "done" },
+          ]),
+        ),
+      ),
+    ),
+  );
+
+  expect(deltaProgress(observed)).toStrictEqual([
+    { _tag: "assistantThinking", text: "Second thoughts." },
+    { _tag: "assistantText", text: "Before. " },
+    { _tag: "assistantText", text: "After." },
+  ]);
+  expect(branch.at(-1)).toMatchObject({
+    payload: { content: "Before. After.", role: "assistant", stopReason: "done" },
+  });
+});
+
+test("a retried attempt keeps its published thinking, discards its text, and the Snapshot keeps only the final text", async () => {
+  const observed: Array<Progress> = [];
+  let attempts = 0;
+  const retryingProvider: ProviderService = {
+    streamAssistant: () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return Stream.fromIterable([
+          { _tag: "thinkingDelta" as const, text: "Attempt one thinking." },
+          { _tag: "textDelta" as const, text: "Discarded text." },
+        ]).pipe(
+          Stream.concat(Stream.fail(new ProviderError({ message: "Retry.", transient: true }))),
+        );
+      }
+      return Stream.fromIterable([
+        { _tag: "thinkingDelta" as const, text: "Attempt two thinking." },
+        { _tag: "textDelta" as const, text: "Kept text." },
+        { _tag: "done" as const, stopReason: "done" as const },
+      ]);
+    },
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const orchestrator = yield* TurnOrchestrator;
+      const session = yield* sessions.create();
+      const progress = yield* Effect.fork(
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
+          Effect.sync(() => observed.push(item)),
+        ),
+      );
+      yield* Effect.yieldNow();
+      const settled = yield* orchestrator.openTurn(session.id, "Retry once", undefined, {
+        maxAttempts: 2,
+        retryBaseDelayMs: 0,
+      });
+      yield* Fiber.interrupt(progress);
+      return { branch: yield* journal.readBranch(session.id), settled };
+    }).pipe(Effect.provide(testLayer(retryingProvider))),
+  );
+
+  expect(attempts).toBe(2);
+  expect(result.settled).toStrictEqual({ stopReason: "done" });
+  expect(deltaProgress(observed)).toStrictEqual([
+    { _tag: "assistantThinking", text: "Attempt one thinking." },
+    { _tag: "providerRetryScheduled", attempt: 2, delayMs: 0 },
+    { _tag: "assistantThinking", text: "Attempt two thinking." },
+    { _tag: "assistantText", text: "Kept text." },
+  ]);
+  expect(
+    result.branch.filter((entry) => entry.kind === "message").map((entry) => entry.payload),
+  ).toMatchObject([
+    { content: "Retry once", role: "user" },
+    { content: "Kept text.", role: "assistant", stopReason: "done" },
+  ]);
+  const persisted = JSON.stringify(result.branch);
+  expect(persisted).not.toContain("Discarded text.");
+  expect(persisted).not.toContain("thinking.");
+});
+
+test("abort after a published thinking delta settles aborted without thinking in the assistant Entry", async () => {
+  const sawThinking = await Effect.runPromise(Deferred.make<void>());
+  const observed: Array<Progress> = [];
+  const hangingProvider: ProviderService = {
+    streamAssistant: () =>
+      Stream.make({ _tag: "thinkingDelta" as const, text: "Provisional thought." }).pipe(
+        Stream.concat(Stream.never),
+      ),
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const orchestrator = yield* TurnOrchestrator;
+      const session = yield* sessions.create();
+      const progress = yield* Effect.fork(
+        Stream.runForEach(orchestrator.subscribeProgress(session.id), (item) =>
+          Effect.sync(() => observed.push(item)).pipe(
+            Effect.zipRight(
+              item._tag === "assistantThinking"
+                ? Deferred.succeed(sawThinking, undefined)
+                : Effect.void,
+            ),
+          ),
+        ),
+      );
+      yield* Effect.yieldNow();
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Think then abort"));
+      const thinkingSeen = yield* thinkingSeenWhileStreaming(sawThinking);
+      const aborted = yield* orchestrator.abortTurn(session.id);
+      const settled = yield* Fiber.join(running);
+      yield* Fiber.interrupt(progress);
+      return { aborted, branch: yield* journal.readBranch(session.id), settled, thinkingSeen };
+    }).pipe(Effect.provide(testLayer(hangingProvider))),
+  );
+
+  expect(result.thinkingSeen, "assistantThinking published before the abort").toBe(true);
+  expect(result.aborted).toStrictEqual({ aborted: true, turnOrdinal: 1 });
+  expect(result.settled).toStrictEqual({ stopReason: "aborted" });
+  expect(result.branch.at(-1)).toMatchObject({
+    kind: "message",
+    payload: { content: "", role: "assistant", stopReason: "aborted" },
+  });
+  const thinkingIndex = observed.findIndex((item) => item._tag === "assistantThinking");
+  const settledIndex = observed.findIndex(
+    (item) => item._tag === "turnSettled" && item.stopReason === "aborted",
+  );
+  expect(thinkingIndex).toBeGreaterThanOrEqual(0);
+  expect(settledIndex).toBeGreaterThan(thinkingIndex);
+});
+
 test("steer during a tool-free turn drains at SETTLING and loops before settlement", async () => {
   const enteredSettling = await Effect.runPromise(Deferred.make<void>());
   const releaseSettling = await Effect.runPromise(Deferred.make<void>());
