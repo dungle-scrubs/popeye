@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.5](https://github.com/dungle-scrubs/popeye/compare/popeye-protocol-v0.1.4...popeye-protocol-v0.1.5) (2026-10-04)
+
+
+### Added
+
+* reasoning control for base-URL models, including off; live e2e runs with it ([#77](https://github.com/dungle-scrubs/popeye/issues/77)) ([2871cfb](https://github.com/dungle-scrubs/popeye/commit/2871cfb4899bd88f895732f418ead5a41fd29b28))
+
+
+### Changed
+
+* **deps-dev:** bump effect from 3.22.1 to 3.22.2 ([#35](https://github.com/dungle-scrubs/popeye/issues/35)) ([321d3e4](https://github.com/dungle-scrubs/popeye/commit/321d3e4cbf65518cc9597599ee6c4c17f9e0cd93))
+
 ## [0.1.4](https://github.com/dungle-scrubs/popeye/compare/popeye-protocol-v0.1.3...popeye-protocol-v0.1.4) (2026-09-27)
 
 

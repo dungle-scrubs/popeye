@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5](https://github.com/dungle-scrubs/popeye/compare/popeye-workspace-v0.1.4...popeye-workspace-v0.1.5) (2026-10-04)
+
+
+### Added
+
+* **goals:** only the user creates, replaces, resumes, or clears a Goal ([#76](https://github.com/dungle-scrubs/popeye/issues/76)) ([a87da82](https://github.com/dungle-scrubs/popeye/commit/a87da822e515ba8b2677eda59a2b48cd3906ff01))
+* reasoning control for base-URL models, including off; live e2e runs with it ([#77](https://github.com/dungle-scrubs/popeye/issues/77)) ([2871cfb](https://github.com/dungle-scrubs/popeye/commit/2871cfb4899bd88f895732f418ead5a41fd29b28))
+* report session lifecycle to reflect-intake (POPEYE_REFLECT_INTAKE) ([#63](https://github.com/dungle-scrubs/popeye/issues/63)) ([f383c0c](https://github.com/dungle-scrubs/popeye/commit/f383c0c223f7128827bf3a9f50c2276e7a669ed1))
+
+
+### Fixed
+
+* **cli:** read provider API keys only for their own API host ([#70](https://github.com/dungle-scrubs/popeye/issues/70)) ([141efce](https://github.com/dungle-scrubs/popeye/commit/141efceb201df35ccfff508f4a27580209a78ba3)), closes [#66](https://github.com/dungle-scrubs/popeye/issues/66)
+* **release:** publish installable packages from one guarded release path ([#79](https://github.com/dungle-scrubs/popeye/issues/79)) ([2eaa24f](https://github.com/dungle-scrubs/popeye/commit/2eaa24f13ddeadd19d8748fed1319f4124b7bf38)), closes [#69](https://github.com/dungle-scrubs/popeye/issues/69)
+* resume a Session whose ID starts with a dash ([#65](https://github.com/dungle-scrubs/popeye/issues/65)) ([589926d](https://github.com/dungle-scrubs/popeye/commit/589926dee1cea72acbb91000f02e24691a48fcbe))
+* **rpc:** deliver steer to a running Turn without waiting for it to settle ([#71](https://github.com/dungle-scrubs/popeye/issues/71)) ([947fa4c](https://github.com/dungle-scrubs/popeye/commit/947fa4cbf3805cb7a706d42c8f1f1e5da4578e1b)), closes [#67](https://github.com/dungle-scrubs/popeye/issues/67)
+
+
+### Changed
+
+* add Publish workflow with OIDC and manual dispatch ([#60](https://github.com/dungle-scrubs/popeye/issues/60)) ([dc416d6](https://github.com/dungle-scrubs/popeye/commit/dc416d65ec2f83ded9a3a270e9ab93a83877cc76))
+* align README and plugin guide with the shipped packages and behavior ([#72](https://github.com/dungle-scrubs/popeye/issues/72)) ([6f4f898](https://github.com/dungle-scrubs/popeye/commit/6f4f89805c6a6c1cc860e88ee388bad084572c5e)), closes [#68](https://github.com/dungle-scrubs/popeye/issues/68)
+* **cli:** stop live e2e assertions from depending on model round count and Goals ([#73](https://github.com/dungle-scrubs/popeye/issues/73)) ([3390a08](https://github.com/dungle-scrubs/popeye/commit/3390a0825c1008491c9abbc86d995c5bce733378))
+* **deps-dev:** bump @biomejs/biome from 2.5.7 to 2.5.15 ([#31](https://github.com/dungle-scrubs/popeye/issues/31)) ([ae8a21d](https://github.com/dungle-scrubs/popeye/commit/ae8a21dd18ee139a9660eef87854512c5d573444))
+* **deps-dev:** bump @types/node from 26.2.0 to 26.6.2 ([#33](https://github.com/dungle-scrubs/popeye/issues/33)) ([a2f6a14](https://github.com/dungle-scrubs/popeye/commit/a2f6a143e1d9f3606c36a67f542284319de1d3bf))
+* **deps-dev:** bump effect from 3.22.1 to 3.22.2 ([#35](https://github.com/dungle-scrubs/popeye/issues/35)) ([321d3e4](https://github.com/dungle-scrubs/popeye/commit/321d3e4cbf65518cc9597599ee6c4c17f9e0cd93))
+* **deps-dev:** bump lefthook from 2.1.10 to 2.1.14 ([#32](https://github.com/dungle-scrubs/popeye/issues/32)) ([860a100](https://github.com/dungle-scrubs/popeye/commit/860a1003a7aa294e7fc7a676a076acfd90b3db76))
+* **deps:** bump actions/checkout from 4 to 7 ([#27](https://github.com/dungle-scrubs/popeye/issues/27)) ([cb30099](https://github.com/dungle-scrubs/popeye/commit/cb30099fdc00f76590eec19fd36a03b08e2805fd))
+* **deps:** bump actions/setup-node from 4 to 7 ([#29](https://github.com/dungle-scrubs/popeye/issues/29)) ([5626714](https://github.com/dungle-scrubs/popeye/commit/562671434dd0998b574baa2722a0e14aa8005f3f))
+* **deps:** bump googleapis/release-please-action from 4 to 5 ([#30](https://github.com/dungle-scrubs/popeye/issues/30)) ([ad26fe0](https://github.com/dungle-scrubs/popeye/commit/ad26fe0995455b6308c2100754cf5e4b05fd0779))
+* **deps:** bump pnpm/action-setup from 4 to 6 ([#28](https://github.com/dungle-scrubs/popeye/issues/28)) ([c792d52](https://github.com/dungle-scrubs/popeye/commit/c792d52da83f09f458bf65d8f53eed299a9d2ae5))
+* give the built-CLI usage-export tests the 15s timeout their peers use ([#64](https://github.com/dungle-scrubs/popeye/issues/64)) ([b3615b4](https://github.com/dungle-scrubs/popeye/commit/b3615b44e9a3cb359dae6ba461f13680789c6cd8))
+* **publish:** explicit workflow_dispatch trigger shape ([#61](https://github.com/dungle-scrubs/popeye/issues/61)) ([3b2d3b5](https://github.com/dungle-scrubs/popeye/commit/3b2d3b58d5372790841306d412069cedfca65a98))
+* **publish:** rename workflow to force trigger re-registration ([#62](https://github.com/dungle-scrubs/popeye/issues/62)) ([ec1b7be](https://github.com/dungle-scrubs/popeye/commit/ec1b7bea1515a7a151a0d89bcaf9cd9c1c1c688e))
+
 ## [0.1.4](https://github.com/dungle-scrubs/popeye/compare/popeye-v0.1.3...popeye-v0.1.4) (2026-09-27)
 
 
