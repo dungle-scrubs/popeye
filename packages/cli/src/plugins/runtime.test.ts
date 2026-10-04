@@ -4,6 +4,11 @@
  * Tool views; a Session without filters keeps exactly the process-level view;
  * Session filters only narrow, survive a Plugin reload, and are dropped on
  * release; capability-gated Tools follow each Session's grant.
+ *
+ * Issue #89: a Tool call's gate Hooks see the calling Session's id in
+ * CurrentGrantsFiberRef, whichever view last refreshed the process-wide cache,
+ * and a Turn holds no Generation lease: a reload completes while a Turn is
+ * open, and the Turn's later calls run the reloaded Tools.
  */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,8 +20,13 @@ import {
   type SessionId,
   SessionIdSchema,
 } from "@dungle-scrubs/popeye-journal";
-import { defineToolContribution, PluginInteractionsNullLive } from "@dungle-scrubs/popeye-plugins";
-import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
+import {
+  CurrentGrantsFiberRef,
+  defineHookContribution,
+  defineToolContribution,
+  PluginInteractionsNullLive,
+} from "@dungle-scrubs/popeye-plugins";
+import { Deferred, Effect, Fiber, FiberRef, Layer, Option, Schema, Stream } from "effect";
 import { expect, test } from "vitest";
 
 import {
@@ -377,3 +387,269 @@ test("the process Tool view ignores addressable pseudo Session filters", async (
   expect(result.process).toEqual(["alpha", "beta"]);
   expect(result.session).toEqual(["alpha"]);
 });
+
+// Issue #89 -----------------------------------------------------------------
+
+interface GateObservation {
+  /** The Session id the gate input names (correct before #89). */
+  readonly gateSessionId: string | undefined;
+  /** The Session id of the CapabilityGrants in CurrentGrantsFiberRef. */
+  readonly grantsSessionId: string | undefined;
+  /** Which Plugin version's Hook ran. */
+  readonly hookVersion: string;
+  readonly toolCallId: string;
+}
+
+/** A tool-call-gate Hook that records what CurrentGrantsFiberRef holds and continues. */
+const gateProbe = (hookVersion: string, observed: Array<GateObservation>) =>
+  defineHookContribution({
+    mergeClass: "FirstWins",
+    name: "grants-probe",
+    point: "tool-call-gate",
+    run: (input: { readonly sessionId?: string | undefined; readonly toolCallId: string }) =>
+      FiberRef.get(CurrentGrantsFiberRef).pipe(
+        Effect.map((grants) => {
+          observed.push({
+            gateSessionId: input.sessionId,
+            grantsSessionId: Option.getOrUndefined(grants)?.sessionId,
+            hookVersion,
+            toolCallId: input.toolCallId,
+          });
+          return { decision: "continue" as const };
+        }),
+      ),
+  });
+
+const alphaTool = (version: string) =>
+  defineToolContribution({
+    description: `Version ${version}`,
+    execute: () => Effect.succeed({ content: `alpha-${version}` }),
+    name: "alpha",
+    parameters: Schema.Struct({}),
+  });
+
+/** The call id the scripted Provider gives a Session's alpha call: `call-<prompt>`. */
+const callIdFor = (prompt: string) => `call-${prompt}`;
+
+/**
+ * A Provider that calls alpha once per Turn with the id `call-<user prompt>`,
+ * then ends the Turn. `pause` holds a named prompt's first response until its
+ * resume Deferred completes, signalling `entered` once it is waiting.
+ */
+const scriptedAlphaProvider = (
+  pause: ReadonlyMap<
+    string,
+    { readonly entered: Deferred.Deferred<void>; readonly resume: Deferred.Deferred<void> }
+  > = new Map(),
+): ProviderService => ({
+  streamAssistant: (context) => {
+    if (context.at(-1)?.role === "toolResult") {
+      return Stream.make({ _tag: "done" as const, stopReason: "done" as const });
+    }
+    const prompt = context.find((item) => item.role === "user")?.content ?? "";
+    const call = {
+      _tag: "toolCall" as const,
+      argumentsJson: "{}",
+      id: callIdFor(prompt),
+      name: "alpha",
+    };
+    const gate = pause.get(prompt);
+    return (
+      gate === undefined
+        ? Stream.make(call)
+        : Stream.fromEffect(
+            Deferred.succeed(gate.entered, undefined).pipe(
+              Effect.zipRight(Deferred.await(gate.resume)),
+              Effect.as(call),
+            ),
+          )
+    ).pipe(Stream.concat(Stream.make({ _tag: "done" as const, stopReason: "toolCalls" as const })));
+  },
+});
+
+const driverLayer = (runtime: CliRuntime, provider: ProviderService) =>
+  runtime.currentGeneration.pipe(
+    Effect.map((generation) =>
+      GenerationDriverDefault(generation).pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            JournalMemory(createMemoryJournalBacking()),
+            Layer.succeed(Provider, provider),
+            Layer.succeed(ToolRegistry, runtime.toolRegistry),
+          ),
+        ),
+      ),
+    ),
+  );
+
+const toolResultOf = (snapshot: {
+  readonly entries: ReadonlyArray<{ readonly payload: unknown }>;
+}) =>
+  snapshot.entries
+    .map((entry) => entry.payload as Record<string, unknown>)
+    .find((payload) => payload.role === "toolResult")?.content;
+
+test("a narrowed Session's Tool call runs its gate Hooks with that Session's grants id", async () => {
+  const observed: Array<GateObservation> = [];
+  const plugin: FirstPartyPlugin = {
+    contributions: [alphaTool("v1"), gateProbe("v1", observed)],
+    manifest: { capabilities: [], name: "grants-id-fixture", version: "1.0.0" },
+  };
+  const result = await withRuntime({ firstPartyPlugins: [plugin] }, (runtime) =>
+    Effect.gen(function* () {
+      const layer = yield* driverLayer(runtime, scriptedAlphaProvider());
+      return yield* Effect.gen(function* () {
+        const driver = yield* Driver;
+        const unnarrowed = yield* driver.createSession();
+        const narrowed = yield* driver.createSession();
+        yield* runtime.sessionToolGrants.narrow(narrowed.id, filter({ tools: ["alpha"] }));
+        // The unnarrowed Turn opens first and refreshes the process-wide
+        // cache with a wrapper adapted for its own id; the narrowed Turn never
+        // refreshes it.
+        yield* driver.prompt(unnarrowed.id, "unnarrowed");
+        yield* driver.prompt(narrowed.id, "narrowed");
+        return {
+          executed: toolResultOf(yield* driver.getSnapshot(narrowed.id)),
+          narrowedId: narrowed.id as string,
+          unnarrowedId: unnarrowed.id as string,
+        };
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  const narrowedCall = observed.find((entry) => entry.toolCallId === callIdFor("narrowed"));
+  expect(result.executed).toBe("alpha-v1");
+  expect(narrowedCall?.gateSessionId).toBe(result.narrowedId);
+  expect(narrowedCall?.grantsSessionId).toBe(result.narrowedId);
+  expect(
+    observed.find((entry) => entry.toolCallId === callIdFor("unnarrowed"))?.grantsSessionId,
+  ).toBe(result.unnarrowedId);
+});
+
+test("an unnarrowed Session's Tool call keeps its own grants id when another Session's Turn opened after its own", async () => {
+  const observed: Array<GateObservation> = [];
+  const plugin: FirstPartyPlugin = {
+    contributions: [alphaTool("v1"), gateProbe("v1", observed)],
+    manifest: { capabilities: [], name: "grants-id-fixture", version: "1.0.0" },
+  };
+  const result = await withRuntime({ firstPartyPlugins: [plugin] }, (runtime) =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const layer = yield* driverLayer(
+        runtime,
+        scriptedAlphaProvider(new Map([["first", { entered, resume }]])),
+      );
+      return yield* Effect.gen(function* () {
+        const driver = yield* Driver;
+        const first = yield* driver.createSession();
+        const second = yield* driver.createSession();
+        const running = yield* Effect.fork(driver.prompt(first.id, "first"));
+        yield* Deferred.await(entered);
+        // The second Session's Turn opens while the first is waiting and
+        // refreshes the process-wide cache with its own id.
+        yield* driver.prompt(second.id, "second");
+        yield* Deferred.succeed(resume, undefined);
+        yield* Fiber.join(running);
+        return { firstId: first.id as string, secondId: second.id as string };
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  expect(observed.find((entry) => entry.toolCallId === callIdFor("second"))?.grantsSessionId).toBe(
+    result.secondId,
+  );
+  const firstCall = observed.find((entry) => entry.toolCallId === callIdFor("first"));
+  expect(firstCall?.gateSessionId).toBe(result.firstId);
+  expect(firstCall?.grantsSessionId).toBe(result.firstId);
+});
+
+/**
+ * Opens one Turn whose Provider pauses after Turn open, reloads the Plugins to
+ * a second version of alpha and of the gate Hook while it waits, samples the
+ * Generation's lease count, then lets the model call alpha.
+ */
+const reloadMidTurnWithGateProbe = (narrowTo: ReadonlyArray<string> | undefined) => {
+  const observed: Array<GateObservation> = [];
+  // Mutable so the reload recomposes the second version (composition reads it again).
+  const plugin: { -readonly [K in keyof FirstPartyPlugin]: FirstPartyPlugin[K] } = {
+    contributions: [alphaTool("v1"), gateProbe("v1", observed)],
+    manifest: { capabilities: [], name: "reload-grants-fixture", version: "1.0.0" },
+  };
+  return withRuntime({ firstPartyPlugins: [plugin] }, (runtime) =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      let offer: ReadonlyArray<string> = [];
+      const scripted = scriptedAlphaProvider(new Map([["reload", { entered, resume }]]));
+      const provider: ProviderService = {
+        streamAssistant: (context, options) => {
+          if (context.at(-1)?.role !== "toolResult") {
+            offer = (options.tools ?? []).map((tool) => tool.description);
+          }
+          return scripted.streamAssistant(context, options);
+        },
+      };
+      const layer = yield* driverLayer(runtime, provider);
+      return yield* Effect.gen(function* () {
+        const driver = yield* Driver;
+        const session = yield* driver.createSession();
+        if (narrowTo !== undefined) {
+          yield* runtime.sessionToolGrants.narrow(session.id, filter({ tools: narrowTo }));
+        }
+        const running = yield* Effect.fork(driver.prompt(session.id, "reload"));
+        yield* Deferred.await(entered);
+        const inFlightDuringTurn = (yield* runtime.debugInfo).inFlight;
+        plugin.contributions = [alphaTool("v2"), gateProbe("v2", observed)];
+        // A Turn lease would hold this reload at its drain barrier until the
+        // Turn ends, and the Turn waits for this reload: the test would hang.
+        const swap = yield* runtime.reload;
+        yield* Deferred.succeed(resume, undefined);
+        yield* Fiber.join(running);
+        return {
+          executed: toolResultOf(yield* driver.getSnapshot(session.id)),
+          inFlightDuringTurn,
+          leaseCount: swap.leaseCount,
+          observed,
+          offer,
+          sessionId: session.id as string,
+        };
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+};
+
+test.each([
+  ["an unnarrowed", undefined],
+  ["a narrowed", ["alpha"]],
+] as const)(
+  "a reload completes while %s Session's Turn is open: the Turn holds no Generation lease and its call runs the reloaded Tool and gate Hook",
+  async (_label, narrowTo) => {
+    const result = await reloadMidTurnWithGateProbe(narrowTo);
+
+    // #89 Decision 2 (guard): no Turn lease, so the reload drains at once.
+    expect(result.inFlightDuringTurn).toBe(0);
+    expect(result.leaseCount).toBe(0);
+    // The offer is pinned at Turn open; execution resolves through the
+    // refreshed process-wide cache, so the reloaded Tool and Hook run.
+    expect(result.offer).toEqual(["Version v1"]);
+    expect(result.executed).toBe("alpha-v2");
+    expect(result.observed.map((entry) => entry.hookVersion)).toEqual(["v2"]);
+  },
+);
+
+test.each([
+  ["an unnarrowed", undefined],
+  ["a narrowed", ["alpha"]],
+] as const)(
+  "after a reload completes mid-Turn, %s Session's call runs its gate Hook with that Session's grants id",
+  async (_label, narrowTo) => {
+    const result = await reloadMidTurnWithGateProbe(narrowTo);
+
+    // The refreshed cache was adapted for the reload pseudo id; the gate must
+    // still see the calling Session.
+    expect(result.observed).toHaveLength(1);
+    expect(result.observed[0]?.gateSessionId).toBe(result.sessionId);
+    expect(result.observed[0]?.grantsSessionId).toBe(result.sessionId);
+  },
+);

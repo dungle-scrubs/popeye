@@ -7,6 +7,7 @@
  * so session memory is generation-scoped and not per-Tool.
  */
 
+import type { SessionId } from "@dungle-scrubs/popeye-journal";
 import {
   type AnyToolDeclaration,
   type CapabilityGrants,
@@ -56,7 +57,7 @@ const adaptTool = (
     execute: (arguments_, context) =>
       Effect.gen(function* () {
         const toolCallId = (context as { readonly toolCallId?: string }).toolCallId ?? "unknown";
-        const sessionId = context.sessionId as unknown as string | undefined;
+        const sessionId: SessionId | undefined = context.sessionId;
         const decision = yield* pipeline.vet(toolCallId, tool.name, arguments_, sessionId);
 
         if (decision._tag === "Rejected") {

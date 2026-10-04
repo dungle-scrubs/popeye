@@ -289,6 +289,12 @@ The emitter orders Hooks by descending priority, then namespaced key. Merge beha
 typed `GateRejected`. `drop` failures do not affect the caller and emit a Tap diagnostic. A timeout
 uses the same policy as any other failure.
 
+While a Hook runs, `CurrentGrantsFiberRef` (exported from `@dungle-scrubs/popeye-plugins`)
+contains `Some(grants)` for that emit; its value type is `Option<CapabilityGrants>`. At
+`tool-call-gate`, when the Tool call supplies a Session id, the grants carry that id, matching
+the gate input's `sessionId`. Without a Session id, the gate keeps the adaptation grants. The
+Capabilities remain those of the adaptation grants.
+
 ### Live callers
 
 A declared Hook point runs only when some code in this repository emits it. A Hook contributed to
@@ -398,7 +404,7 @@ Two gates ship as linkable modules and never load by default. Their sources are 
 `packages/cli/src/features/`, and `pnpm build` writes the loadable modules to
 `packages/cli/dist/features/`:
 
-- `trust-gate.ts` - contributes to the `trust` Hook. It raises a confirm interaction (project path, digest, change summary) with a 25s timeout and fallback `untrusted`. With the null `PluginInteractions` layer (print/json heads and startup composition in every mode) the fallback resolves immediately: unknown project code is denied without stalling. Over rpc with an interactive Head, the Head answers; `trusted` loads stage-2 project plugins, fallback `untrusted` swaps without them and the `/reload` result reports the reduced counts.
+- `trust-gate.ts` - contributes to the `trust` Hook. It raises a confirm interaction (project path, digest, change summary) with a 25s timeout and fallback `untrusted`. With the null `PluginInteractions` layer (print/json heads and startup composition in every mode) the fallback resolves immediately: unknown project code is denied without stalling. Over rpc with an interactive Head, the Head answers; `trusted` loads stage-2 project plugins, fallback `untrusted` swaps without them and the `/reload` result reports the reduced counts. The shipped `/reload` command does not swap Generations yet ([#93](https://github.com/dungle-scrubs/popeye/issues/93)); `CliRuntime.reload` does.
 - `tool-vetting.ts` - contributes to `tool-call-gate`. It raises a select (`allow once` / `allow for session` / `reject`) with a 25s timeout and fallback `reject`. Session memory is generation-scoped: a reload forgets prior allows (fail-closed). A rejection becomes a model-visible error `ToolResult` with `isError: true` in the call's journal position, preserving call order.
 
 Install them by symlinking the built modules into a user-global Plugin directory (the host's `userPluginDir`, by default `~/.popeye/plugins/`). Run `pnpm build` first:
@@ -460,14 +466,23 @@ Each generation owns an Effect `Scope`. Reload builds a fresh generation before 
 If the build fails, the current generation stays active. A successful reload then:
 
 1. swaps the current generation reference;
-2. sends all newly admitted work to the fresh generation;
-3. lets in-flight work finish on its captured generation;
-4. waits at a drain barrier;
+2. routes new generation checkouts to the fresh generation;
+3. lets leased in-flight work finish on its captured generation;
+4. waits at a drain barrier for those leases;
 5. closes the old `Scope` and runs its finalizers once;
 6. emits a generation-swap diagnostic with IDs, Plugin changes, drain time, and closed resources.
 
 The runtime serializes reload operations. Hosts use `useSerialized` for gates that must not
 interleave with a reload.
+
+A Turn holds no generation lease. The Tools offered to the model are fixed when the Turn opens,
+while each Tool call resolves its implementation through the process-wide Tool cache. After a
+successful `CliRuntime.reload` returns, the cache supplies the reloaded Tools and their gate
+Hooks; a call to a name the reloaded Plugins no longer provide returns `Unknown tool: <name>.`
+During an in-progress reload, the cache can still supply the previous generation's Tools after
+the current generation reference has changed. Turns and Tool calls do not acquire generation
+leases, so their lifetimes do not contribute to the drain count; a running Tool's generation can
+close under it.
 
 Cache busting re-imports the Plugin entry file with fresh module state. It does not change relative
 sibling URLs. Restart the process after a sibling module changes. Each entry reload also remains in
