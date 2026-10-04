@@ -2,6 +2,7 @@
  * DiscoveryAdapter over GenerationRuntime (D-003).
  * Owns the CLI composition root as pure adapter: discovery config via pipeline, Tool adaptation via adapter, host wiring via compose.
  * It exists so startup and reload share ONE recomposition function and GenerationRuntime owns the ONE Ref<{inFlight,drain}> and ONE isReloading flag; no pendingOlds duplication.
+ * Tool views vary per Session: the registry applies the process filter and the Session's own filters from SessionToolGrants (RFC-04 §5).
  * Not responsible for generation lifetime (GenerationRuntime owns that), Tool adaptation (adapter owns that) or Turn orchestration.
  */
 
@@ -27,7 +28,12 @@ import {
 import type { SnapshotAuditFields } from "../heads/head-wire.js";
 import { adaptTools, generationCapabilityUnion } from "../tools/adapter.js";
 import type { ToolGrantFilter } from "../tools/grants.js";
-import { filterGrantedTools } from "../tools/grants.js";
+import {
+  filterGrantedTools,
+  filterSessionGrantedTools,
+  isToolGrantedToSession,
+} from "../tools/grants.js";
+import { makeSessionToolGrants, type SessionToolGrantsService } from "../tools/session-grants.js";
 import { clearToolSessionMemory } from "../tools/tool-session-memory.js";
 import { type ComposePluginRuntimeOptions, composePluginRuntime } from "./pipeline.js";
 import { ReloadBusyError, ReloadControl } from "./reload.js";
@@ -43,6 +49,7 @@ export interface CliRuntime {
   readonly currentGeneration: Effect.Effect<PluginGeneration>;
   readonly pluginHost: PluginHostService;
   readonly reload: Effect.Effect<GenerationSwapDiagnostic, unknown>;
+  readonly sessionToolGrants: SessionToolGrantsService;
   readonly snapshotAudit: Effect.Effect<SnapshotAuditFields>;
   readonly toolRegistry: ToolRegistryService;
   readonly use: <A, E, R>(
@@ -58,6 +65,7 @@ export const makeCliRuntime = (
 ): Effect.Effect<CliRuntime, unknown> =>
   Effect.gen(function* () {
     const grants: ToolGrantFilter | undefined = options.toolGrants;
+    const sessionToolGrants = yield* makeSessionToolGrants;
     const generationRuntime = yield* makeGenerationRuntimeWithLoader(() =>
       composePluginRuntime(options),
     );
@@ -109,12 +117,18 @@ export const makeCliRuntime = (
           const tools = yield* adaptTools(gen as PluginGeneration, grantsForAdapt).pipe(
             Effect.catchAll(() => Effect.succeed([] as unknown as ReadonlyArray<Tool.Any>)),
           );
-          // HCN grant filter runs after plugin trust, before model
-          // visibility. Capabilities stay as the author declared them.
-          const granted = grants === undefined ? tools : filterGrantedTools(tools, grants);
-          currentToolsCache = granted;
+          const sessionFilters = yield* sessionToolGrants.filtersFor(sessionId);
+          // HCN grant filter, then the Session's own filters (RFC-04 §5): both run after
+          // plugin trust, before model visibility. Capabilities stay as the author declared them.
+          const granted = filterSessionGrantedTools(tools, grants, sessionFilters);
+          // The process-wide surface (deprecated get/list) mirrors the process-level view only;
+          // a narrowed Session's view never replaces it.
+          if (sessionFilters.length === 0) {
+            currentToolsCache = granted;
+          }
           const map = new Map(granted.map((t) => [t.name, t as unknown as RegisteredTool]));
           return {
+            admits: (name: string) => isToolGrantedToSession(name, grants, sessionFilters),
             get: (name: string) => map.get(name),
             list: () => granted as unknown as ReadonlyArray<RegisteredTool>,
           } satisfies SessionToolView;
@@ -283,6 +297,7 @@ export const makeCliRuntime = (
       debugInfo,
       pluginHost,
       reload,
+      sessionToolGrants,
       snapshotAudit,
       toolRegistry,
       use,

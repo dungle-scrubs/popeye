@@ -9,7 +9,9 @@ import { HCN_EFFORT_TO_THINKING_LEVEL, HCN_EFFORTS } from "../entry/args.js";
 import {
   composeToolGrantFilter,
   filterGrantedTools,
+  filterSessionGrantedTools,
   isToolGranted,
+  isToolGrantedToSession,
   partitionAgentTools,
   READ_PRESET_TOOL_NAMES,
   type ToolGrantFilter,
@@ -242,6 +244,79 @@ describe("agent tools list composition", () => {
       known: [],
       unknown: ["read", "bash"],
     });
+  });
+});
+
+// RFC-04 §5 (issue #54): a Session's own filters narrow the process-level
+// filter by intersection. No Session filter means exactly the process view.
+describe("per-Session grant composition", () => {
+  const universe = ["read", "grep", "bash", "edit", "manage-goal"].map(tool);
+  const sessionNames = (
+    processFilter: ToolGrantFilter | undefined,
+    sessionFilters: ReadonlyArray<ToolGrantFilter>,
+  ): ReadonlyArray<string> =>
+    filterSessionGrantedTools(universe, processFilter, sessionFilters).map(
+      (granted) => granted.name,
+    );
+
+  test("no process filter and no Session filter grants every Tool", () => {
+    expect(sessionNames(undefined, [])).toEqual(["read", "grep", "bash", "edit", "manage-goal"]);
+  });
+
+  test("a Session without filters gets exactly the process-level view", () => {
+    const processFilters: ReadonlyArray<ToolGrantFilter | undefined> = [
+      undefined,
+      { ...noFilter, tools: ["read", "bash"] },
+      { ...noFilter, excludeTools: ["edit"] },
+      { ...noFilter, access: "read" },
+      { ...noFilter, agentTools: ["grep", "edit"] },
+      { ...noFilter, toolsOff: true },
+    ];
+    for (const processFilter of processFilters) {
+      expect(sessionNames(processFilter, [])).toEqual(
+        processFilter === undefined
+          ? universe.map((granted) => granted.name)
+          : filterGrantedTools(universe, processFilter).map((granted) => granted.name),
+      );
+    }
+  });
+
+  test("a Session filter narrows the process view by intersection", () => {
+    expect(
+      sessionNames({ ...noFilter, excludeTools: ["edit"] }, [
+        { ...noFilter, agentTools: ["read", "edit"] },
+      ]),
+    ).toEqual(["read"]);
+  });
+
+  test("a Session filter never widens the process view", () => {
+    expect(
+      sessionNames({ ...noFilter, tools: ["read"] }, [{ ...noFilter, tools: ["read", "bash"] }]),
+    ).toEqual(["read"]);
+    expect(
+      sessionNames({ ...noFilter, toolsOff: true }, [{ ...noFilter, tools: ["read"] }]),
+    ).toEqual([]);
+  });
+
+  test("several Session filters all apply", () => {
+    expect(
+      sessionNames(undefined, [
+        { ...noFilter, agentTools: ["read", "grep", "bash"] },
+        { ...noFilter, excludeTools: ["grep"] },
+      ]),
+    ).toEqual(["read", "bash"]);
+  });
+
+  test("isToolGrantedToSession agrees with filterSessionGrantedTools", () => {
+    const processFilter: ToolGrantFilter = { ...noFilter, excludeTools: ["bash"] };
+    const sessionFilters: ReadonlyArray<ToolGrantFilter> = [
+      { ...noFilter, agentTools: ["read", "bash"] },
+    ];
+    expect(isToolGrantedToSession("read", processFilter, sessionFilters)).toBe(true);
+    expect(isToolGrantedToSession("bash", processFilter, sessionFilters)).toBe(false);
+    expect(isToolGrantedToSession("grep", processFilter, sessionFilters)).toBe(false);
+    expect(isToolGrantedToSession("grep", processFilter, [])).toBe(true);
+    expect(isToolGrantedToSession("grep", undefined, [])).toBe(true);
   });
 });
 

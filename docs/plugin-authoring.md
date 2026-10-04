@@ -226,6 +226,12 @@ execution, and optional policy fields in one value.
 The registry omits a Tool from the model-visible list when its required Capabilities are not
 granted for that Session.
 
+A host can also narrow one Session's Tools by name. That Session
+is offered only the Tools that both the process-level grant and its own filters allow, and a
+call to any other Tool returns `Unknown tool: <name>.` Narrowing never changes Capability
+grants. A Plugin reload during a Turn does not change which names the Turn may call; a call
+runs the Tool as the reloaded Plugins now provide it.
+
 ### Commands
 
 Use `defineCommandContribution`. A Command is invoked by the user through

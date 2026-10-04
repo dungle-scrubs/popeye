@@ -35,7 +35,14 @@ import {
 } from "./provider.js";
 import { appendOperationStarted, createOperationId } from "./records.js";
 import { Sessions, SessionsLive } from "./sessions.js";
-import { defineTool, type Tool, ToolRegistryLive } from "./tool.js";
+import {
+  defineTool,
+  type RegisteredTool,
+  type SessionToolView,
+  type Tool,
+  ToolRegistry,
+  ToolRegistryLive,
+} from "./tool.js";
 import {
   TURN_INPUT_QUEUE_CAPACITY,
   TurnOrchestrator,
@@ -4272,4 +4279,182 @@ test("openTurn does not run onAdmitted when the Kernel rejects the prompt", asyn
 
   expect(result.error).toMatchObject({ _tag: "TurnQueueFull", queue: "steering" });
   expect(admitted).toBe(0);
+});
+
+// RFC-04 §5 (issue #54): Tool grants vary per Session. The model is offered the
+// Session's pinned view at Turn open; execution admits only the names that view
+// admits, so a Tool outside the Session's grant is refused even when the
+// process-wide registry surface (deprecated get/list) still holds it. A view
+// without an admits rule admits exactly its own Tools.
+test("Tool execution admits only the Session view's Tools when the view has no admits rule", async () => {
+  let withheldRuns = 0;
+  const registered = (name: string, run: () => { readonly content: string }): RegisteredTool => ({
+    description: `Run ${name}.`,
+    execute: () => Effect.sync(run),
+    executionMode: "parallel",
+    name,
+    parameters: Schema.Unknown,
+    replay: "never",
+    requiredCapabilities: [],
+  });
+  const granted = registered("granted", () => ({ content: "granted-result" }));
+  const withheld = registered("withheld", () => {
+    withheldRuns += 1;
+    return { content: "withheld-result" };
+  });
+  const staticView = (tools: ReadonlyArray<RegisteredTool>): SessionToolView => {
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+    return { get: (name) => byName.get(name), list: () => tools };
+  };
+  const fullView = staticView([granted, withheld]);
+  const narrowView = staticView([granted]);
+  const narrowedSessions = new Set<string>();
+  const registryLayer = Layer.succeed(ToolRegistry, {
+    // The process-wide surface keeps every Tool, like the CLI's process-level cache.
+    get: fullView.get,
+    list: fullView.list,
+    view: (sessionId) =>
+      Effect.succeed(narrowedSessions.has(sessionId as unknown as string) ? narrowView : fullView),
+  });
+  const offered: Array<ReadonlyArray<string>> = [];
+  const provider: ProviderService = {
+    streamAssistant: (context, options) => {
+      offered.push((options.tools ?? []).map((tool) => tool.name));
+      const last = context.at(-1);
+      return last !== undefined && last.role === "toolResult"
+        ? Stream.fromIterable([{ _tag: "done" as const, stopReason: "done" as const }])
+        : Stream.fromIterable([
+            { _tag: "toolCall" as const, argumentsJson: "{}", id: "call-granted", name: "granted" },
+            {
+              _tag: "toolCall" as const,
+              argumentsJson: "{}",
+              id: "call-withheld",
+              name: "withheld",
+            },
+            { _tag: "done" as const, stopReason: "toolCalls" as const },
+          ]);
+    },
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const orchestrator = yield* TurnOrchestrator;
+      const narrowed = yield* sessions.create();
+      narrowedSessions.add(narrowed.id as unknown as string);
+      yield* orchestrator.openTurn(narrowed.id, "Call both Tools.");
+      const narrowedBranch = yield* journal.readBranch(narrowed.id);
+      const unnarrowed = yield* sessions.create();
+      yield* orchestrator.openTurn(unnarrowed.id, "Call both Tools.");
+      const unnarrowedBranch = yield* journal.readBranch(unnarrowed.id);
+      return { narrowedBranch, unnarrowedBranch };
+    }).pipe(Effect.provide(testLayer(provider, undefined, registryLayer))),
+  );
+  const toolResult = (
+    branch: ReadonlyArray<{ readonly payload: unknown }>,
+    toolCallId: string,
+  ): Record<string, unknown> | undefined =>
+    branch
+      .map((entry) => entry.payload as Record<string, unknown>)
+      .find((payload) => payload.role === "toolResult" && payload.toolCallId === toolCallId);
+
+  // The narrowed Session is offered only its view and its call to the withheld Tool is refused.
+  expect(offered[0]).toEqual(["granted"]);
+  expect(toolResult(result.narrowedBranch, "call-granted")).toMatchObject({
+    content: "granted-result",
+  });
+  expect(toolResult(result.narrowedBranch, "call-withheld")).toMatchObject({
+    content: "Unknown tool: withheld.",
+    isError: true,
+  });
+  // The unnarrowed Session in the same process keeps the full view and runs the Tool.
+  expect(offered[2]).toEqual(["granted", "withheld"]);
+  expect(toolResult(result.unnarrowedBranch, "call-withheld")).toMatchObject({
+    content: "withheld-result",
+  });
+  expect(withheldRuns).toBe(1);
+});
+
+// RFC-04 §5 (issue #54): a view's admits rule decides which names the Turn may
+// execute, and the process-wide registry supplies the implementation, so a
+// Plugin reload during the Turn keeps today's execution of the reloaded Tool.
+test("a Session view's admits rule decides Tool admission and the registry supplies the Tool", async () => {
+  const runs: Array<string> = [];
+  const registered = (name: string, content: string): RegisteredTool => ({
+    description: `Run ${name}.`,
+    execute: () =>
+      Effect.sync(() => {
+        runs.push(content);
+        return { content };
+      }),
+    executionMode: "parallel",
+    name,
+    parameters: Schema.Unknown,
+    replay: "never",
+    requiredCapabilities: [],
+  });
+  const offeredTool = registered("offered", "offered-at-open");
+  const processTools = [
+    registered("offered", "offered-current"),
+    registered("late", "late-current"),
+    registered("withheld", "withheld-current"),
+  ];
+  const processByName = new Map(processTools.map((tool) => [tool.name, tool]));
+  const registryLayer = Layer.succeed(ToolRegistry, {
+    get: (name) => processByName.get(name),
+    list: () => processTools,
+    view: () =>
+      Effect.succeed({
+        admits: (name: string) => name !== "withheld",
+        get: (name: string) => (name === "offered" ? offeredTool : undefined),
+        list: () => [offeredTool],
+      } satisfies SessionToolView),
+  });
+  const offered: Array<ReadonlyArray<string>> = [];
+  const provider: ProviderService = {
+    streamAssistant: (context, options) => {
+      offered.push((options.tools ?? []).map((tool) => tool.name));
+      const last = context.at(-1);
+      return last !== undefined && last.role === "toolResult"
+        ? Stream.fromIterable([{ _tag: "done" as const, stopReason: "done" as const }])
+        : Stream.fromIterable([
+            { _tag: "toolCall" as const, argumentsJson: "{}", id: "call-offered", name: "offered" },
+            { _tag: "toolCall" as const, argumentsJson: "{}", id: "call-late", name: "late" },
+            {
+              _tag: "toolCall" as const,
+              argumentsJson: "{}",
+              id: "call-withheld",
+              name: "withheld",
+            },
+            { _tag: "done" as const, stopReason: "toolCalls" as const },
+          ]);
+    },
+  };
+
+  const branch = await Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* Journal;
+      const sessions = yield* Sessions;
+      const orchestrator = yield* TurnOrchestrator;
+      const session = yield* sessions.create();
+      yield* orchestrator.openTurn(session.id, "Call every Tool.");
+      return yield* journal.readBranch(session.id);
+    }).pipe(Effect.provide(testLayer(provider, undefined, registryLayer))),
+  );
+  const toolResult = (toolCallId: string): Record<string, unknown> | undefined =>
+    branch
+      .map((entry) => entry.payload as Record<string, unknown>)
+      .find((payload) => payload.role === "toolResult" && payload.toolCallId === toolCallId);
+
+  expect(offered[0]).toEqual(["offered"]);
+  // Admitted names run the registry's current implementation, as execution does today.
+  expect(toolResult("call-offered")).toMatchObject({ content: "offered-current" });
+  expect(toolResult("call-late")).toMatchObject({ content: "late-current" });
+  // A name the view does not admit is unknown, even though the registry holds it.
+  expect(toolResult("call-withheld")).toMatchObject({
+    content: "Unknown tool: withheld.",
+    isError: true,
+  });
+  expect([...runs].sort()).toEqual(["late-current", "offered-current"]);
 });
