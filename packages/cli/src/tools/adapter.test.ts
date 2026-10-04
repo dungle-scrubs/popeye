@@ -5,11 +5,14 @@ import { join } from "node:path";
 import { type SessionId, SessionIdSchema } from "@dungle-scrubs/popeye-journal";
 import type { ToolExecutionContext } from "@dungle-scrubs/popeye-kernel";
 import {
+  type CapabilityGrants,
+  CurrentGrantsFiberRef,
   createCapabilityGrants,
+  defineHookContribution,
   defineToolContribution,
   ToolContributionError,
 } from "@dungle-scrubs/popeye-plugins";
-import { Effect, Either, Logger, Schema } from "effect";
+import { Effect, Either, FiberRef, Logger, Option, Schema } from "effect";
 import { expect, test } from "vitest";
 
 import { composePluginRuntime } from "../plugins/pipeline.js";
@@ -314,3 +317,89 @@ test("a grant-visible Plugin tool preserves its declaration and execution outcom
     await rm(projectPath, { force: true, recursive: true });
   }
 });
+
+test.each([
+  ["a calling Session", "calling-session", "calling-session", "calling-session"],
+  // Defensive branch (#89 Decision 1): a context without a Session id keeps
+  // the adaptation grants, and the gate input omits sessionId. Passes today.
+  ["no Session", undefined, undefined, "adapting-view"],
+] as const)(
+  "an adapted Tool's tool-call-gate Hooks run with %s's grants id and the adaptation grants' Capabilities",
+  async (_label, callerId, expectedGateSessionId, expectedGrantsSessionId) => {
+    // Issue #89: the CLI registry executes a wrapper adapted for whichever view
+    // last refreshed its cache, so the adaptation grants' id is not the caller's.
+    const projectPath = await mkdtemp(join(tmpdir(), "popeye-cli-tool-adapter-call-grants-"));
+    const observed: Array<{
+      readonly gateSessionId: string | undefined;
+      readonly grants: CapabilityGrants | undefined;
+    }> = [];
+    const plugin = {
+      contributions: [
+        defineToolContribution({
+          description: "Probe Tool.",
+          execute: () => Effect.succeed({ content: "probed" }),
+          name: "probe",
+          parameters: Schema.Struct({}),
+        }),
+        defineHookContribution({
+          mergeClass: "FirstWins",
+          name: "grants-probe",
+          point: "tool-call-gate",
+          run: (input: { readonly sessionId?: string | undefined }) =>
+            FiberRef.get(CurrentGrantsFiberRef).pipe(
+              Effect.map((grants) => {
+                observed.push({
+                  gateSessionId: input.sessionId,
+                  grants: Option.getOrUndefined(grants),
+                });
+                return { decision: "continue" as const };
+              }),
+            ),
+        }),
+      ],
+      manifest: {
+        capabilities: [{ name: "shell" }],
+        name: "call-grants-fixture",
+        version: "1.0.0",
+      },
+    } as const;
+
+    try {
+      const generation = await Effect.runPromise(
+        composePluginRuntime({
+          firstPartyPlugins: [plugin],
+          noProjectPlugins: true,
+          pluginPaths: [],
+          projectPath,
+        }),
+      );
+      const adaptationGrants = createCapabilityGrants(SessionIdSchema.make("adapting-view"), [
+        "shell",
+      ]);
+      const tools = await Effect.runPromise(adaptTools(generation, adaptationGrants));
+      const tool = tools.find((candidate) => candidate.name === "probe");
+      if (tool === undefined) {
+        throw new Error("The adapter did not return the probe Tool.");
+      }
+      const caller =
+        callerId === undefined
+          ? (undefined as unknown as SessionId)
+          : SessionIdSchema.make(callerId);
+      const result = await Effect.runPromise(
+        Effect.scoped(tool.execute({} as never, testToolContext(caller))),
+      );
+      await Effect.runPromise(generation.close);
+
+      expect(result).toEqual({ content: "probed" });
+      expect(observed).toHaveLength(1);
+      // Already correct today: the gate input names the caller.
+      expect(observed[0]?.gateSessionId).toBe(expectedGateSessionId);
+      // The Hook's grants carry the caller's id and exactly the adaptation
+      // grants' Capabilities, so no grant decision changes.
+      expect(observed[0]?.grants?.sessionId).toBe(expectedGrantsSessionId);
+      expect(observed[0]?.grants?.capabilities).toEqual(["shell"]);
+    } finally {
+      await rm(projectPath, { force: true, recursive: true });
+    }
+  },
+);

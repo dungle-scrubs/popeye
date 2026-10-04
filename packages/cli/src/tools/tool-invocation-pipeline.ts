@@ -7,10 +7,14 @@
  * generation-scoped Ref via ToolSessionMemory and shares ONE gate instance per
  * generation+grants across all adapted Tools, so "allow for session" is coherent
  * and a new vetting policy plugs as another Hook without touching the cache.
+ * When the Tool call supplies a Session id, its gate runs with that id and the adaptation
+ * grants' Capabilities, so a Hook reading CurrentGrantsFiberRef sees the Session that made the
+ * call; without one, the gate keeps the adaptation grants (#89).
  * Not responsible for Tool execution (kernel/tool-batch owns that) or for
  * PluginInteractions transport (heads own that); it only decides allow/block/replace.
  */
 
+import type { SessionId } from "@dungle-scrubs/popeye-journal";
 import type { CapabilityGrants, PluginGeneration } from "@dungle-scrubs/popeye-plugins";
 import { Context, Effect, Layer, type Ref } from "effect";
 
@@ -31,13 +35,29 @@ export interface ToolInvocationPipeline {
     toolCallId: string,
     toolName: string,
     args: unknown,
-    sessionId: string | undefined,
+    sessionId: SessionId | undefined,
   ) => Effect.Effect<GateDecision>;
 }
 
 export class ToolInvocationPipelineTag extends Context.Tag(
   "@dungle-scrubs/popeye/ToolInvocationPipeline",
 )<ToolInvocationPipelineTag, ToolInvocationPipeline>() {}
+
+/**
+ * The grants a Tool call's gate runs with (#89): the adaptation grants' Capabilities, stamped
+ * with the calling Session's id. The registry may execute a wrapper adapted for another
+ * Session's view or for a pseudo id, so the adaptation id is not the caller's. Capabilities are
+ * generation-wide, so no grant decision changes. A call without a Session keeps the adaptation
+ * grants.
+ */
+const grantsForCall = (
+  grants: CapabilityGrants,
+  sessionId: SessionId | undefined,
+): CapabilityGrants =>
+  sessionId === undefined || sessionId === grants.sessionId
+    ? grants
+    : // The adaptation grants are already decoded and sorted; only the id changes.
+      Object.freeze({ capabilities: grants.capabilities, sessionId });
 
 export const makeToolInvocationPipeline = (options: {
   readonly generation: PluginGeneration;
@@ -84,7 +104,7 @@ export const makeToolInvocationPipeline = (options: {
       };
 
       const gateResult = yield* generation.emitter
-        .emit("tool-call-gate", gateInput as never, grants)
+        .emit("tool-call-gate", gateInput as never, grantsForCall(grants, sessionId))
         .pipe(Effect.either);
 
       if (gateResult._tag === "Left") {

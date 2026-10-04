@@ -3,6 +3,10 @@
  * Owns the CLI composition root as pure adapter: discovery config via pipeline, Tool adaptation via adapter, host wiring via compose.
  * It exists so startup and reload share ONE recomposition function and GenerationRuntime owns the ONE Ref<{inFlight,drain}> and ONE isReloading flag; no pendingOlds duplication.
  * Tool views vary per Session: the registry applies the process filter and the Session's own filters from SessionToolGrants (RFC-04 §5).
+ * Tool execution resolves through the process-wide cache below and holds no Generation lease:
+ * a reload that completes during a Turn closes the Turn-open Generation, and the Turn's calls that
+ * start after `reload` returns run the reloaded Tools. The cache refreshes only after the swap and drain
+ * finish, so during a reload it can still serve the previous Generation's Tools (#89).
  * Not responsible for generation lifetime (GenerationRuntime owns that), Tool adaptation (adapter owns that) or Turn orchestration.
  */
 
@@ -81,7 +85,8 @@ export const makeCliRuntime = (
     const useSerialized: CliRuntime["useSerialized"] =
       generationRuntime.useSerialized as CliRuntime["useSerialized"];
 
-    // Sync cache for ToolRegistry.get/list (sync access)
+    // Sync cache for ToolRegistry.get/list (sync access); Tool execution resolves here. Its
+    // wrappers carry the adapting view's grants id; the gate restamps the caller's id per call.
     const initialGen = yield* generationRuntime.currentGeneration;
     const initialGrantsForTools = createCapabilityGrants(
       SessionIdSchema.make("init-tools"),
