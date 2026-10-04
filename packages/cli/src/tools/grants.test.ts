@@ -7,10 +7,13 @@ import { describe, expect, test } from "vitest";
 
 import { HCN_EFFORT_TO_THINKING_LEVEL, HCN_EFFORTS } from "../entry/args.js";
 import {
+  composeToolGrantFilter,
   filterGrantedTools,
   isToolGranted,
+  partitionAgentTools,
   READ_PRESET_TOOL_NAMES,
   type ToolGrantFilter,
+  type ToolGrantInputs,
 } from "./grants.js";
 
 const noFilter: ToolGrantFilter = { access: undefined, excludeTools: [], tools: [] };
@@ -90,6 +93,155 @@ describe("tool grant filter", () => {
       tool("a"),
       tool("c"),
     ]);
+  });
+});
+
+// Issue #53 / RFC-04 §3: an Agent definition's tools list composes into the
+// grant filter by intersection and never widens it.
+describe("agent tools list composition", () => {
+  const universe = ["read", "grep", "bash", "edit", "manage-goal"].map(tool);
+  const grantedNames = (filter: ToolGrantFilter | undefined): ReadonlyArray<string> =>
+    filterGrantedTools(universe, filter ?? noFilter).map((granted) => granted.name);
+  const inputs = (overrides: Partial<ToolGrantInputs> = {}): ToolGrantInputs => ({
+    access: undefined,
+    agentTools: undefined,
+    excludeTools: [],
+    isolation: undefined,
+    tools: [],
+    ...overrides,
+  });
+
+  test("an agent list alone narrows the full set to exactly its names", () => {
+    const filter: ToolGrantFilter = { ...noFilter, agentTools: ["read", "bash"] };
+    expect(grantedNames(filter)).toEqual(["read", "bash"]);
+  });
+
+  test("an agent list intersects with --tools", () => {
+    const filter: ToolGrantFilter = {
+      ...noFilter,
+      agentTools: ["read", "bash"],
+      tools: ["bash", "edit"],
+    };
+    expect(grantedNames(filter)).toEqual(["bash"]);
+  });
+
+  test("--exclude-tools subtracts from the agent list", () => {
+    const filter: ToolGrantFilter = {
+      ...noFilter,
+      agentTools: ["read", "bash"],
+      excludeTools: ["bash"],
+    };
+    expect(grantedNames(filter)).toEqual(["read"]);
+  });
+
+  test("--access read intersects the agent list with the read preset", () => {
+    const filter: ToolGrantFilter = { ...noFilter, access: "read", agentTools: ["read", "bash"] };
+    expect(grantedNames(filter)).toEqual(["read"]);
+  });
+
+  test("tool-free isolation still grants nothing under an agent list", () => {
+    const filter: ToolGrantFilter = { ...noFilter, agentTools: ["read"], toolsOff: true };
+    expect(grantedNames(filter)).toEqual([]);
+  });
+
+  test("the native: prefix resolves in an agent list", () => {
+    const filter: ToolGrantFilter = { ...noFilter, agentTools: ["native:grep"] };
+    expect(grantedNames(filter)).toEqual(["grep"]);
+  });
+
+  test("an empty agent list is no restriction", () => {
+    const filter: ToolGrantFilter = { ...noFilter, agentTools: [] };
+    expect(grantedNames(filter)).toEqual(grantedNames(noFilter));
+  });
+
+  test("composeToolGrantFilter returns undefined when no input restricts", () => {
+    expect(composeToolGrantFilter(inputs())).toBeUndefined();
+    expect(composeToolGrantFilter(inputs({ agentTools: [] }))).toBeUndefined();
+  });
+
+  test("composeToolGrantFilter without an agent keeps the pre-#53 flag filter shape", () => {
+    expect(
+      composeToolGrantFilter(inputs({ access: "write", excludeTools: ["bash"], tools: ["read"] })),
+    ).toEqual({ access: "write", excludeTools: ["bash"], tools: ["read"] });
+    expect(composeToolGrantFilter(inputs({ isolation: "tool-free" }))).toEqual({
+      access: undefined,
+      excludeTools: [],
+      tools: [],
+      toolsOff: true,
+    });
+  });
+
+  test("composeToolGrantFilter carries a non-empty agent list", () => {
+    expect(composeToolGrantFilter(inputs({ agentTools: ["read", "bash"] }))).toEqual({
+      access: undefined,
+      agentTools: ["read", "bash"],
+      excludeTools: [],
+      tools: [],
+    });
+  });
+
+  test("no flag combination yields a Tool outside the agent list or the flag result", () => {
+    const strip = (name: string): string => name.replace(/^native:/u, "");
+    const accessValues = [undefined, "read", "write"];
+    const toolLists = [[], ["read", "bash"], ["edit"], ["native:grep"]];
+    const excludeLists = [[], ["bash"], ["read"]];
+    const isolationValues = [undefined, "tool-free"];
+    const agentLists = [["read", "bash"], ["edit", "no-such-tool"], ["native:read"], ["grep"]];
+    let checked = 0;
+    for (const access of accessValues) {
+      for (const tools of toolLists) {
+        for (const excludeTools of excludeLists) {
+          for (const isolation of isolationValues) {
+            // The oracle is the pre-#53 flag filter, built by hand so the
+            // composer is never its own reference.
+            const legacyFlags: ToolGrantFilter = {
+              access,
+              excludeTools,
+              tools,
+              ...(isolation === "tool-free" ? { toolsOff: true } : {}),
+            };
+            const flagsOnly = grantedNames(legacyFlags);
+            for (const agentTools of agentLists) {
+              const composed = grantedNames(
+                composeToolGrantFilter(
+                  inputs({ access, agentTools, excludeTools, isolation, tools }),
+                ),
+              );
+              const agentSet = new Set(agentTools.map(strip));
+              expect(composed).toEqual(flagsOnly.filter((name) => agentSet.has(name)));
+              checked += 1;
+            }
+          }
+        }
+      }
+    }
+    expect(checked).toBe(3 * 4 * 3 * 2 * 4);
+  });
+
+  test("partitionAgentTools splits names as written, in order, without duplicates", () => {
+    expect(
+      partitionAgentTools(
+        ["read", "no-such-tool", "native:grep", "read", "also-missing", "no-such-tool"],
+        new Set(["read", "grep", "manage-goal"]),
+      ),
+    ).toEqual({
+      known: ["read", "native:grep"],
+      unknown: ["no-such-tool", "also-missing"],
+    });
+  });
+
+  test("partitionAgentTools deduplicates native: spellings and keeps the first written form", () => {
+    expect(partitionAgentTools(["read", "native:read", "nope"], new Set(["read"]))).toEqual({
+      known: ["read"],
+      unknown: ["nope"],
+    });
+  });
+
+  test("partitionAgentTools reports every name unknown against an empty granted set", () => {
+    expect(partitionAgentTools(["read", "bash"], new Set())).toEqual({
+      known: [],
+      unknown: ["read", "bash"],
+    });
   });
 });
 

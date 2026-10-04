@@ -78,10 +78,19 @@ const projectWithToolPlugin = (): string => {
   return projectPath;
 };
 
+/**
+ * The fake-Provider environment with an empty user Plugin directory, so Tool
+ * counts never depend on Plugins installed in the real home directory.
+ */
+const isolatedEnvironment = (): NodeJS.ProcessEnv => ({
+  ...fakeProviderEnvironment(),
+  POPEYE_USER_PLUGIN_DIR: tempDirectory(),
+});
+
 const runAsAgent = (args: ReadonlyArray<string>, options: { agentsDir: string; cwd?: string }) =>
   runBuiltBin(["-p", "--session-dir", tempDirectory(), ...args, FAKE_PROVIDER_PROMPT], {
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-    env: { ...fakeProviderEnvironment(), POPEYE_AGENTS_DIR: options.agentsDir },
+    env: { ...isolatedEnvironment(), POPEYE_AGENTS_DIR: options.agentsDir },
   });
 
 test("the composed append text places the agent body first and drops empty bodies", () => {
@@ -200,7 +209,7 @@ test("a tools list whose every name is unknown fails closed at startup", () => {
 
   expect(result.status).toBe(2);
   expect(result.stderr).toContain("Agent locked");
-  expect(result.stderr).toContain("lists only tools unknown to this process");
+  expect(result.stderr).toContain("lists only tools this session does not grant");
   expect(result.stderr).toContain("no-such-tool");
   expect(result.stderr).toContain("also-missing");
 });
@@ -270,4 +279,220 @@ test("a skip diagnostic is reported even when the selected name fails resolution
   expect(result.stderr).toContain(`Agent definition ${brokenPath} skipped`);
   expect(result.stderr).toContain("invalid YAML");
   expect(result.stderr).toContain('Unknown agent "missing"');
+});
+
+// ---------------------------------------------------------------------------
+// Issue #53 / RFC-04 slice 2: the Agent tools list narrows the Tool grant.
+// ---------------------------------------------------------------------------
+
+/** Tools the multi-tool fixture contributes; the default grant adds manage-goal. */
+const FIXTURE_TOOL_NAMES = ["read", "grep", "bash", "edit"] as const;
+const DEFAULT_TOOL_COUNT = FIXTURE_TOOL_NAMES.length + 1;
+
+/** A project root whose one Plugin contributes read, grep, bash, and edit. */
+const projectWithFixtureTools = (): string => {
+  const projectPath = tempDirectory();
+  const projectPluginDir = join(projectPath, ".popeye", "plugins");
+  mkdirSync(projectPluginDir, { recursive: true });
+  writeFileSync(
+    join(projectPluginDir, "fixture-tools.ts"),
+    [
+      `import { Effect, Schema } from ${JSON.stringify(new URL("../../node_modules/effect/dist/esm/index.js", import.meta.url).href)};`,
+      `const names = ${JSON.stringify(FIXTURE_TOOL_NAMES)};`,
+      "export default () => ({",
+      "  contributions: names.map((name) => ({",
+      "    kind: 'tool',",
+      "    name,",
+      "    payload: {",
+      "      description: 'Run ' + name + '.',",
+      "      execute: () => Effect.succeed({ content: name + '-result' }),",
+      "      name,",
+      "      parameters: Schema.Struct({}),",
+      "    },",
+      "    priority: 0,",
+      "  })),",
+      "  manifest: { capabilities: [], name: 'fixture-tools-plugin', version: '1.0.0' },",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  return projectPath;
+};
+
+const startupToolCount = (stderr: string): number | undefined => {
+  const line = stderr.split("\n").find((candidate) => candidate.startsWith("STARTUP "));
+  if (line === undefined) {
+    return undefined;
+  }
+  const record = JSON.parse(line.slice("STARTUP ".length)) as { toolCount?: number };
+  return record.toolCount;
+};
+
+const runFixtureAgent = (agentFrontmatter: string, flags: ReadonlyArray<string> = []) => {
+  const agentsDir = tempDirectory();
+  const projectPath = projectWithFixtureTools();
+  const agentPath = userAgent(agentsDir, "narrow", agentFrontmatter);
+  const result = runAsAgent(["--agent", "narrow", ...flags], { agentsDir, cwd: projectPath });
+  return { agentPath, result };
+};
+
+test("the fixture Plugin grants every Tool without --agent", () => {
+  const result = runBuiltBin(["-p", "--session-dir", tempDirectory(), FAKE_PROVIDER_PROMPT], {
+    cwd: projectWithFixtureTools(),
+    env: isolatedEnvironment(),
+  });
+
+  expect(result.status).toBe(0);
+  expect(startupToolCount(result.stderr)).toBe(DEFAULT_TOOL_COUNT);
+});
+
+test("an agent with tools: read, bash is offered exactly that intersection", () => {
+  const { result } = runFixtureAgent("tools: read, bash\n");
+
+  expect(result.status).toBe(0);
+  expect(startupToolCount(result.stderr)).toBe(2);
+});
+
+test("a Tool outside the agent's list is not offered: the model's call to it is unknown", () => {
+  const agentsDir = tempDirectory();
+  const projectPath = projectWithFixtureTools();
+  userAgent(agentsDir, "narrow", "tools: read, bash\n");
+  const prompt = "Call one granted and one withheld Tool.";
+  const scriptPath = join(tempDirectory(), "agent-tools-provider.json");
+  writeFileSync(
+    scriptPath,
+    JSON.stringify({
+      responses: [
+        {
+          items: [
+            { _tag: "toolCall", argumentsJson: "{}", id: "call-read", name: "read" },
+            { _tag: "toolCall", argumentsJson: "{}", id: "call-edit", name: "edit" },
+            { _tag: "done", stopReason: "toolCalls" },
+          ],
+          prompt,
+        },
+        {
+          items: [
+            { _tag: "textDelta", text: "Done." },
+            { _tag: "done", stopReason: "done" },
+          ],
+          prompt,
+        },
+      ],
+    }),
+    "utf8",
+  );
+
+  const result = runBuiltBin(
+    ["--agent", "narrow", "-p", "--mode", "json", "--session-dir", tempDirectory(), prompt],
+    {
+      cwd: projectPath,
+      env: {
+        ...isolatedEnvironment(),
+        POPEYE_AGENTS_DIR: agentsDir,
+        POPEYE_FAKE_PROVIDER_SCRIPT: scriptPath,
+      },
+    },
+  );
+  const frames = result.stdout
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const snapshot = frames.at(-1) as
+    | { readonly entries?: ReadonlyArray<{ readonly payload?: Record<string, unknown> }> }
+    | undefined;
+  const toolResult = (toolCallId: string) =>
+    snapshot?.entries?.find(
+      (entry) => entry.payload?.role === "toolResult" && entry.payload.toolCallId === toolCallId,
+    )?.payload;
+
+  expect(result.status).toBe(0);
+  expect(startupToolCount(result.stderr)).toBe(2);
+  expect(frames).toContainEqual({ _tag: "toolCompleted", isError: false, toolCallId: "call-read" });
+  expect(frames).toContainEqual({ _tag: "toolCompleted", isError: true, toolCallId: "call-edit" });
+  expect(toolResult("call-read")?.content).toEqual(expect.stringContaining("read-result"));
+  expect(toolResult("call-edit")?.content).toEqual(expect.stringContaining("Unknown tool: edit."));
+}, 15_000);
+
+test("--exclude-tools removes a Tool from the agent's intersection", () => {
+  const { result } = runFixtureAgent("tools: read, bash\n", ["--exclude-tools", "bash"]);
+
+  expect(result.status).toBe(0);
+  expect(startupToolCount(result.stderr)).toBe(1);
+});
+
+test("--access read intersects the agent's list with the read preset", () => {
+  const { result } = runFixtureAgent("tools: read, bash\n", ["--access", "read"]);
+
+  expect(result.status).toBe(0);
+  expect(startupToolCount(result.stderr)).toBe(1);
+});
+
+test("--tools intersects with the agent's list and never widens it", () => {
+  const { result } = runFixtureAgent("tools: read, bash\n", ["--tools", "read,grep,edit"]);
+
+  expect(result.status).toBe(0);
+  expect(startupToolCount(result.stderr)).toBe(1);
+});
+
+test("an overlapping --exclude-tools still subtracts when --tools and the agent list both name the Tool", () => {
+  const { result } = runFixtureAgent("tools: read, bash\n", [
+    "--tools",
+    "read,bash,edit",
+    "--exclude-tools",
+    "bash",
+  ]);
+
+  expect(result.status).toBe(0);
+  expect(startupToolCount(result.stderr)).toBe(1);
+});
+
+test("an absent or empty tools key leaves the default grant unchanged", () => {
+  for (const frontmatter of ["", 'tools: ""\n', "tools: []\n"]) {
+    const { result } = runFixtureAgent(frontmatter);
+
+    expect(result.status).toBe(0);
+    expect(startupToolCount(result.stderr)).toBe(DEFAULT_TOOL_COUNT);
+  }
+}, 30_000);
+
+test("partially unknown names print a diagnostic naming each and run with the known subset", () => {
+  const { agentPath, result } = runFixtureAgent("tools: read, no-such-tool, also-missing\n");
+  const lines = result.stderr.split("\n");
+  const warningIndex = lines.indexOf(
+    `Agent narrow (${agentPath}) names tools this session does not grant: no-such-tool, also-missing. The session runs with the granted subset: read.`,
+  );
+  const startupIndex = lines.findIndex((line) => line.startsWith("STARTUP "));
+
+  expect(result.status).toBe(0);
+  expect(warningIndex).toBeGreaterThanOrEqual(0);
+  expect(startupIndex).toBeGreaterThan(warningIndex);
+  expect(startupToolCount(result.stderr)).toBe(1);
+});
+
+test("native: names and duplicates reach the startup diagnostic stripped and deduplicated", () => {
+  const { agentPath, result } = runFixtureAgent(
+    "tools: native:read, native:read, no-such-tool, no-such-tool\n",
+  );
+  const lines = result.stderr.split("\n");
+  const warnings = lines.filter((line) => line.startsWith("Agent narrow ("));
+  const warningIndex = lines.indexOf(
+    `Agent narrow (${agentPath}) names tools this session does not grant: no-such-tool. The session runs with the granted subset: native:read.`,
+  );
+  const startupIndex = lines.findIndex((line) => line.startsWith("STARTUP "));
+
+  expect(result.status).toBe(0);
+  expect(warnings).toHaveLength(1);
+  expect(warningIndex).toBeGreaterThanOrEqual(0);
+  expect(startupIndex).toBeGreaterThan(warningIndex);
+  expect(startupToolCount(result.stderr)).toBe(1);
+});
+
+test("a list whose every name is outside the granted set fails closed, even when flags removed them", () => {
+  const { result } = runFixtureAgent("tools: bash\n", ["--exclude-tools", "bash"]);
+
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain("lists only tools this session does not grant: bash");
+  expect(startupToolCount(result.stderr)).toBeUndefined();
 });
