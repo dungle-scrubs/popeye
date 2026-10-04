@@ -33,20 +33,27 @@ render Progress, but they replace local assumptions with each new Snapshot.
 
 | Package | Owns |
 | --- | --- |
-| `@popeye/journal` | Session Entries and Records, Branch reads, Compaction, JSONL and memory Layers, Journal conformance |
-| `@popeye/kernel` | Driver, mailbox, Turns, Steering, Follow-ups, Tool execution, recovery, Context fold, ai seam |
-| `@popeye/plugins` | manifests, Contributions, Capabilities, Trust, generic Hook emission, generations and reload |
-| `@popeye/protocol` | commands, Snapshots, Progress, results, and interaction wire Schemas |
-| `@popeye/cli` | print, JSON, and RPC Head functions plus first-party Plugin composition |
+| `@dungle-scrubs/popeye-journal` | Session Entries and Records, Branch reads, Compaction, memory, JSONL, and SQLite Layers, JSONL-to-SQLite migration, Journal conformance |
+| `@dungle-scrubs/popeye-kernel` | Driver, mailbox, Turns, Steering, Follow-ups, Tool execution, recovery, Context fold, ai seam |
+| `@dungle-scrubs/popeye-plugins` | manifests, Contributions, Capabilities, Trust, generic Hook emission, Plugin interactions, generations and reload |
+| `@dungle-scrubs/popeye-protocol` | commands, Snapshots, Snapshot pagination, Progress, results, and interaction wire Schemas |
+| `@dungle-scrubs/popeye` | the `popeye` executable, print, JSON, RPC, and HCN Heads, `usage export`, and first-party Plugin composition |
 
 The package graph points inward. Protocol has no Kernel dependency. pi-ai imports stay inside the
 kernel ai seam. Feature modules import public package roots only.
 
 ## Install
 
-For a repository quickstart, use Node 24 or later and pnpm 11.5.2. The workspace packages remain
-private. `@dungle-scrubs/popeye` is version `0.1.3` and is linked as the `popeye` executable in this workspace.
-No npm release exists yet.
+Run popeye from a checkout of this repository. Use Node 24 or later and pnpm 11.5.2. The five
+packages share one version, set in each `packages/*/package.json`, and `popeye --version` prints it.
+`@dungle-scrubs/popeye` provides the `popeye` executable.
+
+The packages are published to npm under the `@dungle-scrubs` scope, but four of the five current
+registry versions, including the CLI, do not install. As of 2026-10-03, the published manifests of
+`@dungle-scrubs/popeye`, `@dungle-scrubs/popeye-kernel`, `@dungle-scrubs/popeye-plugins`, and
+`@dungle-scrubs/popeye-protocol` carry `workspace:*` dependencies, which npm and pnpm cannot
+resolve, and the registry lags the 0.1.4 release. Install from this repository until a fixed
+release ships. [#69](https://github.com/dungle-scrubs/popeye/issues/69) tracks the publish defect.
 
 ```sh
 corepack enable
@@ -72,8 +79,10 @@ echo "Explain this repository." | popeye -p
 popeye usage export --session-dir .popeye/sessions
 ```
 
-Inside this repository, replace `popeye` with `pnpm --filter @dungle-scrubs/popeye popeye` when the installed bin
-is not on `PATH`. Use `--resume <sessionId>` to continue a Session. Use `--session-dir <dir>` to
+Inside this repository, replace `popeye` with `pnpm --filter @dungle-scrubs/popeye popeye`. That
+form runs from `packages/cli`, so a relative `--session-dir`, the default `.popeye/sessions` Journal
+directory, and project Plugins in `.popeye/plugins` resolve under `packages/cli`. Use
+`--resume <sessionId>` to continue a Session. Use `--session-dir <dir>` to
 replace the default `.popeye/sessions` Journal directory. Print mode writes settled assistant text.
 JSON mode writes only Progress and Snapshot JSON lines. RPC mode stays open and accepts LF-delimited
 protocol commands on stdin. RPC frames dispatch per Session in arrival order. `abort` and
@@ -87,9 +96,11 @@ counts. Repeated exports have the same request IDs, so an external collector can
 The command opens JSONL or SQLite read-only and emits no Entry content, prompts, responses, Tool
 data, endpoint URLs, or credentials. It exits nonzero on a torn or invalid Journal read.
 
-The CLI uses `provider: "openai-compatible"` and `providerClass: "unknown"` for a configured
-base URL, including loopback relays. A collector must not infer a public API price from that
-model name. The pinned pi-ai version normalizes missing usage fields to zero for several Providers.
+The CLI records `provider: "openai-compatible"` for a configured base URL. It sets
+`providerClass: "local"` when the endpoint host is loopback (`localhost`, a `*.localhost` name, an
+IPv4 address in `127.0.0.0/8`, or `::1`) and `providerClass: "unknown"` for any other host. It never
+emits `hosted`. A loopback relay that forwards to a hosted Provider is still `local`, so a collector
+must not infer a public API price from the model name. The pinned pi-ai version normalizes missing usage fields to zero for several Providers.
 Popeye labels positive values `normalized`, faux Provider estimates `estimated`, and ambiguous
 zeros `unknown`; it never treats context-pressure
 `ProviderUsage` as billable tokens. Historical Sessions without these Records have unknown usage
@@ -120,6 +131,14 @@ project Plugins from `.popeye/plugins`. Tools contributed by loaded Plugins are 
 model. Running `popeye` inside a repository executes that repository's Plugin code, the same trust
 you extend to its own scripts; use `--no-project-plugins` to opt out, or install a Trust-gate
 Plugin user-globally.
+
+### Default Tools
+
+The headless host ships no filesystem or shell coding Tools. With the default first-party Plugins
+(`compact`, `goal`, `reload`, and `session-name`), the only model-visible Tool is `manage-goal`.
+The model cannot read or write files or run commands until a Plugin adds Tools for that.
+[Plugin authoring](docs/plugin-authoring.md#minimal-local-coding-plugin) has a minimal local coding
+Plugin with `read-file`, `write-file`, and `run-command` Tools.
 
 ### Agent definitions
 
@@ -152,7 +171,8 @@ continue with the same persona.
 ## Guides
 
 - [Plugin authoring](docs/plugin-authoring.md) covers manifests, all 4 Contribution kinds, Hook
-  decisions, Capabilities, Trust, TypeScript limits, and generation drain.
+  decisions, Capabilities, Trust, TypeScript limits, generation drain, and a minimal local coding
+  Plugin.
 - [Conformance suites](docs/conformance-suites.md) shows how to run the published Journal and ai
   seam contracts.
 - [Testing with recorded fixtures](docs/testing-with-fixtures.md) covers deterministic fixture
@@ -164,21 +184,38 @@ continue with the same persona.
 
 ## v1 scope
 
-v1 is headless. It includes an in-process Driver plus print, JSON, and RPC Head functions. It ships
-memory and JSONL Journal Layers. It uses an exact pi-ai dependency for providers. Journal files are
-append-only and do not yet have vacuum or export compaction.
+v1 is headless. It includes an in-process Driver plus print, JSON, RPC, and HCN Heads. It ships
+memory, JSONL, and SQLite Journal Layers. It uses an exact pi-ai dependency for providers. Journal
+files are append-only and do not yet have vacuum or export compaction.
+
+The CLI picks the Journal Layer for each Session directory. `POPEYE_JOURNAL_LAYER=sqlite` stores
+Sessions in `<session-dir>/journal.sqlite`. `POPEYE_JOURNAL_LAYER=jsonl` stores one
+`<sessionId>.jsonl` file per Session. When the variable is unset, the CLI uses SQLite if
+`journal.sqlite` exists in the directory and JSONL if it does not. Any other non-empty value logs a
+warning and uses the same file check. The CLI does not move Sessions between Layers.
+`migrateJsonlToSqlite` from `@dungle-scrubs/popeye-journal` copies a JSONL directory into
+`journal.sqlite`.
+
+A Head pages a Snapshot whose encoded size exceeds the page target: 1,048,576 bytes by default, or
+the value of `POPEYE_SNAPSHOT_PAGE_BYTES`. A paged Snapshot holds a leaf-anchored window of Entries
+and an `entryRange` that marks whether more Entries come before it. A single Entry larger than the
+page target arrives whole, so that Snapshot exceeds the target. An RPC client reads other windows
+with `get-snapshot` and `beforeEntryId` or `afterEntryId`. A range read is not paged: it returns
+every Entry in the range, and a frame larger than the 1 MiB RPC frame limit fails.
+
+A Plugin that holds the `interaction` Capability raises select, confirm, and input requests through
+`PluginInteractions`. A request without that Capability resolves to its declared fallback at once.
+In RPC mode, the Head sends a request to the client attached to its Session (an `attach` frame
+without `interactive: false`) and accepts the `interaction-response` frame. With no attached client,
+the request waits until its timeout and then resolves to its fallback. During startup Plugin
+composition in every mode, and in the print, JSON, and HCN Heads, each request resolves to its
+declared fallback at once.
 
 The following work is deferred:
 
 - a TUI Head;
-- a SQLite Journal Layer;
 - npm-referenced Plugins;
-- bounded Snapshot pagination before a Snapshot exceeds 1 MiB;
-- Kernel and Plugin initiation of select, confirm, and input requests.
-
-The protocol already reserves Entry-range addressing for pagination. It also defines interaction
-request and response frames. Those wire contracts do not mean the deferred Kernel paths exist. v1
-Heads remain non-interactive and use declared interaction fallbacks.
+- Kernel initiation of select, confirm, and input requests.
 
 ## Contributing
 
@@ -197,7 +234,7 @@ durable behavior through Entries and Records. Add product behavior through Contr
 
 ## License
 
-This repository does not contain a license file. No license grant is provided.
+popeye is released under the [MIT License](LICENSE).
 
 ## Exit codes
 
