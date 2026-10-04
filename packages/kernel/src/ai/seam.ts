@@ -19,6 +19,7 @@ import {
   type AssistantMessageEventStream,
   clampThinkingLevel,
   isRetryableAssistantError,
+  type JsonObject,
   type Model,
   type Context as PiAiContext,
   type Tool as PiAiTool,
@@ -112,12 +113,12 @@ const emptyUsage = {
   totalTokens: 0,
 } as const;
 
-const parseArguments = (argumentsJson: string): Record<string, unknown> => {
+const parseArguments = (argumentsJson: string): JsonObject => {
   const value: unknown = JSON.parse(argumentsJson);
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new TypeError("Tool-call arguments must decode to a JSON object.");
   }
-  return value as Record<string, unknown>;
+  return value as JsonObject;
 };
 
 const malformedContext = (index: number, detail: string): TypeError =>

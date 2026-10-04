@@ -1,6 +1,9 @@
 import type { Record as JournalRecord, SessionId } from "@dungle-scrubs/popeye-journal";
 import { Schema } from "effect";
 
+export const PI_AI_MAPPING = "pi-ai@1.0.2" as const;
+export const PI_AI_FAUX_MAPPING = "pi-ai-faux@1.0.2" as const;
+
 const CountSchema = Schema.Union(
   Schema.Struct({
     status: Schema.Literal("unknown"),
@@ -9,12 +12,12 @@ const CountSchema = Schema.Union(
   Schema.Struct({
     status: Schema.Literal("normalized"),
     value: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
-    mapping: Schema.Literal("pi-ai@0.84.1"),
+    mapping: Schema.Literal("pi-ai@0.84.1", PI_AI_MAPPING),
   }),
   Schema.Struct({
     status: Schema.Literal("estimated"),
     value: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
-    mapping: Schema.Literal("pi-ai-faux@0.84.1"),
+    mapping: Schema.Literal("pi-ai-faux@0.84.1", PI_AI_FAUX_MAPPING),
   }),
 );
 
@@ -82,8 +85,8 @@ const count = (value: unknown, provenance: "normalized" | "estimated"): Accounti
       : value === 0
         ? { status: "unknown", reason: "ambiguous_zero" }
         : provenance === "estimated"
-          ? { status: "estimated", value, mapping: "pi-ai-faux@0.84.1" }
-          : { status: "normalized", value, mapping: "pi-ai@0.84.1" };
+          ? { status: "estimated", value, mapping: PI_AI_FAUX_MAPPING }
+          : { status: "normalized", value, mapping: PI_AI_MAPPING };
 
 export const countsFromPiAi = (
   usage: unknown,

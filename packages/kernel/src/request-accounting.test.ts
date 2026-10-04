@@ -1,7 +1,14 @@
+import { readFile } from "node:fs/promises";
 import { RecordIdSchema, RecordSchema, SessionIdSchema } from "@dungle-scrubs/popeye-journal";
+import { Schema } from "effect";
 import { expect, test } from "vitest";
 
-import { accountingRows, countsFromPiAi } from "./request-accounting.js";
+import {
+  accountingRows,
+  countsFromPiAi,
+  PI_AI_FAUX_MAPPING,
+  PI_AI_MAPPING,
+} from "./request-accounting.js";
 
 const sessionId = SessionIdSchema.make("AAAAAAAAAAAAAAAA");
 const start = {
@@ -22,8 +29,8 @@ const record = (id: string, kind: string, payload: unknown) =>
 
 test("normalized positive counts remain distinct and ambiguous zeros stay unknown", () => {
   expect(countsFromPiAi({ input: 31, output: 4, cacheRead: 0, cacheWrite: 0 })).toEqual({
-    input: { status: "normalized", value: 31, mapping: "pi-ai@0.84.1" },
-    output: { status: "normalized", value: 4, mapping: "pi-ai@0.84.1" },
+    input: { status: "normalized", value: 31, mapping: "pi-ai@1.0.2" },
+    output: { status: "normalized", value: 4, mapping: "pi-ai@1.0.2" },
     cacheRead: { status: "unknown", reason: "ambiguous_zero" },
     cacheWrite: { status: "unknown", reason: "ambiguous_zero" },
     cacheWrite1h: { status: "unknown", reason: "absent" },
@@ -87,4 +94,39 @@ test("every exported string field rejects free-form content and endpoint URLs", 
       record("end", "provider_request_usage", terminal),
     ]),
   ).toThrow();
+});
+
+test("legacy normalized and estimated receipt labels still decode", () => {
+  const counts = {
+    ...countsFromPiAi(undefined),
+    input: { status: "normalized", value: 31, mapping: "pi-ai@0.84.1" },
+    output: { status: "estimated", value: 4, mapping: "pi-ai-faux@0.84.1" },
+  };
+  expect(
+    accountingRows(sessionId, [
+      record("legacy-start", "provider_request_started", start),
+      record("legacy-end", "provider_request_usage", {
+        ...start,
+        completedAt: "2026-09-26T00:00:01.000Z",
+        outcome: "done",
+        counts,
+        attemptGranularity: "provider-invocation",
+      }),
+    ])[0]?.counts,
+  ).toEqual(counts);
+});
+
+test("accounting mapping labels match the exact pinned pi-ai version", async () => {
+  const packageJson: unknown = JSON.parse(
+    await readFile(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  const { dependencies } = Schema.decodeUnknownSync(
+    Schema.Struct({
+      dependencies: Schema.Struct({ "@earendil-works/pi-ai": Schema.String }),
+    }),
+  )(packageJson);
+  const version = dependencies["@earendil-works/pi-ai"];
+  expect(version).toMatch(/^\d+\.\d+\.\d+$/u);
+  expect(PI_AI_MAPPING).toBe(`pi-ai@${version}`);
+  expect(PI_AI_FAUX_MAPPING).toBe(`pi-ai-faux@${version}`);
 });

@@ -13,6 +13,7 @@ import type {
 import {
   createAssistantMessageEventStream,
   isRetryableAssistantError,
+  normalizeContext,
 } from "@earendil-works/pi-ai";
 import { createFauxCore, fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import {
@@ -239,7 +240,11 @@ test("pi-ai faux positive usage is recorded as estimated", async () => {
   const journalLayer = JournalMemory(createMemoryJournalBacking());
   const providerLayer = makePiAiProviderLayer(
     faux.getModel() as Model<Api>,
-    { classifyError: () => false, streamSimple: faux.streamSimple },
+    {
+      classifyError: () => false,
+      streamSimple: (model, context, options) =>
+        faux.streamSimple(model, normalizeContext(context), options),
+    },
     undefined,
     undefined,
     undefined,
@@ -270,11 +275,11 @@ test("pi-ai faux positive usage is recorded as estimated", async () => {
   expect(rows).toHaveLength(1);
   expect(rows[0]?.counts.input).toMatchObject({
     status: "estimated",
-    mapping: "pi-ai-faux@0.84.1",
+    mapping: "pi-ai-faux@1.0.2",
   });
   expect(rows[0]?.counts.output).toMatchObject({
     status: "estimated",
-    mapping: "pi-ai-faux@0.84.1",
+    mapping: "pi-ai-faux@1.0.2",
   });
 });
 
@@ -1057,7 +1062,7 @@ test("pi-ai is exact-pinned and a mutated settlement fixture fails the contract 
     await readFile(new URL("../../package.json", import.meta.url), "utf8"),
   );
   expect(packageJson).toMatchObject({
-    dependencies: { "@earendil-works/pi-ai": "0.84.1" },
+    dependencies: { "@earendil-works/pi-ai": "1.0.2" },
   });
 
   const fixture = mutatedSettlementFixture();
@@ -1558,4 +1563,253 @@ test.each([
   },
 ])("unresolvedModelMessage: $label", ({ options, modelId, expected }) => {
   expect(unresolvedModelMessage(options, modelId)).toBe(expected);
+});
+
+test("JSON-object tool arguments round-trip nested arrays, objects, and null", async () => {
+  const argumentsValue = { nested: { values: [null, { enabled: true }, [1, "two"]] }, empty: null };
+  const argumentsJson = JSON.stringify(argumentsValue);
+  let receivedContext: Context | undefined;
+  const stream = createAssistantMessageEventStream();
+  const final = fixtureMessage("toolUse", [
+    {
+      type: "toolCall",
+      id: "nested-call",
+      name: "nested",
+      arguments: argumentsValue,
+    },
+  ]);
+  stream.push({
+    type: "toolcall_end",
+    contentIndex: 0,
+    partial: final,
+    toolCall: {
+      type: "toolCall",
+      id: "nested-call",
+      name: "nested",
+      arguments: argumentsValue,
+    },
+  });
+  stream.push({ type: "done", reason: "toolUse", message: final });
+  const providerLayer = makePiAiProviderLayer(fixtureModel, {
+    classifyError: () => false,
+    streamSimple: (_model, context) => {
+      receivedContext = context;
+      return stream;
+    },
+  });
+  const items = await Effect.runPromise(
+    Effect.gen(function* () {
+      const provider = yield* Provider;
+      return yield* Stream.runCollect(
+        provider.streamAssistant(
+          [
+            {
+              role: "assistant",
+              content: "",
+              toolCalls: [{ id: "prior", name: "nested", argumentsJson }],
+            },
+          ],
+          { attempt: 1, turnOrdinal: 1 },
+        ),
+      );
+    }).pipe(Effect.provide(providerLayer), Effect.provide(ToolRegistryLive([]))),
+  );
+  expect(receivedContext).toMatchObject({
+    messages: [{ content: [{ arguments: argumentsValue }] }],
+  });
+  expect(Chunk.toReadonlyArray(items)).toContainEqual({
+    _tag: "toolCall",
+    id: "nested-call",
+    name: "nested",
+    argumentsJson,
+  });
+});
+
+test.each(["[]", '"text"', "42", "null"])(
+  "non-object tool arguments %s fail as a parse-failure ProviderError",
+  async (argumentsJson) => {
+    let invoked = false;
+    const providerLayer = makePiAiProviderLayer(fixtureModel, {
+      classifyError: () => false,
+      streamSimple: () => {
+        invoked = true;
+        return interleavedFixture().stream;
+      },
+    });
+    const error = await Effect.runPromise(
+      Effect.gen(function* () {
+        const provider = yield* Provider;
+        return yield* Effect.flip(
+          Stream.runDrain(
+            provider.streamAssistant(
+              [
+                {
+                  role: "assistant",
+                  content: "",
+                  toolCalls: [{ id: "prior", name: "nested", argumentsJson }],
+                },
+              ],
+              { attempt: 1, turnOrdinal: 1 },
+            ),
+          ),
+        );
+      }).pipe(Effect.provide(providerLayer), Effect.provide(ToolRegistryLive([]))),
+    );
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error).toMatchObject({
+      message: "Tool-call arguments must decode to a JSON object.",
+      transient: false,
+    });
+    expect(invoked).toBe(false);
+  },
+);
+
+test.each(["{", ""])(
+  "invalid JSON tool arguments %s fail as a permanent ProviderError before streaming",
+  async (argumentsJson) => {
+    let invoked = false;
+    const providerLayer = makePiAiProviderLayer(fixtureModel, {
+      classifyError: () => false,
+      streamSimple: () => {
+        invoked = true;
+        return interleavedFixture().stream;
+      },
+    });
+    const error = await Effect.runPromise(
+      Effect.gen(function* () {
+        const provider = yield* Provider;
+        return yield* Effect.flip(
+          Stream.runDrain(
+            provider.streamAssistant(
+              [
+                {
+                  role: "assistant",
+                  content: "",
+                  toolCalls: [{ id: "prior", name: "nested", argumentsJson }],
+                },
+              ],
+              { attempt: 1, turnOrdinal: 1 },
+            ),
+          ),
+        );
+      }).pipe(Effect.provide(providerLayer), Effect.provide(ToolRegistryLive([]))),
+    );
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error).toMatchObject({ transient: false });
+    expect(invoked).toBe(false);
+  },
+);
+
+test("registry GPT OSS thinking off bypasses clamping and omits reasoning effort", async () => {
+  await withOpenAiSseServer(reasoningWireChunks, async (baseUrl, requests) => {
+    const providerLayer = PiAiProviderLive({
+      apiKey: "offline-key",
+      baseUrl,
+      modelId: "openai/gpt-oss-20b",
+      provider: "groq",
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const provider = yield* Provider;
+        yield* Stream.runDrain(
+          provider.streamAssistant([{ role: "user", content: "Run it." }], {
+            attempt: 1,
+            turnOrdinal: 1,
+            thinkingLevel: "off",
+          }),
+        );
+      }).pipe(Effect.provide(providerLayer), Effect.provide(ToolRegistryLive([]))),
+    );
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.body).toHaveProperty("model", "openai/gpt-oss-20b");
+    expect(requests[0]?.body).not.toHaveProperty("reasoning_effort");
+    expect(requests[0]?.body).not.toHaveProperty("reasoning");
+  });
+});
+
+test("fabricated base-URL compat overrides nonstandard reasoning auto-detection", async () => {
+  await withOpenAiSseServer(reasoningWireChunks, async (baseUrl, requests) => {
+    const providerLayer = PiAiProviderLive({
+      apiKey: "offline-key",
+      baseUrl: `${baseUrl}/deepseek.com`,
+      modelId: "wire-nonstandard",
+      provider: "offline-openai",
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const provider = yield* Provider;
+        yield* Stream.runDrain(
+          provider.streamAssistant([{ role: "user", content: "Run it." }], {
+            attempt: 1,
+            turnOrdinal: 1,
+            thinkingLevel: "high",
+          }),
+        );
+      }).pipe(Effect.provide(providerLayer), Effect.provide(ToolRegistryLive([]))),
+    );
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.body).toHaveProperty("reasoning_effort", "high");
+    expect(requests[0]?.body).not.toHaveProperty("thinking");
+  });
+});
+
+test("unfinished Responses tool call settles as ProviderError rather than runnable", async () => {
+  const item = {
+    id: "fc_offline",
+    type: "function_call",
+    call_id: "call_offline",
+    name: "test",
+    arguments: "",
+  };
+  const chunks = [
+    { type: "response.output_item.added", output_index: 0, item },
+    {
+      type: "response.completed",
+      response: {
+        id: "resp_offline",
+        object: "response",
+        status: "completed",
+        output: [{ ...item, arguments: '{"x":1}' }],
+        usage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          total_tokens: 2,
+          input_tokens_details: { cached_tokens: 0 },
+          output_tokens_details: { reasoning_tokens: 0 },
+        },
+      },
+    },
+  ];
+  await withOpenAiSseServer(chunks, async (baseUrl, requests) => {
+    const providerLayer = PiAiProviderLive({
+      apiKey: "offline-key",
+      baseUrl,
+      modelId: "gpt-4o",
+      provider: "openai",
+    });
+    const items: Array<unknown> = [];
+    const error = await Effect.runPromise(
+      Effect.gen(function* () {
+        const provider = yield* Provider;
+        return yield* Effect.flip(
+          Stream.runForEach(
+            provider.streamAssistant([{ role: "user", content: "Run it." }], {
+              attempt: 1,
+              turnOrdinal: 1,
+            }),
+            (item) =>
+              Effect.sync(() => {
+                items.push(item);
+              }),
+          ),
+        );
+      }).pipe(Effect.provide(providerLayer), Effect.provide(ToolRegistryLive([]))),
+    );
+    expect(requests).toHaveLength(1);
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error).toMatchObject({ transient: false });
+    expect(error.message).toMatch(/unfinished tool call/iu);
+    expect(items).not.toContainEqual(expect.objectContaining({ _tag: "toolCall" }));
+    expect(items).not.toContainEqual(expect.objectContaining({ _tag: "done" }));
+  });
 });
