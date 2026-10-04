@@ -65,8 +65,8 @@ describe("release-please config", () => {
     );
   });
 
-  test("commit history for the next release starts after the 0.1.4 release merge", () => {
-    expect(config["last-release-sha"]).toBe("a2a4fbc81322d75f4b4e0e1141b7d0e67530871f");
+  test("commit history for the next release starts at each component's latest release tag", () => {
+    expect(config["last-release-sha"]).toBeUndefined();
   });
 });
 
