@@ -95,13 +95,22 @@ describe("tool grant filter", () => {
 
 describe("effort ladder", () => {
   test("every HCN effort word maps onto a thinking level", () => {
-    expect(HCN_EFFORTS).toEqual(["low", "medium-low", "medium", "medium-high", "high", "xhigh"]);
+    expect(HCN_EFFORTS).toEqual([
+      "off",
+      "low",
+      "medium-low",
+      "medium",
+      "medium-high",
+      "high",
+      "xhigh",
+    ]);
     expect(HCN_EFFORT_TO_THINKING_LEVEL).toEqual({
       high: "xhigh",
       low: "minimal",
       medium: "medium",
       "medium-high": "high",
       "medium-low": "low",
+      off: "off",
       xhigh: "max",
     });
   });

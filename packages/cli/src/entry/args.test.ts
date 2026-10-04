@@ -2,7 +2,12 @@ import { Effect, Exit } from "effect";
 import { expect, test } from "vitest";
 
 import type { ParsedRunArgs } from "./args.js";
-import { coerceResumeValue, parseArgs, withStdinPrompt } from "./args.js";
+import {
+  coerceResumeValue,
+  HCN_EFFORT_TO_THINKING_LEVEL,
+  parseArgs,
+  withStdinPrompt,
+} from "./args.js";
 
 const parseRunArgs = async (argv: ReadonlyArray<string>): Promise<ParsedRunArgs> => {
   const parsed = await Effect.runPromise(parseArgs(argv));
@@ -219,6 +224,35 @@ test("HCN grant flags parse into lists with effort validated", async () => {
     skills: ["compact", "reload"],
     systemPrompt: "Custom instructions.",
     tools: ["read", "native:bash"],
+  });
+});
+
+test.each(["print", "json", "hcn"])("--effort off parses in %s mode", async (mode) => {
+  const parsed = await parseRunArgs(["-p", "--mode", mode, "--effort", "off", "Run it."]);
+  expect(parsed.effort).toBe("off");
+});
+
+test("effort off extends rather than renames the RFC-02 ladder", () => {
+  expect(HCN_EFFORT_TO_THINKING_LEVEL).toEqual({
+    off: "off",
+    low: "minimal",
+    "medium-low": "low",
+    medium: "medium",
+    "medium-high": "high",
+    high: "xhigh",
+    xhigh: "max",
+  });
+});
+
+test("invalid effort lists the exact supported CLI words including off", async () => {
+  const error = await Effect.runPromise(
+    Effect.flip(parseArgs(["-p", "--effort", "none", "Run it."])),
+  );
+  expect(error).toMatchObject({
+    _tag: "CliArgsError",
+    message:
+      'Invalid --effort value "none". Use off, low, medium-low, medium, medium-high, high, xhigh.',
+    reason: "invalid_arguments",
   });
 });
 

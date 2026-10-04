@@ -8,6 +8,48 @@ import { expect, test } from "vitest";
 import { parseArgs } from "./args.js";
 import { resolveConfig } from "./config.js";
 
+test.each(["print", "json", "hcn"])(
+  "resolved %s configuration retains explicit effort off and the Goal Tool exclusion",
+  async (mode) => {
+    const parsed = await Effect.runPromise(
+      parseArgs([
+        "-p",
+        "--mode",
+        mode,
+        "--effort",
+        "off",
+        "--exclude-tools",
+        "manage-goal",
+        "Run it.",
+      ]),
+    );
+    const config = await Effect.runPromise(
+      resolveConfig(parsed, {
+        POPEYE_BASE_URL: "http://127.0.0.1:1/v1",
+        POPEYE_MODEL: "offline-reasoning-model",
+      }),
+    );
+    expect(config).toMatchObject({
+      action: "run",
+      apiKey: "local",
+      effort: "off",
+      excludeTools: ["manage-goal"],
+      mode,
+    });
+  },
+);
+
+test("configuration does not invent an effort when it is unset", async () => {
+  const parsed = await Effect.runPromise(parseArgs(["-p", "Run it."]));
+  const config = await Effect.runPromise(
+    resolveConfig(parsed, {
+      POPEYE_BASE_URL: "http://127.0.0.1:1/v1",
+      POPEYE_MODEL: "offline-reasoning-model",
+    }),
+  );
+  expect(config).toMatchObject({ effort: undefined });
+});
+
 test("flags override POPEYE provider environment values", async () => {
   const parsed = await Effect.runPromise(
     parseArgs([
