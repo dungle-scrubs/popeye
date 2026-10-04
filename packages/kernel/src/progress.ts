@@ -53,6 +53,21 @@ export const ProgressSchema = Schema.Union(
   }),
 );
 
+/**
+ * One Progress frame for a Session.
+ *
+ * - `assistantThinking`: Provisional reasoning, published while the Provider round streams.
+ *   Thinking never enters the Snapshot. A failed, retried, or aborted attempt may have
+ *   published thinking, and no frame retracts it. Every thinking frame of an attempt precedes
+ *   that attempt's `assistantText` frames.
+ * - `assistantText`: assistant text for one Provider attempt, published after that attempt's
+ *   stream completes. An attempt whose stream fails or is interrupted publishes no text, so a
+ *   retried attempt's text is never published.
+ *
+ * Publication order is kept but delivery is best-effort: when received,
+ * `providerRetryScheduled` marks where a retried attempt's thinking ends and `turnSettled`
+ * ends the Turn. A subscriber that gets `progressDropped` cannot tell which boundary it lost.
+ */
 export type Progress = Schema.Schema.Type<typeof ProgressSchema>;
 
 export const PROGRESS_CAPACITY = 64;
@@ -119,16 +134,23 @@ export const ProgressHubLive = (capacity = PROGRESS_CAPACITY): Layer.Layer<Progr
             Effect.map((current) => [...(current.subscribers.get(sessionId) ?? [])]),
           );
           yield* Effect.forEach(subscribers, (subscriber) =>
-            Queue.size(subscriber.queue).pipe(
-              Effect.flatMap((size) =>
-                (size >= capacity
-                  ? Ref.update(subscriber.dropped, (count) => count + 1)
-                  : Effect.void
-                ).pipe(
-                  Effect.zipRight(Queue.offer(subscriber.queue, progress).pipe(Effect.asVoid)),
+            // A subscriber that unsubscribed after the snapshot above has a shut-down queue.
+            // Effect's Queue answers size and offer on a shut-down queue with an interrupt cause,
+            // which must not interrupt the publisher: since #74 that is the Turn fiber inside
+            // the Provider stream. An external interrupt still propagates; catchAllCause does
+            // not recover it.
+            Queue.size(subscriber.queue)
+              .pipe(
+                Effect.flatMap((size) =>
+                  (size >= capacity
+                    ? Ref.update(subscriber.dropped, (count) => count + 1)
+                    : Effect.void
+                  ).pipe(
+                    Effect.zipRight(Queue.offer(subscriber.queue, progress).pipe(Effect.asVoid)),
+                  ),
                 ),
-              ),
-            ),
+              )
+              .pipe(Effect.catchAllCause(() => Effect.void)),
           );
         });
       const currentPhase = (sessionId: SessionId): Effect.Effect<TurnPhase> =>

@@ -114,6 +114,21 @@ export const UnknownProgressSchema = Schema.transform(
 
 export const ProgressSchema = Schema.Union(KnownProgressSchema, UnknownProgressSchema);
 
+/**
+ * One Progress frame for a Session.
+ *
+ * - `assistantThinking`: Provisional reasoning, published while the Provider round streams.
+ *   Thinking never enters the Snapshot. A failed, retried, or aborted attempt may have
+ *   published thinking, and no frame retracts it. Every thinking frame of an attempt precedes
+ *   that attempt's `assistantText` frames.
+ * - `assistantText`: assistant text for one Provider attempt, published after that attempt's
+ *   stream completes. An attempt whose stream fails or is interrupted publishes no text, so a
+ *   retried attempt's text is never published.
+ *
+ * Publication order is kept but delivery is best-effort: when received,
+ * `providerRetryScheduled` marks where a retried attempt's thinking ends and `turnSettled`
+ * ends the Turn. A subscriber that gets `progressDropped` cannot tell which boundary it lost.
+ */
 export type Progress = Schema.Schema.Type<typeof ProgressSchema>;
 
 export type UnknownProgress = Schema.Schema.Type<typeof UnknownProgressSchema>;
