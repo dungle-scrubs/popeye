@@ -13,10 +13,15 @@
  * private seam, not a public dependency — callers depend on TurnOrchestrator, not on durability.
  * Not responsible for Journal folding (journal owns that) or generation lifetime
  * (GenerationRuntime owns that). Provider transport stays behind Provider seam.
+ * Session Turn options (issue 88): a host binds a Session's own Turn options once; every Turn
+ * start resolves them under the request options and the Branch settings, so Kernel-opened Turns
+ * (Goal continuations, resume-goal, detached Follow-ups) carry the same persona and model as a
+ * prompt.
  */
 
 import {
   deriveGoal,
+  type Entry,
   EntryDraftSchema,
   foldContext,
   type Goal,
@@ -68,6 +73,7 @@ import {
   DEFAULT_RETRY_BASE_DELAY_MS,
   makeProviderRequestRuntime,
 } from "./provider-retry.js";
+import { deriveSettings, type SessionSettings } from "./session-view.js";
 import { admittedToolRegistry, ToolRegistry } from "./tool.js";
 import { executeToolBatch, type ToolBatchResult, type ToolCall } from "./tool-batch.js";
 import { makeTurnDurabilityHandle } from "./turn-durability.js";
@@ -93,6 +99,12 @@ export const TurnOptionsSchema = Schema.Struct({
 });
 
 export type TurnOptions = Schema.Schema.Type<typeof TurnOptionsSchema>;
+
+/**
+ * A Session's own Turn options (issue 88): bound once by the host that owns the Session and
+ * resolved under every Turn the Session opens. Delivery fields stay per request.
+ */
+export type SessionTurnOptions = Omit<TurnOptions, "deliveryMode" | "expectedRevision">;
 
 /**
  * Owns RFC-02 P4 system-prompt composition over folded context items.
@@ -163,10 +175,6 @@ export type AbortTurnResult = Schema.Schema.Type<typeof AbortTurnResultSchema>;
 
 export type TurnFailure = JournalFailure | MailboxFailure | ProtocolError | TurnQueueFull;
 
-export type TurnOptionsResolver = (
-  options: TurnOptions,
-) => Effect.Effect<TurnOptions, JournalFailure>;
-
 export interface TurnOrchestratorService {
   /** Stops Turn admission for the Session: a Turn not yet started settles aborted (issue 56). */
   readonly beginClose: (sessionId: SessionId) => Effect.Effect<void>;
@@ -176,12 +184,25 @@ export interface TurnOrchestratorService {
   readonly resumeGoal: (
     sessionId: SessionId,
   ) => Effect.Effect<TurnResult | undefined, JournalFailure>;
+  /**
+   * Binds the Session's own Turn options, replacing any earlier binding;
+   * invalid options are a defect (issue 88).
+   */
+  readonly bindSessionTurnOptions: (
+    sessionId: SessionId,
+    options: SessionTurnOptions,
+  ) => Effect.Effect<void>;
+  /** Drops the Session's binding; a no-op when it has none. */
+  readonly releaseSessionTurnOptions: (sessionId: SessionId) => Effect.Effect<void>;
+  /** The bound object itself, or undefined. */
+  readonly sessionTurnOptions: (
+    sessionId: SessionId,
+  ) => Effect.Effect<SessionTurnOptions | undefined>;
   readonly openTurn: (
     sessionId: SessionId,
     content: string,
     leasedGeneration?: unknown,
     options?: TurnOptions,
-    resolveOptions?: TurnOptionsResolver,
     onAdmitted?: Effect.Effect<void>,
   ) => Effect.Effect<TurnResult, TurnFailure>;
   readonly steer: (
@@ -214,7 +235,6 @@ type TurnStage = "finishing" | "running" | "settling" | "settling-aborted";
 interface SteeringItem {
   readonly content: string;
   readonly options: TurnOptions;
-  readonly resolveOptions: TurnOptionsResolver;
 }
 
 interface SteeringState {
@@ -313,8 +333,6 @@ const withoutExpectedRevision = (options: TurnOptions): TurnOptions => {
   return next;
 };
 
-const keepTurnOptions: TurnOptionsResolver = (options) => Effect.succeed(options);
-
 const phaseChanged = (progress: ProgressHub["Type"], sessionId: SessionId, phase: TurnPhase) =>
   progress.publish(sessionId, { _tag: "phaseChanged", phase });
 
@@ -353,6 +371,9 @@ export const TurnOrchestratorLive = (): Layer.Layer<
       const progress = yield* ProgressHub;
       const provider = yield* Provider;
       const toolRegistry = yield* ToolRegistry;
+      const boundTurnOptions = yield* Ref.make<ReadonlyMap<SessionId, SessionTurnOptions>>(
+        new Map(),
+      );
       const active = yield* Ref.make<Map<SessionId, ActiveTurn>>(new Map());
       const closing = yield* Ref.make<ReadonlySet<SessionId>>(new Set());
       const followUps = yield* Ref.make<Map<SessionId, ReadonlyArray<FollowUpItem>>>(new Map());
@@ -431,6 +452,38 @@ export const TurnOrchestratorLive = (): Layer.Layer<
           return next;
         });
 
+      /**
+       * Issue 88 precedence: model = Branch > request > binding;
+       * thinkingLevel = request > binding > Branch; others request > binding.
+       */
+      const resolveTurnOptions = (
+        sessionId: SessionId,
+        request: TurnOptions,
+      ): Effect.Effect<TurnOptions> =>
+        Effect.gen(function* () {
+          const bound = (yield* Ref.get(boundTurnOptions)).get(sessionId);
+          const branch = yield* journal
+            .readBranch(sessionId)
+            .pipe(Effect.catchAll(() => Effect.succeed<ReadonlyArray<Entry>>([])));
+          const settings = yield* deriveSettings(branch).pipe(
+            Effect.catchAll(() => Effect.succeed<SessionSettings>({})),
+          );
+          const model = settings.model ?? request.model ?? bound?.model;
+          const thinkingLevel =
+            request.thinkingLevel ?? bound?.thinkingLevel ?? settings.thinkingLevel;
+          const merged: { -readonly [K in keyof TurnOptions]: TurnOptions[K] } = {
+            ...bound,
+            ...request,
+          };
+          delete merged.model;
+          delete merged.thinkingLevel;
+          return {
+            ...merged,
+            ...(model === undefined ? {} : { model }),
+            ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+          };
+        });
+
       const offerFollowUp = (
         sessionId: SessionId,
         content: string,
@@ -479,7 +532,6 @@ export const TurnOrchestratorLive = (): Layer.Layer<
         sessionId: SessionId,
         content: string,
         options: TurnOptions,
-        resolveOptions: TurnOptionsResolver,
       ): Effect.Effect<OfferSteeringResult, TurnQueueFull> =>
         turn.steeringMutex.withPermits(1)(
           Ref.modify<SteeringState, OfferSteeringCommit>(turn.steering, (current) => {
@@ -489,7 +541,7 @@ export const TurnOrchestratorLive = (): Layer.Layer<
             if (current.items.length >= TURN_INPUT_QUEUE_CAPACITY) {
               return [{ _tag: "full" }, current];
             }
-            const item: SteeringItem = { content, options, resolveOptions };
+            const item: SteeringItem = { content, options };
             return [{ _tag: "queued" }, { ...current, items: [...current.items, item] }];
           }).pipe(
             Effect.flatMap((result): Effect.Effect<OfferSteeringResult, TurnQueueFull> => {
@@ -536,9 +588,9 @@ export const TurnOrchestratorLive = (): Layer.Layer<
         sessionId: SessionId,
         content: string | undefined,
         options: TurnOptions,
+        requestOptions: TurnOptions,
         leasedGeneration: unknown,
         registration: TurnRegistration | undefined,
-        resolveOptions: TurnOptionsResolver,
       ): Effect.Effect<TurnResult, BudgetExceeded | JournalFailure | ProviderError> =>
         Effect.gen(function* () {
           const priorBranch = yield* journal.readBranch(sessionId);
@@ -720,7 +772,6 @@ export const TurnOrchestratorLive = (): Layer.Layer<
               const queued = items.map((item) => ({
                 followUp: { content: item.content } satisfies FollowUpItem,
                 options: withoutExpectedRevision(item.options),
-                resolveOptions: item.resolveOptions,
               }));
               yield* Ref.update(followUps, (current) => {
                 const next = new Map(current);
@@ -751,7 +802,6 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                           undefined,
                           leasedGeneration,
                           Deferred.succeed(accepted, undefined).pipe(Effect.asVoid),
-                          item.resolveOptions,
                         ).pipe(
                           Effect.ensuring(Deferred.succeed(accepted, undefined)),
                           Effect.asVoid,
@@ -863,9 +913,8 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                 if (yield* Ref.get(goalContinuationQueued)) {
                   yield* scheduleGoalContinuation(
                     sessionId,
-                    withoutExpectedRevision(options),
+                    withoutExpectedRevision(requestOptions),
                     leasedGeneration,
-                    resolveOptions,
                   );
                 }
                 return false;
@@ -1426,7 +1475,6 @@ export const TurnOrchestratorLive = (): Layer.Layer<
         registration: TurnRegistration | undefined = undefined,
         leasedGeneration: unknown = undefined,
         onAccepted: Effect.Effect<void> | undefined = undefined,
-        resolveOptions: TurnOptionsResolver = keepTurnOptions,
       ): Effect.Effect<TurnResult, TurnFailure> =>
         mailbox
           .enqueue(sessionId, {
@@ -1442,15 +1490,15 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                     Effect.zipRight(Effect.annotateCurrentSpan({ followUpDrainedCount: 1 })),
                   )
               ).pipe(
-                Effect.zipRight(resolveOptions(options)),
+                Effect.zipRight(resolveTurnOptions(sessionId, options)),
                 Effect.flatMap((resolvedOptions) =>
                   execute(
                     sessionId,
                     content,
                     resolvedOptions,
+                    options,
                     leasedGeneration,
                     registration,
-                    resolveOptions,
                   ),
                 ),
                 Effect.withSpan("kernel.turn", {
@@ -1513,7 +1561,6 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                             sessionId,
                             withoutExpectedRevision(options),
                             leasedGeneration,
-                            resolveOptions,
                           );
                         }
                       }).pipe(
@@ -1534,7 +1581,6 @@ export const TurnOrchestratorLive = (): Layer.Layer<
         content: string,
         options: TurnOptions,
         leasedGeneration: unknown,
-        resolveOptions: TurnOptionsResolver,
         onAdmitted: Effect.Effect<void>,
       ): Effect.Effect<TurnResult, TurnFailure> =>
         Effect.gen(function* () {
@@ -1551,7 +1597,6 @@ export const TurnOrchestratorLive = (): Layer.Layer<
             offered.registration,
             leasedGeneration,
             undefined,
-            resolveOptions,
           );
         });
 
@@ -1560,7 +1605,6 @@ export const TurnOrchestratorLive = (): Layer.Layer<
         content: string,
         options: TurnOptions,
         leasedGeneration: unknown,
-        resolveOptions: TurnOptionsResolver,
         onAdmitted: Effect.Effect<void>,
       ): Effect.Effect<TurnResult, TurnFailure | TurnQueueFull> =>
         Effect.gen(function* () {
@@ -1575,7 +1619,6 @@ export const TurnOrchestratorLive = (): Layer.Layer<
             undefined,
             leasedGeneration,
             undefined,
-            resolveOptions,
           );
         });
 
@@ -1598,7 +1641,6 @@ export const TurnOrchestratorLive = (): Layer.Layer<
         sessionId: SessionId,
         options: TurnOptions = {},
         leasedGeneration: unknown = undefined,
-        resolveOptions: TurnOptionsResolver = keepTurnOptions,
       ): Effect.Effect<void> =>
         Effect.gen(function* () {
           if ((yield* Ref.get(goalStopRequested)).has(sessionId)) {
@@ -1630,7 +1672,6 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                   undefined,
                   leasedGeneration,
                   undefined,
-                  resolveOptions,
                 ),
               );
               if (Exit.isSuccess(exit)) return;
@@ -1665,7 +1706,6 @@ export const TurnOrchestratorLive = (): Layer.Layer<
         content: string,
         leasedGeneration: unknown,
         options: TurnOptions,
-        resolveOptions: TurnOptionsResolver,
         onAdmitted: Effect.Effect<void>,
       ): Effect.Effect<TurnResult, TurnFailure> =>
         Effect.suspend(() =>
@@ -1674,22 +1714,8 @@ export const TurnOrchestratorLive = (): Layer.Layer<
               const turn = current.get(sessionId);
               if (options.deliveryMode !== "steer") {
                 return turn === undefined
-                  ? enqueueRegisteredTurn(
-                      sessionId,
-                      content,
-                      options,
-                      leasedGeneration,
-                      resolveOptions,
-                      onAdmitted,
-                    )
-                  : enqueueFollowUp(
-                      sessionId,
-                      content,
-                      options,
-                      leasedGeneration,
-                      resolveOptions,
-                      onAdmitted,
-                    );
+                  ? enqueueRegisteredTurn(sessionId, content, options, leasedGeneration, onAdmitted)
+                  : enqueueFollowUp(sessionId, content, options, leasedGeneration, onAdmitted);
               }
               if (turn === undefined) {
                 return enqueueRegisteredTurn(
@@ -1697,11 +1723,10 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                   content,
                   options,
                   leasedGeneration,
-                  resolveOptions,
                   onAdmitted,
                 );
               }
-              return offerSteering(turn, sessionId, content, options, resolveOptions).pipe(
+              return offerSteering(turn, sessionId, content, options).pipe(
                 Effect.flatMap((result): Effect.Effect<TurnResult, TurnFailure> => {
                   if (result._tag === "closed") {
                     return enqueueFollowUp(
@@ -1709,7 +1734,6 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                       content,
                       options,
                       leasedGeneration,
-                      resolveOptions,
                       onAdmitted,
                     );
                   }
@@ -1831,12 +1855,26 @@ export const TurnOrchestratorLive = (): Layer.Layer<
               );
             }),
           ),
+        bindSessionTurnOptions: (sessionId, options) =>
+          Effect.sync(() => validateTurnOptions(options, compaction.policy)).pipe(
+            Effect.zipRight(
+              Ref.update(boundTurnOptions, (current) => new Map(current).set(sessionId, options)),
+            ),
+          ),
+        releaseSessionTurnOptions: (sessionId) =>
+          Ref.update(boundTurnOptions, (current) => {
+            if (!current.has(sessionId)) return current;
+            const next = new Map(current);
+            next.delete(sessionId);
+            return next;
+          }),
+        sessionTurnOptions: (sessionId) =>
+          Ref.get(boundTurnOptions).pipe(Effect.map((current) => current.get(sessionId))),
         openTurn: (
           sessionId: SessionId,
           content: string,
           leasedGeneration?: unknown,
           options: TurnOptions = {},
-          resolveOptions: TurnOptionsResolver = keepTurnOptions,
           onAdmitted: Effect.Effect<void> = Effect.void,
         ): Effect.Effect<TurnResult, TurnFailure> => {
           validateTurnOptions(options, compaction.policy);
@@ -1849,7 +1887,6 @@ export const TurnOrchestratorLive = (): Layer.Layer<
               content,
               leasedGeneration,
               options,
-              resolveOptions,
               onAdmitted,
             );
             const chain = (yield* Ref.get(goalChains)).get(sessionId);
@@ -1933,7 +1970,7 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                 reason: "phase_invalid_command",
               });
             }
-            const queued = yield* offerSteering(turn, sessionId, content, {}, keepTurnOptions);
+            const queued = yield* offerSteering(turn, sessionId, content, {});
             if (queued._tag === "closed") {
               yield* enqueueDetachedFollowUp(sessionId, content);
             }

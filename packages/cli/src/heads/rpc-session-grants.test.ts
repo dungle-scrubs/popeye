@@ -234,6 +234,8 @@ const closeThroughBridge = (options: {
       const bridge = makeRpcSessionBridge({
         driver: {
           closeSession: () => options.closeSession,
+          // Issue 88: a close success also releases the Session's Turn options in the Kernel.
+          releaseSessionTurnOptions: () => Effect.void,
         } as unknown as Parameters<typeof makeRpcSessionBridge>[0]["driver"],
         interactions: {
           attach: () => Effect.succeed([]),

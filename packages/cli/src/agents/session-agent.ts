@@ -20,7 +20,7 @@ import type {
   AgentDiscoveryResult,
 } from "./loader.js";
 
-/** The turn options every prompt of an Agent Session carries (RFC-04 §2, §3). */
+/** The Session Turn options an Agent Session binds in the Kernel (RFC-04 §2, §3; issue 88). */
 export interface AgentTurnOptions {
   readonly appendSystemPrompt?: string;
   readonly model?: string;

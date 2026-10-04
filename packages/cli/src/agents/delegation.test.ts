@@ -24,7 +24,18 @@ import type {
   ProviderStreamOptions,
 } from "@dungle-scrubs/popeye-kernel";
 import { defineToolContribution } from "@dungle-scrubs/popeye-plugins";
-import { Deferred, Effect, Either, Fiber, Layer, Option, Schedule, Schema, Stream } from "effect";
+import {
+  Deferred,
+  Effect,
+  Either,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Schedule,
+  Schema,
+  Stream,
+} from "effect";
 import { afterEach, expect, test } from "vitest";
 
 import {
@@ -602,6 +613,69 @@ test("the child runs with its Agent's persona, model preference, and the head's 
   expect(child?.thinkingLevel).toBe("low");
   expect(parent?.system).toEqual([]);
   expect(parent?.model).toBeUndefined();
+}, 15_000);
+
+test("the child's persona, model, and thinking level are its Session Turn options in the Kernel while its Turn runs, and released with the child (issue #88)", async () => {
+  const { provider, requests } = scriptedProvider({
+    child: () => answer("persona answer"),
+    parentCalls: [{ agent: "persona", id: "call-1", task: "summarize the repo" }],
+  });
+  interface SessionTurnOptionsReader {
+    readonly sessionTurnOptions: (sessionId: SessionId) => Effect.Effect<unknown>;
+  }
+  const state: { driver: DriverService | undefined } = { driver: undefined };
+  const boundDuringChild: Array<unknown> = [];
+  const readBound = (sessionId: SessionId) =>
+    Effect.exit(
+      Effect.suspend(() =>
+        (state.driver as unknown as SessionTurnOptionsReader).sessionTurnOptions(sessionId),
+      ),
+    ).pipe(Effect.map((exit) => (Exit.isSuccess(exit) ? exit.value : "no sessionTurnOptions")));
+  // Reads the child's binding from inside its own Provider request.
+  const observing: ProviderService = {
+    streamAssistant: (context, options) =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const sessionId = options.accountingScope?.sessionId;
+          if (sessionId !== undefined && lastUser(context).startsWith("Task: ")) {
+            boundDuringChild.push(yield* readBound(sessionId));
+          }
+          return provider.streamAssistant(context, options);
+        }),
+      ),
+  };
+
+  const result = await withHarness(
+    {
+      agents: [
+        { body: "You are the persona.", frontmatter: "model: agent-model\n", name: "persona" },
+      ],
+      provider: observing,
+      thinkingLevel: "low",
+    },
+    ({ driver }) =>
+      Effect.gen(function* () {
+        state.driver = driver;
+        const parent = yield* driver.createSession();
+        yield* driver.prompt(parent.id, PARENT_PROMPT);
+        const [childId] = yield* otherSession(driver, parent.id);
+        return {
+          afterRelease: childId === undefined ? "no child" : yield* readBound(childId),
+          parent: yield* readBound(parent.id),
+        };
+      }),
+  );
+
+  expect(boundDuringChild).toEqual([
+    { appendSystemPrompt: "You are the persona.", model: "agent-model", thinkingLevel: "low" },
+  ]);
+  expect(result.afterRelease).toBeUndefined();
+  expect(result.parent).toBeUndefined();
+  expect(requests.find((request) => request.kind === "child")).toMatchObject({
+    model: "agent-model",
+    system: ["You are the persona."],
+    thinkingLevel: "low",
+  });
 }, 15_000);
 
 test("with --model the child keeps the process model over its Agent's model", async () => {
