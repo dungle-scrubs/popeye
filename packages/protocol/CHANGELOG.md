@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/dungle-scrubs/popeye/compare/popeye-protocol-v0.1.5...popeye-protocol-v0.1.6) (2026-10-04)
+
+
+### Fixed
+
+* **kernel:** publish thinking Progress while the model reasons ([#84](https://github.com/dungle-scrubs/popeye/issues/84)) ([21568fc](https://github.com/dungle-scrubs/popeye/commit/21568fc1428f902c53d4a881a5ec5c5000b025fb)), closes [#74](https://github.com/dungle-scrubs/popeye/issues/74)
+
 ## [0.1.5](https://github.com/dungle-scrubs/popeye/compare/popeye-protocol-v0.1.4...popeye-protocol-v0.1.5) (2026-10-04)
 
 
