@@ -44,16 +44,20 @@ kernel ai seam. Feature modules import public package roots only.
 
 ## Install
 
-Run popeye from a checkout of this repository. Use Node 24 or later and pnpm 11.5.2. The five
-packages share one version, set in each `packages/*/package.json`, and `popeye --version` prints it.
-`@dungle-scrubs/popeye` provides the `popeye` executable.
+Install the CLI from npm. Use Node 24 or later. `@dungle-scrubs/popeye` provides the `popeye`
+executable.
 
-The packages are published to npm under the `@dungle-scrubs` scope, but four of the five current
-registry versions, including the CLI, do not install. As of 2026-10-03, the published manifests of
-`@dungle-scrubs/popeye`, `@dungle-scrubs/popeye-kernel`, `@dungle-scrubs/popeye-plugins`, and
-`@dungle-scrubs/popeye-protocol` carry `workspace:*` dependencies, which npm and pnpm cannot
-resolve, and the registry lags the 0.1.4 release. Install from this repository until a fixed
-release ships. [#69](https://github.com/dungle-scrubs/popeye/issues/69) tracks the publish defect.
+```sh
+npm install -g @dungle-scrubs/popeye
+popeye --version
+```
+
+The five packages share one version, set in each `packages/*/package.json`, and `popeye --version`
+prints it. The CLI depends on the other four packages at that same version. Versions before 0.1.5
+do not install, because their published manifests carry `workspace:*` dependencies; they are
+deprecated on npm.
+
+To run popeye from a checkout of this repository instead, use pnpm 11.5.2:
 
 ```sh
 corepack enable
