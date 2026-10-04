@@ -99,6 +99,7 @@ describe("POPEYE_REFLECT_INTAKE through the built CLI", () => {
     const ws = workspace();
     const parent = '{"authority":"graybox-invented","id":"task-invented-1"}';
     const result = runBuiltBin(["-p", "--session-dir", ws.sessionDir, FAKE_PROVIDER_PROMPT], {
+      cwd: ws.dir,
       env: {
         ...fakeProviderEnvironment(),
         POPEYE_REFLECT_INTAKE: ws.stub,

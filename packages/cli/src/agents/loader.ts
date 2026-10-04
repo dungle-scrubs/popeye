@@ -28,6 +28,14 @@ export interface AgentDefinition {
   readonly tools: ReadonlyArray<string> | undefined;
 }
 
+/** Lists definitions with their scopes in discovery order, or "none". */
+export const formatAvailableAgents = (agents: ReadonlyMap<string, AgentDefinition>): string => {
+  const listed = [...agents.values()].map(
+    (definition) => `${definition.name} (${definition.scope})`,
+  );
+  return listed.length > 0 ? listed.join(", ") : "none";
+};
+
 export interface AgentDiagnostic {
   readonly detail: string;
   readonly filePath: string;
@@ -53,6 +61,8 @@ export class AgentDiscoveryError extends Data.TaggedError("AgentDiscoveryError")
 }> {}
 
 export interface AgentDiscoveryOptions {
+  /** Skips project-scope definitions when --no-project-plugins is passed. */
+  readonly noProjectAgents?: boolean;
   /** Project root; project scope reads `<root>/.popeye/agents` only. */
   readonly projectPath: string;
   /** User scope directory: `POPEYE_AGENTS_DIR` when set, else `~/.popeye/agents`. */
@@ -346,11 +356,13 @@ export const discoverAgents = (
     if (userDuplicates !== undefined) {
       return yield* userDuplicates;
     }
-    const project = yield* loadScope({
-      dir: join(options.projectPath, ".popeye", "agents"),
-      projectPath: options.projectPath,
-      scope: "project",
-    });
+    const project = options.noProjectAgents
+      ? { definitions: [], diagnostics: [] }
+      : yield* loadScope({
+          dir: join(options.projectPath, ".popeye", "agents"),
+          projectPath: options.projectPath,
+          scope: "project",
+        });
     const projectDuplicates = duplicateNameError("project", groupByName(project.definitions));
     if (projectDuplicates !== undefined) {
       return yield* projectDuplicates;

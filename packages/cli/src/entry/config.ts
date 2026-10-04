@@ -8,7 +8,11 @@ import { join } from "node:path";
 
 import { Data, Effect } from "effect";
 
-import type { AgentDiscoveryResult } from "../agents/loader.js";
+import {
+  type AgentDefinition,
+  type AgentDiscoveryResult,
+  formatAvailableAgents,
+} from "../agents/loader.js";
 import type { CliMode, HcnEffort, ParsedArgs } from "./args.js";
 
 export type CliConfigErrorReason =
@@ -58,6 +62,8 @@ export interface CliRunConfig {
   readonly baseUrlHost: string;
   readonly accountingProviderClass: "local" | "unknown";
   readonly contextWindow: number | undefined;
+  /** Definitions discovered at startup; at least one registers the delegate Tool (RFC-04 §6). */
+  readonly discoveredAgents: ReadonlyMap<string, AgentDefinition>;
   readonly effort: HcnEffort | undefined;
   readonly excludeTools: ReadonlyArray<string>;
   readonly fakeProviderScript: string | undefined;
@@ -78,6 +84,8 @@ export interface CliRunConfig {
   readonly skills: ReadonlyArray<string>;
   readonly systemPrompt: string | undefined;
   readonly tools: ReadonlyArray<string>;
+  /** User-scope Agent directory; each delegate call re-reads it. */
+  readonly userAgentsDir: string;
   readonly userPluginDir: string;
 }
 
@@ -180,10 +188,8 @@ export const unknownAgentMessage = (
   name: string,
   discovery: AgentDiscoveryResult | undefined,
 ): string => {
-  const available = [...(discovery?.agents.values() ?? [])]
-    .map((definition) => `${definition.name} (${definition.scope})`)
-    .join(", ");
-  return `Unknown agent ${JSON.stringify(name)}. Available agents: ${available.length > 0 ? available : "none"}.`;
+  const available = formatAvailableAgents(discovery?.agents ?? new Map());
+  return `Unknown agent ${JSON.stringify(name)}. Available agents: ${available}.`;
 };
 
 export const resolveConfig = (
@@ -280,6 +286,7 @@ export const resolveConfig = (
       baseUrlHost: endpoint.hostname,
       accountingProviderClass: isLoopbackHost(endpoint.hostname) ? "local" : "unknown",
       contextWindow: parsed.contextWindow,
+      discoveredAgents: agentDiscovery?.agents ?? new Map(),
       effort: parsed.effort,
       excludeTools: parsed.excludeTools,
       fakeProviderScript,
@@ -297,6 +304,7 @@ export const resolveConfig = (
       skills: parsed.skills,
       systemPrompt: configured(parsed.systemPrompt),
       tools: parsed.tools,
+      userAgentsDir: resolveUserAgentsDir(env),
       // POPEYE_USER_PLUGIN_DIR is test-support and deliberately undocumented,
       // the same posture as POPEYE_FAKE_PROVIDER_SCRIPT.
       userPluginDir:

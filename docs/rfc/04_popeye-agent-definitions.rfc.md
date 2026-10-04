@@ -172,20 +172,37 @@ Behavior:
 1. Resolve `agent` at call time (fresh discovery; edits apply to future
    delegations). Unknown name returns a failed tool result listing
    available agents, matching the `--agent` error contract.
-2. Fork a child session from the current session (`driver.fork`), journaled
-   in the parent's `--session-dir`: visible, resumable, auditable.
+2. Create a child session in the current session's Journal (`driver.createSession`),
+   so it is journaled in the parent's `--session-dir`: visible, resumable, auditable.
+   The child starts empty (isolated context, issue 51). `driver.fork` is not used:
+   it enqueues on the parent's Mailbox, which the running Turn holds while the
+   delegate call runs (issue 56).
 3. Apply the agent's persona (as append-system-prompt content), model
-   preference, and per-session tool filter to the child.
+   preference, and per-session tool filter to the child. Before the Agent's filter,
+   every per-session filter of the parent is carried over, so a child is never offered
+   a Tool its parent cannot call. Delegation has a maximum depth of 3. A session the head
+   creates or resumes is depth 0; a child's depth is its parent's plus 1. After the inherited
+   and Agent filters, a depth-3 child receives another session filter excluding `delegate`.
+   A direct call at depth 3 or more fails with
+   `delegate is not available at delegation depth <n>: the limit is 3.` and creates no child.
+   Depth is tracked in-process, not journaled, and its entry is dropped on child release.
+   A child resumed in a later process is a head session at depth 0 (§7).
+   The Agent's model and the head's effort apply to
+   the child's normal requests; its compaction requests use the process Provider
+   defaults. No Agent identity or resumable model setting is stored and no
+   `model_change` Entry is added; request-accounting Records still name the model used.
 4. Prompt the child with `Task: <task>` through the driver, in-process.
 5. Return the child's final assistant message as full-text tool result
-   content. No truncation in v1.
+   content. No truncation in v1. When the call ends, the child session is closed and
+   its per-session filters are released, so a later resume is not narrowed (§7).
 
 Concurrency: parallel delegation is multiple `delegate` calls in one tool
 batch, bounded by the existing batch limit; no new concurrency knob.
 Chaining is the model issuing the next call with the prior result. On
 parent abort or turn interruption, the child turn is aborted through the
 per-tool Scope cleanup; the journaled child session keeps whatever it
-completed.
+completed; a child turn that had not started when the call was interrupted never
+starts (the close stops admission first).
 
 ### 7. Agent identity is not journaled
 
@@ -238,6 +255,10 @@ Prompt-content risk: a project-scope definition is repo-controlled text
 that enters the model's context. This is the same risk class as plugin
 prompt content and carries the same posture: documented, not scanned. A
 project you run agents from is a project whose instructions you accept.
+Project-scope definitions are discovered at every headless start, and their descriptions
+enter the model's context through `delegate`. `--no-project-plugins` skips project-scope
+Agents at startup, on delegation, and in rpc Agent resolution. Only user-scope Agents are
+then discoverable; a project-only name fails as unknown and lists only user-scope Agents.
 Revisit if an interactive head ships (pi's prompt-when-UI precedent).
 
 Blast radius: a definition constrains a session (persona, model
@@ -299,7 +320,7 @@ surface; nothing migrates.
    two sessions in one process hold different tool views.
 4. rpc `agent` field: protocol schema, bridge resolution. Verify: create
    with and without the field over the wire.
-5. `delegate` Tool: registration, fork, child persona and filter, result,
+5. `delegate` Tool: registration, child creation, child persona and filter, result,
    scope-abort. Verify: a parent session delegates and receives the final
    message; interruption leaves a coherent journaled child.
 

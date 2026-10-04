@@ -29,6 +29,7 @@ import {
   Scope,
 } from "effect";
 
+import { boundedWait } from "./bounded-wait.js";
 import { MailboxClosed, MailboxFull, MailboxSessionNotFound } from "./errors.js";
 
 export const MAILBOX_CAPACITY = 256;
@@ -64,10 +65,13 @@ export interface MailboxService {
   readonly activate: (sessionId: SessionId) => Effect.Effect<void, JournalFailure | MailboxClosed>;
   /**
    * RFC-02 P2: drains one session queue. Pending work fails closed;
-   * in-flight work gets CLOSE_GRACE_MS before the caller takes over.
+   * in-flight work gets graceMs (default CLOSE_GRACE_MS) before the caller takes over.
    * Returns true when the drain settled within grace.
    */
-  readonly closeSession: (sessionId: SessionId) => Effect.Effect<boolean, JournalFailure>;
+  readonly closeSession: (
+    sessionId: SessionId,
+    graceMs?: number,
+  ) => Effect.Effect<boolean, JournalFailure>;
   readonly enqueue: <TValue, TError>(
     sessionId: SessionId,
     command: MailboxCommand<TValue, TError>,
@@ -311,7 +315,10 @@ export const MailboxLive = (options: MailboxOptions = {}): Layer.Layer<Mailbox, 
           }
         });
 
-      const closeSession = (sessionId: SessionId): Effect.Effect<boolean, JournalFailure> =>
+      const closeSession = (
+        sessionId: SessionId,
+        graceMs = CLOSE_GRACE_MS,
+      ): Effect.Effect<boolean, JournalFailure> =>
         Effect.gen(function* () {
           const mailbox = yield* Ref.modify(registry, (current) => {
             const found = current.mailboxes.get(sessionId);
@@ -327,11 +334,12 @@ export const MailboxLive = (options: MailboxOptions = {}): Layer.Layer<Mailbox, 
           }
           const drain = yield* drainMailbox(mailbox);
           yield* Effect.forEach(drain.pending, (work) => work.close, { discard: true });
-          const settled = yield* Effect.forEach(
-            drain.inFlight,
-            (work) => Deferred.await(work.settled),
-            { discard: true },
-          ).pipe(Effect.timeoutOption(`${CLOSE_GRACE_MS} millis`));
+          const settled = yield* boundedWait(
+            Effect.forEach(drain.inFlight, (work) => Deferred.await(work.settled), {
+              discard: true,
+            }),
+            graceMs,
+          );
           yield* Queue.shutdown(mailbox.queue);
           const consumer = yield* Ref.get(mailbox.consumer);
           if (consumer !== undefined) {

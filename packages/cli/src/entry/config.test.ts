@@ -654,3 +654,48 @@ test("modelSource records which input won model precedence", async () => {
   expect(rpcWithFlag).toMatchObject({ model: "flag-model", modelSource: "flag" });
   expect(rpcFromEnv).toMatchObject({ model: "env-model", modelSource: "env" });
 });
+
+// ---------------------------------------------------------------------------
+// Delegation inputs (RFC-04 §6, issue #56)
+// ---------------------------------------------------------------------------
+
+test("the run config carries the startup discovery, the --model source, and the user Agent directory", async () => {
+  const discovery = discoveryWith([{ name: "helper" }, { name: "planner", scope: "project" }]);
+  const env = {
+    POPEYE_AGENTS_DIR: "/custom/agents",
+    POPEYE_BASE_URL: "http://127.0.0.1:1234/v1",
+    POPEYE_MODEL: "env-model",
+  };
+  const withoutFlag = await Effect.runPromise(
+    resolveConfig(await parseWithAgent(["-p", "Explain."]), env, discovery),
+  );
+  const withFlag = await Effect.runPromise(
+    resolveConfig(
+      await parseWithAgent(["-p", "--model", "flag-model", "Explain."]),
+      env,
+      discovery,
+    ),
+  );
+
+  expect(withoutFlag).toMatchObject({
+    discoveredAgents: discovery.agents,
+    modelSource: "env",
+    userAgentsDir: "/custom/agents",
+  });
+  expect(withFlag).toMatchObject({ modelSource: "flag" });
+});
+
+test("the run config has no discovered Agents when startup discovery found none", async () => {
+  const config = await Effect.runPromise(
+    resolveConfig(await parseWithAgent(["-p", "Explain."]), {
+      POPEYE_BASE_URL: "http://127.0.0.1:1234/v1",
+      POPEYE_MODEL: "m",
+    }),
+  );
+  if (config.action !== "run") {
+    throw new Error("Expected run config.");
+  }
+
+  expect(config.discoveredAgents.size).toBe(0);
+  expect(config.userAgentsDir).toBe(join(homedir(), ".popeye", "agents"));
+});

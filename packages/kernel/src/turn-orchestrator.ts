@@ -39,6 +39,7 @@ import {
   Schema,
   Stream,
 } from "effect";
+import { boundedWait } from "./bounded-wait.js";
 import {
   Compaction,
   type CompactionPolicyOptions,
@@ -167,6 +168,10 @@ export type TurnOptionsResolver = (
 ) => Effect.Effect<TurnOptions, JournalFailure>;
 
 export interface TurnOrchestratorService {
+  /** Stops Turn admission for the Session: a Turn not yet started settles aborted (issue 56). */
+  readonly beginClose: (sessionId: SessionId) => Effect.Effect<void>;
+  /** Allows Turn admission again, after a close that drained or before a resume. */
+  readonly endClose: (sessionId: SessionId) => Effect.Effect<void>;
   readonly abortTurn: (sessionId: SessionId) => Effect.Effect<AbortTurnResult>;
   readonly resumeGoal: (
     sessionId: SessionId,
@@ -349,6 +354,7 @@ export const TurnOrchestratorLive = (): Layer.Layer<
       const provider = yield* Provider;
       const toolRegistry = yield* ToolRegistry;
       const active = yield* Ref.make<Map<SessionId, ActiveTurn>>(new Map());
+      const closing = yield* Ref.make<ReadonlySet<SessionId>>(new Set());
       const followUps = yield* Ref.make<Map<SessionId, ReadonlyArray<FollowUpItem>>>(new Map());
       const goalChains = yield* Ref.make<ReadonlyMap<SessionId, Deferred.Deferred<TurnResult>>>(
         new Map(),
@@ -1366,14 +1372,18 @@ export const TurnOrchestratorLive = (): Layer.Layer<
             ),
           );
 
-          const start = yield* Deferred.make<void>();
+          const start = yield* Deferred.make<boolean>();
           const completion =
             yield* Deferred.make<
               Exit.Exit<TurnResult, BudgetExceeded | JournalFailure | ProviderError>
             >();
           const child = yield* Effect.forkDaemon(
             Deferred.await(start).pipe(
-              Effect.zipRight(Effect.interruptible(run)),
+              Effect.flatMap((admitted) =>
+                admitted
+                  ? Effect.interruptible(run)
+                  : Effect.succeed<TurnResult>({ stopReason: "aborted" }),
+              ),
               Effect.onExit((exit) => Deferred.succeed(completion, exit)),
             ),
           );
@@ -1392,7 +1402,13 @@ export const TurnOrchestratorLive = (): Layer.Layer<
           if (registration !== undefined) {
             yield* removeTurnRegistration(sessionId, registration);
           }
-          yield* Deferred.succeed(start, undefined);
+          // Read after registering in active; beginClose writes closing before abortTurn
+          // reads active. A close either finds this Turn or this Turn finds the close.
+          const admitted = !(yield* Ref.get(closing)).has(sessionId);
+          yield* Deferred.succeed(start, admitted);
+          if (!admitted) {
+            yield* completeGoalChain(sessionId, { stopReason: "aborted" });
+          }
           const exit = yield* Deferred.await(completion);
           yield* Ref.update(active, (current) => {
             const next = new Map(current);
@@ -1705,6 +1721,15 @@ export const TurnOrchestratorLive = (): Layer.Layer<
         );
 
       return {
+        beginClose: (sessionId) =>
+          Ref.update(closing, (current) => new Set(current).add(sessionId)),
+        endClose: (sessionId) =>
+          Ref.update(closing, (current) => {
+            if (!current.has(sessionId)) return current;
+            const next = new Set(current);
+            next.delete(sessionId);
+            return next;
+          }),
         abortTurn: (sessionId: SessionId) =>
           Ref.update(goalStopRequested, (current) => new Set(current).add(sessionId)).pipe(
             Effect.zipRight(Ref.get(active)),
@@ -1778,8 +1803,9 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                           })
                         : Effect.gen(function* () {
                             yield* Fiber.interruptFork(turn.fiber);
-                            const settled = yield* Fiber.await(turn.fiber).pipe(
-                              Effect.timeoutOption(`${turn.abortGraceMs} millis`),
+                            const settled = yield* boundedWait(
+                              Fiber.await(turn.fiber),
+                              turn.abortGraceMs,
                             );
                             if (Option.isNone(settled)) {
                               yield* turn.forceAbort;
@@ -1800,7 +1826,7 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                               aborted: true,
                               turnOrdinal: turn.turnOrdinal,
                             } satisfies AbortTurnResult;
-                          }),
+                          }).pipe(Effect.uninterruptible),
                 ),
               );
             }),

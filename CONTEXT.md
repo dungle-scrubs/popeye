@@ -172,8 +172,8 @@ _Avoid_: RPC (one head's transport), API
   the tool unavailable, not silently permitted
 - **Trust** gates which plugins load; **Capabilities** gate what loaded
   plugins can do
-- **Delegation** hands a task to a child **Agent session** (a forked
-  **Session**) and returns its result; an **Agent definition** configures
+- **Delegation** hands a task to a child **Agent session** (a new **Session** in the
+  parent's **Journal**, not a fork of its **Branch**) and returns its result; an **Agent definition** configures
   that session, it is not a Plugin
 - A **Head** sends protocol commands and renders **Progress**, but trusts
   only **Snapshots**
@@ -207,8 +207,8 @@ kernel ~~~~ Progress ~~~~> heads   (hints; rendered, never folded)
 > that's the dogfood rule."
 >
 > **Dev:** "When we delegate, does the child get its own journal?"
-> **Domain expert:** "It gets its own **Session**. Delegation composes the
-> fork act with an **Agent definition**; the child is an **Agent session**,
+> **Domain expert:** "It gets its own **Session**. Delegation creates a new
+> **Session** and runs it as an **Agent definition**; the child is an **Agent session**,
 > not a branch of the parent."
 
 ## Flagged ambiguities

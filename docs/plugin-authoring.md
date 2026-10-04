@@ -14,6 +14,10 @@ and exports its Head functions. The executable composes the first-party `compact
 and `session-name` Plugins, then discovers and loads Plugins from the user-global directory,
 `--plugin` paths, and the project's `.popeye/plugins/`. An application that embeds the Plugin APIs
 in its own host must wire `makeGenerationRuntime` itself.
+When at least one Agent definition is discoverable, it also composes the first-party
+`delegation` Plugin, whose `delegate` Tool runs a child Agent session through the in-process
+Driver. That Tool reaches the Driver through a CLI-internal port, not through the public
+Plugin interface, so Plugin authors cannot build the same Tool from the Plugin API alone.
 
 The headless host ships no filesystem or shell coding Tools. The only Tool that the default Plugins
 contribute is `manage-goal`. To give the model coding Tools, load a Plugin such as the
