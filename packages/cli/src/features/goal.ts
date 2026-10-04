@@ -1,20 +1,76 @@
-/** The first-party Goal Plugin uses the same Command and Tool surfaces as other Plugins. */
-import { type GoalAction, GoalActionSchema } from "@dungle-scrubs/popeye-journal";
+/** The first-party Goal Plugin: the user owns activation through the Command; the model reports on the active Goal. */
+import { type Goal, type GoalAction, GoalActionSchema } from "@dungle-scrubs/popeye-journal";
 import {
   defineCommandContribution,
   defineToolContribution,
   type PluginManifest,
+  type ToolExecutionContext,
+  type ToolExecutionResult,
 } from "@dungle-scrubs/popeye-plugins";
-import { Data, Effect, Schema } from "effect";
+import { Data, Effect, Either, Schema } from "effect";
 
 const goalResult = (goal: unknown): string => JSON.stringify({ goal: goal ?? null });
 
+const USER_ONLY_ERROR =
+  "Only the user can create, replace, resume, or clear a Goal. Use /goal <objective>, /goal resume, or /goal clear.";
+const NO_ACTIVE_ERROR = "No active Goal is set. Only the user can start or resume a Goal.";
+const INVALID_ARGUMENTS_ERROR =
+  "Invalid manage-goal arguments. Use get, pause, blocked with a reason, or complete with evidence.";
+
+const userOnlyResult = (): ToolExecutionResult => ({ content: USER_ONLY_ERROR, isError: true });
+const noActiveResult = (): ToolExecutionResult => ({ content: NO_ACTIVE_ERROR, isError: true });
+const invalidArgumentsResult = (): ToolExecutionResult => ({
+  content: INVALID_ARGUMENTS_ERROR,
+  isError: true,
+});
+const goalUpdateFailed = (error: unknown): Effect.Effect<ToolExecutionResult> =>
+  Effect.succeed({
+    content: `Goal update failed: ${String(error)}`,
+    isError: true,
+  });
+const goalReadResult = (goal: Goal | undefined): ToolExecutionResult => ({
+  content: goalResult(goal),
+});
+const goalWriteResult = (goal: Goal | undefined): ToolExecutionResult => ({
+  content: goalResult(goal),
+});
+
 const GoalToolParametersSchema = Schema.Struct({
-  action: Schema.Literal("blocked", "clear", "complete", "get", "pause", "resume", "set"),
+  action: Schema.Literal("blocked", "complete", "get", "pause"),
   evidence: Schema.optional(Schema.String),
-  objective: Schema.optional(Schema.String),
   reason: Schema.optional(Schema.String),
 });
+
+/** Allowed Tool actions, sharing the shared text validation and length limit with the Command. */
+const GoalToolActionSchema = Schema.Union(
+  Schema.Struct({ action: Schema.Literal("get", "pause") }),
+  GoalActionSchema.members[2],
+  GoalActionSchema.members[3],
+);
+
+/** Default excess-property handling is "ignore"; only an `action` literal check is needed. */
+const isUserOnlyAction = Schema.is(
+  Schema.Struct({ action: Schema.Literal("set", "replace", "resume", "clear") }),
+);
+
+const strict = { onExcessProperty: "error" } as const;
+
+const decodeParameters = Schema.decodeUnknown(GoalToolParametersSchema, strict);
+const decodeAction = Schema.decodeUnknown(GoalToolActionSchema, strict);
+
+const dispatch = (action: typeof GoalToolActionSchema.Type, context: ToolExecutionContext) =>
+  Effect.gen(function* () {
+    if (action.action === "get") {
+      const goal = yield* context.getGoal();
+      return goalReadResult(goal);
+    }
+    const goal = yield* context.getGoal();
+    if (goal === undefined || goal.status !== "active") {
+      return noActiveResult();
+    }
+    const updated = yield* context.changeGoal(action);
+    return goalWriteResult(updated);
+  }).pipe(Effect.catchAll(goalUpdateFailed));
 
 class GoalCommandSyntaxError extends Data.TaggedError("GoalCommandSyntaxError")<{
   readonly message: string;
@@ -66,17 +122,22 @@ export const goalPlugin = {
     }),
     defineToolContribution({
       description:
-        "Read or update the user's explicit Session Goal. Set or clear a Goal only when the user asks. Use complete with evidence when the objective is achieved; use blocked with a reason when progress needs user input or an external change.",
+        "Read the Session Goal. For an active Goal, report completion with evidence, report a blocker with a reason, or pause work. Only the user can create, replace, resume, or clear a Goal through the goal Command. Earlier user requests do not authorize Goal activation.",
       execute: (input, context) =>
-        Schema.decodeUnknown(GoalActionSchema, { onExcessProperty: "error" })(input).pipe(
-          Effect.flatMap((action) =>
-            action.action === "get" ? context.getGoal() : context.changeGoal(action),
-          ),
-          Effect.map((goal) => ({ content: goalResult(goal) })),
-          Effect.catchAll((error) =>
-            Effect.succeed({ content: `Goal update failed: ${String(error)}`, isError: true }),
-          ),
-        ),
+        Effect.gen(function* () {
+          if (isUserOnlyAction(input)) {
+            return userOnlyResult();
+          }
+          const decoded = yield* Effect.either(decodeParameters(input));
+          if (Either.isLeft(decoded)) {
+            return invalidArgumentsResult();
+          }
+          const action = yield* Effect.either(decodeAction(decoded.right));
+          if (Either.isLeft(action)) {
+            return invalidArgumentsResult();
+          }
+          return yield* dispatch(action.right, context);
+        }),
       executionMode: "sequential",
       name: "manage-goal",
       parameters: GoalToolParametersSchema,
