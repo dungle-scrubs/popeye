@@ -1,6 +1,6 @@
 {
   "name": "@dungle-scrubs/popeye",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "type": "module",
   "bin": {
     "popeye": "./dist/bin/popeye.js"

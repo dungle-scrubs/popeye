@@ -1,8 +1,8 @@
 {
-  ".": "0.1.6",
-  "packages/cli": "0.1.6",
-  "packages/journal": "0.1.6",
-  "packages/kernel": "0.1.6",
-  "packages/plugins": "0.1.6",
-  "packages/protocol": "0.1.6"
+  ".": "0.1.7",
+  "packages/cli": "0.1.7",
+  "packages/journal": "0.1.7",
+  "packages/kernel": "0.1.7",
+  "packages/plugins": "0.1.7",
+  "packages/protocol": "0.1.7"
 }

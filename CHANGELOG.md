@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7](https://github.com/dungle-scrubs/popeye/compare/popeye-workspace-v0.1.6...popeye-workspace-v0.1.7) (2026-10-04)
+
+
+### Added
+
+* **cli:** the delegate Tool runs a child Agent Session in-process ([#90](https://github.com/dungle-scrubs/popeye/issues/90)) ([ca0a2d3](https://github.com/dungle-scrubs/popeye/commit/ca0a2d34161080c32d25c50d25f598ea95515ac8)), closes [#56](https://github.com/dungle-scrubs/popeye/issues/56)
+* **cli:** Tool grants vary per Session within one process ([#86](https://github.com/dungle-scrubs/popeye/issues/86)) ([fa3c918](https://github.com/dungle-scrubs/popeye/commit/fa3c9180ef8f19954f29577f12e5ead6d4e78215)), closes [#54](https://github.com/dungle-scrubs/popeye/issues/54)
+* **rpc:** create and resume accept an agent field ([#87](https://github.com/dungle-scrubs/popeye/issues/87)) ([383e763](https://github.com/dungle-scrubs/popeye/commit/383e76319cc327558f29db48d175e1fba5fc60a3)), closes [#55](https://github.com/dungle-scrubs/popeye/issues/55)
+
+
+### Changed
+
+* install popeye from npm now that 0.1.5 publishes ([#80](https://github.com/dungle-scrubs/popeye/issues/80)) ([95d3b72](https://github.com/dungle-scrubs/popeye/commit/95d3b727108a8e34f63416a5d362fc5cf0957553))
+
 ## [0.1.6](https://github.com/dungle-scrubs/popeye/compare/popeye-workspace-v0.1.5...popeye-workspace-v0.1.6) (2026-10-04)
 
 
