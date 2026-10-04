@@ -177,6 +177,7 @@ export interface DriverService {
     sessionId: SessionId,
     content: string,
     options?: TurnOptions,
+    onAdmitted?: Effect.Effect<void>,
   ) => Effect.Effect<TurnResult, TurnFailure>;
   readonly resumeSession: (
     sessionId: SessionId,
@@ -558,25 +559,31 @@ const makeDriverService = (
           })
           .pipe(Effect.map((result) => result.value)),
       listSessions: () => sessions.list(),
-      prompt: (sessionId, content, options = {}) =>
-        orchestrator.openTurn(sessionId, content, undefined, options, (turnOptions) =>
-          Effect.gen(function* () {
-            const entries = yield* store
-              .getBranch(sessionId)
-              .pipe(Effect.catchAll(() => Effect.succeed([] as ReadonlyArray<Entry>)));
-            const settings = yield* deriveViewSettings(entries).pipe(
-              Effect.catchAll(() =>
-                Effect.succeed({} as import("./session-view.js").SessionSettings),
-              ),
-            );
-            return {
-              ...turnOptions,
-              ...(settings.model === undefined ? {} : { model: settings.model }),
-              ...(settings.thinkingLevel === undefined
-                ? {}
-                : { thinkingLevel: settings.thinkingLevel }),
-            };
-          }),
+      prompt: (sessionId, content, options = {}, onAdmitted = Effect.void) =>
+        orchestrator.openTurn(
+          sessionId,
+          content,
+          undefined,
+          options,
+          (turnOptions) =>
+            Effect.gen(function* () {
+              const entries = yield* store
+                .getBranch(sessionId)
+                .pipe(Effect.catchAll(() => Effect.succeed([] as ReadonlyArray<Entry>)));
+              const settings = yield* deriveViewSettings(entries).pipe(
+                Effect.catchAll(() =>
+                  Effect.succeed({} as import("./session-view.js").SessionSettings),
+                ),
+              );
+              return {
+                ...turnOptions,
+                ...(settings.model === undefined ? {} : { model: settings.model }),
+                ...(settings.thinkingLevel === undefined
+                  ? {}
+                  : { thinkingLevel: settings.thinkingLevel }),
+              };
+            }),
+          onAdmitted,
         ),
       resumeSession: (sessionId) =>
         sessions.resume(sessionId).pipe(Effect.tap(() => readSnapshot(sessionId))),

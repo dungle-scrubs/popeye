@@ -3903,3 +3903,131 @@ test("Stop between Goal Turns prevents the pending continuation", async () => {
   expect(result.branch.filter((entry) => entry.kind === "goal_continuation")).toHaveLength(1);
   expect(requests).toBe(2);
 });
+
+test("openTurn runs onAdmitted once the Kernel has accepted the prompt, before the Turn settles", async () => {
+  const providerEntered = await Effect.runPromise(Deferred.make<void>());
+  const releaseProvider = await Effect.runPromise(Deferred.make<void>());
+  const admissions: Array<string> = [];
+  let requests = 0;
+  const provider: ProviderService = {
+    streamAssistant: () => {
+      requests += 1;
+      if (requests === 1) {
+        return Stream.fromEffect(
+          Deferred.succeed(providerEntered, undefined).pipe(
+            Effect.zipRight(Deferred.await(releaseProvider)),
+            Effect.as({ _tag: "done" as const, stopReason: "done" as const }),
+          ),
+        );
+      }
+      return Stream.make({ _tag: "done" as const, stopReason: "done" as const });
+    },
+  };
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const sessions = yield* Sessions;
+      const orchestrator = yield* TurnOrchestrator;
+      const session = yield* sessions.create();
+      const admitted = (label: string, latch: Deferred.Deferred<void>) =>
+        Effect.sync(() => admissions.push(label)).pipe(
+          Effect.zipRight(Deferred.succeed(latch, undefined)),
+          Effect.asVoid,
+        );
+      const initialAdmitted = yield* Deferred.make<void>();
+      const steerAdmitted = yield* Deferred.make<void>();
+      const followUpAdmitted = yield* Deferred.make<void>();
+      const initial = yield* Effect.fork(
+        orchestrator.openTurn(
+          session.id,
+          "Initial",
+          undefined,
+          {},
+          undefined,
+          admitted("registered", initialAdmitted),
+        ),
+      );
+      yield* Deferred.await(initialAdmitted);
+      // Admission means the Turn is registered: Steering is accepted, not rejected as idle.
+      const steerAfterAdmission = yield* Effect.either(orchestrator.steer(session.id, "Accepted"));
+      yield* Deferred.await(providerEntered);
+      const steered = yield* Effect.fork(
+        orchestrator.openTurn(
+          session.id,
+          "Steer mode",
+          undefined,
+          { deliveryMode: "steer" },
+          undefined,
+          admitted("steering", steerAdmitted),
+        ),
+      );
+      yield* Deferred.await(steerAdmitted);
+      const followed = yield* Effect.fork(
+        orchestrator.openTurn(
+          session.id,
+          "Follow-up",
+          undefined,
+          {},
+          undefined,
+          admitted("followUp", followUpAdmitted),
+        ),
+      );
+      yield* Deferred.await(followUpAdmitted);
+      const admittedBeforeRelease = [...admissions];
+      yield* Deferred.succeed(releaseProvider, undefined);
+      yield* Effect.all([Fiber.join(initial), Fiber.join(steered), Fiber.join(followed)], {
+        concurrency: "unbounded",
+      });
+      return { admittedBeforeRelease, steerAfterAdmission };
+    }).pipe(Effect.provide(testLayer(provider))),
+  );
+
+  expect(result.steerAfterAdmission._tag).toBe("Right");
+  expect(result.admittedBeforeRelease).toEqual(["registered", "steering", "followUp"]);
+  expect(admissions).toEqual(["registered", "steering", "followUp"]);
+});
+
+test("openTurn does not run onAdmitted when the Kernel rejects the prompt", async () => {
+  const providerEntered = await Effect.runPromise(Deferred.make<void>());
+  let admitted = 0;
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const sessions = yield* Sessions;
+      const orchestrator = yield* TurnOrchestrator;
+      const session = yield* sessions.create();
+      const running = yield* Effect.fork(orchestrator.openTurn(session.id, "Initial"));
+      yield* Deferred.await(providerEntered);
+      yield* Effect.forEach(
+        Array.from({ length: TURN_INPUT_QUEUE_CAPACITY }, (_, index) => index),
+        (index) => orchestrator.steer(session.id, `Steering ${index}`),
+      );
+      const error = yield* Effect.flip(
+        orchestrator.openTurn(
+          session.id,
+          "Overflow",
+          undefined,
+          { deliveryMode: "steer" },
+          undefined,
+          Effect.sync(() => {
+            admitted += 1;
+          }),
+        ),
+      );
+      yield* orchestrator.abortTurn(session.id);
+      yield* Fiber.join(running);
+      return { error };
+    }).pipe(
+      Effect.provide(
+        testLayer({
+          streamAssistant: () =>
+            Stream.fromEffect(
+              Deferred.succeed(providerEntered, undefined).pipe(Effect.zipRight(Effect.never)),
+            ),
+        }),
+      ),
+    ),
+  );
+
+  expect(result.error).toMatchObject({ _tag: "TurnQueueFull", queue: "steering" });
+  expect(admitted).toBe(0);
+});

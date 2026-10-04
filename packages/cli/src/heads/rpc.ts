@@ -771,12 +771,19 @@ const dispatchRoute = (command: RpcInboundCommand): RpcDispatchRoute => {
     command._tag === "abort" ||
     command._tag === "close" ||
     command._tag === "interaction-response" ||
+    command._tag === "steer" ||
     goalCancellation
   ) {
     return { _tag: "control" };
   }
   if (command._tag === "create" || command._tag === "list") {
     return { _tag: "sessionless" };
+  }
+  if (command._tag === "prompt") {
+    return {
+      _tag: command.deliveryMode === "steer" ? "steer" : "turn",
+      sessionId: command.sessionId,
+    };
   }
   return { _tag: "session", sessionId: command.sessionId };
 };
@@ -826,9 +833,12 @@ export const runRpcHead = (options: RpcHeadOptions) => {
                       }),
                     ),
                   route: dispatchRoute(command),
-                  run: (dispatchContext) =>
+                  run: (dispatchContext, admission) =>
                     bridge
-                      .handle(command as unknown as import("./rpc-session-bridge.js").BridgeCommand)
+                      .handle(
+                        command as unknown as import("./rpc-session-bridge.js").BridgeCommand,
+                        admission,
+                      )
                       .pipe(
                         Effect.tap(() => Effect.annotateCurrentSpan({ outcome: "ok" })),
                         Effect.catchAllCause((cause) =>

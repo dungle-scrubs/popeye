@@ -91,8 +91,17 @@ directory, and project Plugins in `.popeye/plugins` resolve under `packages/cli`
 `--resume <sessionId>` to continue a Session. Use `--session-dir <dir>` to
 replace the default `.popeye/sessions` Journal directory. Print mode writes settled assistant text.
 JSON mode writes only Progress and Snapshot JSON lines. RPC mode stays open and accepts LF-delimited
-protocol commands on stdin. RPC frames dispatch per Session in arrival order. `abort` and
-`interaction-response` frames bypass the Session queue so they can run during a Turn.
+protocol commands on stdin. RPC frames dispatch per Session in arrival order. `abort`, `close`,
+`interaction-response`, and `steer` frames, and `invoke-command` frames for `goal pause` or
+`goal clear`, bypass the Session queue so they can act on a running Turn. A `prompt` frame with
+`deliveryMode: "steer"` bypasses the queue only while that Session's `prompt` frame is running in
+the Kernel, including the Goal continuation Turns that frame waits on; otherwise it waits in the
+queue and opens the next Turn. A `steer` frame is acknowledged as soon as the Kernel accepts it: it
+joins the running Turn, including a Goal continuation Turn, at its next safe point, becomes a
+Follow-up when the Turn has not started or has closed Steering, and fails with
+`phase_invalid_command` when the Session has no running or pending Turn. Control frames share a
+bound of 64 concurrent handlers; steer-mode prompts waiting on a running Turn have their own bound
+of 64.
 
 `popeye usage export` reads all Session Records and writes one JSON line per Provider request.
 `--session <id>` limits the scan. Each row has stable Session, owner, and request IDs; Provider
