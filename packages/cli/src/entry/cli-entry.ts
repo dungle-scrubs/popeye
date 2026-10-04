@@ -145,14 +145,21 @@ Options:
   --agent <name>           Start as a named Agent definition (RFC-04). Dirs: ./.popeye/agents,
                            ~/.popeye/agents; POPEYE_AGENTS_DIR overrides the user dir.
   --base-url <url>         Set the OpenAI-compatible endpoint. Env: POPEYE_BASE_URL.
+  --effort <level>         Set reasoning: off, low, medium-low, medium, medium-high, high, xhigh.
+  --exclude-tools <names>  Exclude contributed Tools by comma-separated name;
+                           native:<name> is accepted.
   -p, --headless           Run headless.
   --help                   Print this usage text.
+  --isolation tool-free    Load first-party Plugins only and expose no Tools.
   --mode <print|json|rpc|hcn>  Select the Head. Default: print.
   --model <model>          Select the Provider model. Env: POPEYE_MODEL.
   --no-project-plugins     Do not load project-local Plugins.
   --plugin <path>          Add a Plugin path. Repeatable.
   --resume <sessionId>     Resume a Session.
   --session-dir <dir>      Set the Journal directory. Default: .popeye/sessions.
+  --skills <names>         Allow only comma-separated Plugin names; this is not a trust setting.
+  --tools <names>          Allow only contributed Tools by comma-separated name;
+                           native:<name> is accepted.
   --version                Print the @dungle-scrubs/popeye version.
 
 Loopback endpoints need no API key; without POPEYE_API_KEY the CLI sends its local placeholder.
@@ -160,6 +167,16 @@ POPEYE_API_KEY is the endpoint credential and overrides every other key.
 Without it, a provider key is read only for its own API host:
 ${PROVIDER_KEY_LINES}
 Any other hosted endpoint requires POPEYE_API_KEY.
+
+Models pi-ai does not know, reached through --base-url, send reasoning_effort:
+off=none, low=minimal, medium-low=low, medium=medium, medium-high=high, high=xhigh, xhigh=xhigh.
+With no explicit Turn level, saved Session level, or Provider layer default, those models
+send no field. Reasoning levels are endpoint hints, not timing guarantees.
+RPC: use set-thinking with Kernel levels; off sends reasoning_effort none to those models.
+
+An explicit level for a registry model without reasoning support ends the Turn with a
+Provider error (exit 1 in print, JSON, and HCN). Registry reasoning models use pi-ai's
+model-specific mapping; off is not guaranteed to disable reasoning for those models.
 
 Environment:
   POPEYE_REFLECT_INTAKE    Absolute path of the reflect-intake executable. When set, each

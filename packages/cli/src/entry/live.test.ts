@@ -1,17 +1,22 @@
 /**
  * Runs the built CLI against real OpenAI-compatible Providers.
  *
- * Run the full local set with:
+ * Run the primary local set with:
  * POPEYE_LIVE_ENDPOINT=http://127.0.0.1:1234/v1 \
- * POPEYE_LIVE_MODEL=lmstudio-community/qwen3.6-27b-mlx \
- * POPEYE_LIVE_MODEL_ALT=openai/gpt-oss-20b \
+ * POPEYE_LIVE_MODEL=qwen/qwen3.6-27b \
  * pnpm vitest run --project @dungle-scrubs/popeye src/entry/live.test.ts
  *
- * The local suite is skipped unless POPEYE_LIVE_ENDPOINT and POPEYE_LIVE_MODEL are set. Spawned local
- * processes have every supported API-key variable removed, so they exercise keyless loopback.
- * The hosted case has a separate POPEYE_LIVE_HOSTED_ENDPOINT, POPEYE_LIVE_HOSTED_MODEL, and
- * POPEYE_LIVE_HOSTED_API_KEY gate. POPEYE_API_KEY can supply the hosted key too. Provider key
- * variables are not read, so a key never reaches another provider's host.
+ * Every local live model, including an optional POPEYE_LIVE_MODEL_ALT, must accept
+ * reasoning_effort: "none". Use models pi-ai does not know for the base-URL wire mapping.
+ * Local Turns request reasoning off. Local processes exclude manage-goal, except that
+ * the RPC abort test keeps default Tools. No other contributed Tools are excluded.
+ * The alternate-model case is skipped unless POPEYE_LIVE_MODEL_ALT is also set.
+ * The local suite is skipped unless POPEYE_LIVE_ENDPOINT and POPEYE_LIVE_MODEL are set.
+ * Spawned local processes remove every supported API-key variable for keyless loopback.
+ * The hosted case has a separate POPEYE_LIVE_HOSTED_ENDPOINT, POPEYE_LIVE_HOSTED_MODEL,
+ * and POPEYE_LIVE_HOSTED_API_KEY gate. POPEYE_API_KEY can supply the hosted key too.
+ * Provider key variables are not read, so a key never reaches another provider's host.
+ * Hosted Turns receive no forced reasoning-off or Tool-exclusion policy.
  */
 
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -103,6 +108,13 @@ interface LiveProcessOptions {
   readonly environment?: NodeJS.ProcessEnv;
 }
 
+interface LiveRpcProcessOptions extends LiveProcessOptions {
+  readonly keepDefaultTools?: boolean;
+}
+
+/** Local one-shot prefix: reasoning off, the only contributed Tool excluded is manage-goal. */
+const LOCAL_REASONING_OFF_PREFIX = ["--effort", "off", "--exclude-tools", "manage-goal"] as const;
+
 const sessionDirectory = (): string => {
   const directory = mkdtempSync(join(tmpdir(), "popeye-cli-live-"));
   temporaryDirectories.push(directory);
@@ -167,7 +179,9 @@ const runLiveBin = async (
   config: LiveProviderConfig = requireLiveConfig(),
   options: LiveProcessOptions = {},
 ): Promise<ProcessExit & { readonly stderr: string; readonly stdout: string }> => {
-  const processRun = spawnLiveBin(args, config, options);
+  const isLocal = config === liveConfig;
+  const prefix = isLocal ? [...LOCAL_REASONING_OFF_PREFIX] : [];
+  const processRun = spawnLiveBin([...prefix, ...args], config, options);
   let stdout = "";
   processRun.child.stdout.setEncoding("utf8");
   processRun.child.stdout.on("data", (chunk: string) => {
@@ -233,9 +247,10 @@ const startupRecords = (stderr: string): ReadonlyArray<Readonly<Record<string, u
     .filter((line) => line.startsWith("STARTUP "))
     .map((line) => record(JSON.parse(line.slice("STARTUP ".length)) as unknown));
 
-const startLiveRpc = (directory: string, options: LiveProcessOptions = {}): LiveRpcProcess => {
+const startLiveRpc = (directory: string, options: LiveRpcProcessOptions = {}): LiveRpcProcess => {
+  const toolPrefix = options.keepDefaultTools === true ? [] : ["--exclude-tools", "manage-goal"];
   const processRun = spawnLiveBin(
-    ["-p", "--mode", "rpc", "--session-dir", directory],
+    ["-p", "--mode", "rpc", "--session-dir", directory, ...toolPrefix],
     requireLiveConfig(),
     options,
   );
@@ -294,7 +309,13 @@ const rpcSnapshot = async (
 
 const createRpcSession = async (rpc: LiveRpcProcess, correlationId: string): Promise<string> => {
   rpc.writeCommand({ _tag: "create", id: correlationId });
-  return (await rpcSnapshot(await rpc.readResponse(correlationId), correlationId)).sessionId;
+  const created = await rpcSnapshot(await rpc.readResponse(correlationId), correlationId);
+  const sessionId = created.sessionId;
+  const thinkingId = `${correlationId}-thinking-off`;
+  rpc.writeCommand({ _tag: "set-thinking", id: thinkingId, sessionId, thinkingLevel: "off" });
+  const thought = await rpcSnapshot(await rpc.readResponse(thinkingId), thinkingId);
+  expect(thought.thinkingLevel).toBe("off");
+  return sessionId;
 };
 
 const expectCleanRpcExit = async (rpc: LiveRpcProcess): Promise<void> => {
@@ -532,7 +553,10 @@ test.skipIf(liveConfig === undefined)(
   "live CLI: RPC abort interrupts a streaming Turn and leaves the Session usable",
   async () => {
     const projectPath = sessionDirectory();
-    const rpc = startLiveRpc(join(projectPath, "sessions"), { cwd: projectPath });
+    const rpc = startLiveRpc(join(projectPath, "sessions"), {
+      cwd: projectPath,
+      keepDefaultTools: true,
+    });
 
     try {
       const sessionId = await createRpcSession(rpc, "create-abort");

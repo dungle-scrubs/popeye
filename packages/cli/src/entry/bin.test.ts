@@ -803,6 +803,7 @@ test("the built help states the host-tied endpoint credential policy", () => {
   const help = runBuiltBin(["--help"]);
 
   expect(help.status).toBe(0);
+  // The credential paragraph ends at a blank line; other help paragraphs may follow it.
   expect(help.stdout).toContain(
     [
       "Loopback endpoints need no API key; without POPEYE_API_KEY the CLI sends its local placeholder.",
@@ -812,7 +813,7 @@ test("the built help states the host-tied endpoint credential policy", () => {
       "  https://api.anthropic.com  ANTHROPIC_API_KEY",
       "Any other hosted endpoint requires POPEYE_API_KEY.",
       "",
-      "Environment:",
+      "",
     ].join("\n"),
   );
   expect(help.stdout).not.toContain("OPENAI_API_KEY, or ANTHROPIC_API_KEY");
