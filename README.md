@@ -180,9 +180,14 @@ Discovery happens when `--agent` is used.
 Name resolution is exact and case-sensitive. An unknown name fails startup and lists the available
 names. Two definitions in one scope with the same name fail startup and name both files. The
 `model` frontmatter key picks the Provider model when `--model` is absent: `--model` beats the
-agent file, and the agent file beats `POPEYE_MODEL`. A `tools` list is checked against the tools
-this process grants: a list whose every name is unknown fails startup, and partially unknown names
-are reported as warnings. `--agent` is refused in RPC mode, like the system-prompt flags.
+agent file, and the agent file beats `POPEYE_MODEL`. A `tools` list narrows the Tools the Session
+is offered: the Session gets only the Tools that are both in the list and granted by `--tools`,
+`--exclude-tools`, and `--access`, so no flag can widen it, and a first-party Tool such as
+`manage-goal` must be listed to stay available. `native:<name>` is accepted. A list whose every
+name is outside the granted Tools fails startup, so any non-empty list fails under
+`--isolation tool-free`. Names outside the granted Tools, whether no Tool has that name or a flag
+removed it, are reported on stderr, and the Session runs with the rest. An absent or empty list
+changes nothing. `--agent` is refused in RPC mode, like the system-prompt flags.
 
 `--agent` is a startup input, like `--system-prompt` and `--append-system-prompt`. Nothing about
 the agent is journaled with the Session: resuming a Session that ran as an agent without passing

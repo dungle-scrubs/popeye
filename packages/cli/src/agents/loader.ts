@@ -6,7 +6,7 @@
  * symlink escape) live behind one interface, independent of CLI wiring.
  * RFC-04 slice 1: data files only — no trust digest, no ESM import.
  * Not responsible for name resolution against --agent (config.ts) or for
- * tool-filter composition (ticket 53).
+ * tool-filter composition (tools/grants.ts).
  */
 import { readdir, readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";

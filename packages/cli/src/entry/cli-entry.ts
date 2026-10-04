@@ -59,6 +59,7 @@ import { runPrintHead } from "../heads/print.js";
 import type { RpcInteractions } from "../heads/rpc.js";
 import { PluginInteractionsRpcLive, RpcInteractionsLive, runRpcHead } from "../heads/rpc.js";
 import { makeCliRuntime } from "../plugins/runtime.js";
+import { composeToolGrantFilter, partitionAgentTools } from "../tools/grants.js";
 
 import {
   CliArgsError,
@@ -410,25 +411,20 @@ const runWithConfig = (
       config.fakeProviderScript === undefined
         ? undefined
         : yield* loadFakeProvider(config.fakeProviderScript);
+    const toolGrants = composeToolGrantFilter({
+      access: config.access,
+      agentTools: config.agent?.tools,
+      excludeTools: config.excludeTools,
+      isolation: config.isolation,
+      tools: config.tools,
+    });
     const cliRuntime = yield* makeCliRuntime({
       ...(config.isolation === undefined ? {} : { isolation: config.isolation }),
       noProjectPlugins: config.noProjectPlugins,
       pluginPaths: config.pluginPaths,
       projectPath: process.cwd(),
       ...(config.skills.length === 0 ? {} : { skills: config.skills }),
-      ...(config.access === undefined &&
-      config.tools.length === 0 &&
-      config.excludeTools.length === 0 &&
-      config.isolation === undefined
-        ? {}
-        : {
-            toolGrants: {
-              access: config.access,
-              excludeTools: config.excludeTools,
-              tools: config.tools,
-              ...(config.isolation === "tool-free" ? { toolsOff: true } : {}),
-            },
-          }),
+      ...(toolGrants === undefined ? {} : { toolGrants }),
       userPluginDir: config.userPluginDir,
     }).pipe(
       Effect.provide(PluginInteractionsNullLive),
@@ -456,22 +452,35 @@ const runWithConfig = (
         SessionIdSchema.make("startup-toolcount"),
       );
       const startupToolCount = startupView.list().length;
-      // RFC-04 §1: a tools list whose every name is unknown to the granted
-      // set fails closed at startup; partial unknowns ride the diagnostics
-      // channel (narrowing lands with ticket 53's filter composition).
-      if (config.agent !== undefined && config.agent.tools !== undefined) {
-        const grantedNames = new Set(startupView.list().map((tool) => tool.name));
-        const unknownTools = config.agent.tools.filter((name) => !grantedNames.has(name));
-        if (unknownTools.length === config.agent.tools.length) {
+      // RFC-04 §1/§3: the Agent tools list already narrows the startup view
+      // (composeToolGrantFilter). A name is outside the grant when no Tool has
+      // that name or a flag removed it. An entirely ungranted list fails closed;
+      // partial lists warn and run with the granted subset.
+      if (config.agent?.tools !== undefined && config.agent.tools.length > 0) {
+        const { known, unknown } = partitionAgentTools(
+          config.agent.tools,
+          new Set(startupView.list().map((tool) => tool.name)),
+        );
+        if (known.length === 0) {
           return yield* runError(
             "agent_tools_unknown",
-            `Agent ${config.agent.name} (${config.agent.filePath}) lists only tools unknown to this process: ${unknownTools.join(", ")}. Startup fails closed.`,
+            `Agent ${config.agent.name} (${config.agent.filePath}) lists only tools this session does not grant: ${unknown.join(", ")}. Startup fails closed.`,
           );
         }
-        if (unknownTools.length > 0) {
-          yield* Effect.logWarning(
-            `Agent ${config.agent.name} names tools unknown to this process: ${unknownTools.join(", ")}.`,
-          );
+        if (unknown.length > 0) {
+          yield* errorWriter
+            .write(
+              `Agent ${config.agent.name} (${config.agent.filePath}) names tools this session does not grant: ${unknown.join(", ")}. The session runs with the granted subset: ${known.join(", ")}.\n`,
+            )
+            .pipe(
+              Effect.mapError((cause) =>
+                runError(
+                  "composition_failed",
+                  `Could not write CLI stderr: ${cause.message}`,
+                  cause,
+                ),
+              ),
+            );
         }
       }
       yield* errorWriter
