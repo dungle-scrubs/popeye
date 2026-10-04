@@ -100,20 +100,26 @@ Use `--plugin <path>` to load an additional Plugin. The flag is repeatable. Use
 
 ### Session Goals
 
-The first-party `goal` Command stores a Goal on the current Journal Branch. The model can read and
-update the same state through the `manage-goal` Tool. A Goal stays in model Context after Compaction
-or Session resume. When a Turn ends while the Goal is active, the Kernel queues one continuation Turn
-at a time. A queued user Follow-up runs first. Stop or an error pauses the Goal. Completion requires
-evidence, and a blocker requires a reason. The Kernel blocks a Goal after 40 automatic continuations.
-Clearing a Goal records a terminal `cancelled` status so the last condition remains inspectable.
+The first-party `goal` Command stores a Goal on the current Journal Branch. Only the user can create,
+replace, resume, or clear a Goal. The model can read it through `manage-goal` and, while it is active,
+pause it, report a blocker with a reason, or report completion with evidence. Ordinary prompts and
+earlier user requests in Context do not authorize the model to activate or resume a Goal. A Goal
+stays in Context after Compaction or Session resume. When a Turn ends while the Goal is active, the
+Kernel queues one continuation Turn at a time. A queued user Follow-up runs first. Abort, stop, or an
+error pauses an active Goal. The Kernel blocks a Goal after 40 automatic continuations. Clearing a
+Goal records a terminal `cancelled` status so the last condition remains inspectable. A prompt working
+on an explicitly started Goal waits for its continuation chain; print, JSON, HCN, and RPC keep that
+completion contract.
 
 The print, JSON, and HCN Heads accept `/goal <objective>` and bare `/goal` as text Commands. Use
 `/goal pause`, `/goal resume`, `/goal clear`, `/goal blocked <reason>`, or
-`/goal complete <evidence>` to update it. Send a normal prompt after setting the Goal to start
-work. An RPC Head invokes `goal` through `invoke-command`, with arguments such as
-`{"action":"set","objective":"Finish and verify the task"}`. A sole `/goal resume` restarts
-work. A resumed print, JSON, or HCN Head with no new prompt continues an active Goal. RPC clients
-use `resume-goal` after `resume` when they want to continue without a new prompt.
+`/goal complete <evidence>` to update it. `/goal <objective>` creates or replaces the Goal. Send a
+normal prompt after setting the Goal to start work. An RPC Head invokes `goal` through
+`invoke-command`, with arguments such as
+`{"action":"set","objective":"Finish and verify the task"}`. A sole `/goal resume` restarts work.
+A resumed print, JSON, or HCN Head with no new prompt continues an active Goal. RPC clients use
+`resume-goal` after `resume` when they want to continue without a new prompt. After abort, resume a
+paused Goal explicitly through `/goal resume` or the corresponding user RPC path.
 
 The CLI auto-trusts discovered Plugin code. It loads user-global Plugins from `~/.popeye/plugins` and
 project Plugins from `.popeye/plugins`. Tools contributed by loaded Plugins are available to the
