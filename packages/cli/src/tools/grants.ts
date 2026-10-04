@@ -7,6 +7,8 @@
  * plugin trust, to already-trusted contributions only.
  * Not responsible for grant parsing (args owns that) or tool adaptation
  * (adapter owns that).
+ * It also owns the per-Session intersection (RFC-04 §5): a Session's own filters narrow the
+ * process filter and never widen it.
  */
 
 export const NATIVE_TOOL_PREFIX = "native:";
@@ -132,3 +134,24 @@ export const filterGrantedTools = <TTool extends { readonly name: string }>(
   tools: ReadonlyArray<TTool>,
   filter: ToolGrantFilter,
 ): ReadonlyArray<TTool> => tools.filter((tool) => isToolGranted(tool.name, filter));
+
+/**
+ * A Tool is granted to a Session when the process filter grants it and every
+ * Session filter grants it (RFC-04 §5). An absent process filter and an empty
+ * Session list grant every Tool, so a Session that was never narrowed gets
+ * exactly the process-level view.
+ */
+export const isToolGrantedToSession = (
+  toolName: string,
+  processFilter: ToolGrantFilter | undefined,
+  sessionFilters: ReadonlyArray<ToolGrantFilter>,
+): boolean =>
+  (processFilter === undefined || isToolGranted(toolName, processFilter)) &&
+  sessionFilters.every((filter) => isToolGranted(toolName, filter));
+
+export const filterSessionGrantedTools = <TTool extends { readonly name: string }>(
+  tools: ReadonlyArray<TTool>,
+  processFilter: ToolGrantFilter | undefined,
+  sessionFilters: ReadonlyArray<ToolGrantFilter>,
+): ReadonlyArray<TTool> =>
+  tools.filter((tool) => isToolGrantedToSession(tool.name, processFilter, sessionFilters));

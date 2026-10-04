@@ -23,8 +23,9 @@ import type { EntryId, SessionId } from "@dungle-scrubs/popeye-journal";
 import { JournalError, JournalNotFound } from "@dungle-scrubs/popeye-journal";
 import type { InteractionRequest, InteractionResponse } from "@dungle-scrubs/popeye-protocol";
 import { snapshotView } from "@dungle-scrubs/popeye-protocol";
-import { Effect, Fiber, Option, Stream } from "effect";
+import { Effect, Exit, Fiber, Option, Stream } from "effect";
 import { type Driver, SessionLifecycle } from "../compose.js";
+import { SessionToolGrants } from "../tools/session-grants.js";
 import type { HeadWriteError } from "./head-wire.js";
 import { protocolSnapshot, type SnapshotAuditFields } from "./head-wire.js";
 import type { RpcInteractionsService } from "./rpc.js";
@@ -115,6 +116,14 @@ const writeResponse = (
   result: unknown,
 ): Effect.Effect<void, HeadWriteError> =>
   transport.send({ ...(id === undefined ? {} : { id }), result });
+
+/** RFC-04 §5: a closed Session drops its own Tool grant filters, when the host keeps any. */
+const releaseSessionToolGrants = (sessionId: string): Effect.Effect<void> =>
+  Effect.serviceOption(SessionToolGrants).pipe(
+    Effect.flatMap((grants) =>
+      Option.isSome(grants) ? grants.value.release(sessionId as unknown as SessionId) : Effect.void,
+    ),
+  );
 
 const writeSnapshotResponse = (
   transport: { readonly send: (payload: unknown) => Effect.Effect<void, HeadWriteError> },
@@ -258,6 +267,11 @@ export const makeRpcSessionBridge = (options: {
       if (command._tag === "close") {
         const sessionId = command.sessionId as string;
         return driver.closeSession(sessionId as unknown as SessionId).pipe(
+          // RFC-04 §5: release once the Driver close succeeds, before the response, so a
+          // failed or interrupted delivery cannot skip it; a failed close keeps the filters.
+          Effect.onExit((exit) =>
+            Exit.isSuccess(exit) ? releaseSessionToolGrants(sessionId) : Effect.void,
+          ),
           Effect.flatMap((result) =>
             writeResponse(transport, command.id, {
               _tag: "closed" as const,

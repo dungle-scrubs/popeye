@@ -67,7 +67,7 @@ import {
   DEFAULT_RETRY_BASE_DELAY_MS,
   makeProviderRequestRuntime,
 } from "./provider-retry.js";
-import { ToolRegistry } from "./tool.js";
+import { admittedToolRegistry, ToolRegistry } from "./tool.js";
 import { executeToolBatch, type ToolBatchResult, type ToolCall } from "./tool-batch.js";
 import { makeTurnDurabilityHandle } from "./turn-durability.js";
 
@@ -640,7 +640,8 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                     typeof (leasedGeneration as Record<string, unknown>).id === "string"
                   ? ((leasedGeneration as Record<string, unknown>).id as string)
                   : sessionId;
-          // D-005: pin the Session view at Turn open; every provider request in this Turn uses it.
+          // D-005: pin the Session view at Turn open; every provider request in this Turn uses it,
+          // and Tool execution admits only the names it admits.
           const sessionView = yield* toolRegistry.view(sessionId);
           const sessionTools = sessionView.list();
           yield* Effect.annotateCurrentSpan({
@@ -1227,7 +1228,12 @@ export const TurnOrchestratorLive = (): Layer.Layer<
                     sessionId,
                   },
                   batchOptions,
-                ).pipe(Effect.provideService(ToolRegistry, toolRegistry));
+                ).pipe(
+                  Effect.provideService(
+                    ToolRegistry,
+                    admittedToolRegistry(toolRegistry, sessionView),
+                  ),
+                );
                 const toolNames = new Map(calls.map((call) => [call.id, call.name]));
                 yield* Effect.uninterruptible(
                   Effect.forEach(

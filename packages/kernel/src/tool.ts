@@ -1,7 +1,8 @@
 /**
  * Owns execution-side Tool declarations and the session-keyed registry views.
  * It exists so a Tool's schema, capability requirements, and execution remain one declaration,
- * and so every Session resolves its own Tool view via view(sessionId) (D-004). The degenerate
+ * and so every Session resolves its own Tool view via view(sessionId) (D-004), which the Turn
+ * pins for the model's offer and for Tool admission (D-005). The degenerate
  * ToolRegistryLive(tools) returns the same view for every Session, keeping simple hosts and
  * existing kernel tests working. The CLI generation-aware registry replaces this in M3. Recovery
  * identifies Tools by name only (documented caveat in docs/plugin-authoring.md).
@@ -80,6 +81,12 @@ export interface RegisteredTool {
 }
 
 export interface SessionToolView {
+  /**
+   * The names a Turn may execute from this view (D-005). Absent: exactly the
+   * view's own Tools. A host sets it when admission follows a name grant, so a
+   * granted Tool that a Plugin reload added after Turn open still executes.
+   */
+  readonly admits?: (name: string) => boolean;
   readonly get: (name: string) => RegisteredTool | undefined;
   readonly list: () => ReadonlyArray<RegisteredTool>;
 }
@@ -137,3 +144,22 @@ export const ToolRegistryLive = (
       } satisfies ToolRegistryService;
     }),
   );
+
+/**
+ * The registry a Turn's Tool execution resolves through (D-005). A call runs
+ * only when the Turn's pinned Session view admits its name (the view's admits
+ * rule, else membership in the view), and the Tool comes from the registry's
+ * process-wide surface, the same lookup execution used before per-Session
+ * grants, so a Plugin reload during the Turn executes the reloaded Tool.
+ */
+export const admittedToolRegistry = (
+  registry: ToolRegistryService,
+  view: SessionToolView,
+): ToolRegistryService => {
+  const admits = view.admits ?? ((name: string) => view.get(name) !== undefined);
+  return {
+    get: (name) => (admits(name) ? registry.get(name) : undefined),
+    list: () => registry.list().filter((tool) => admits(tool.name)),
+    view: registry.view,
+  };
+};

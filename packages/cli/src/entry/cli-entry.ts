@@ -41,6 +41,7 @@ import {
   ProviderError,
   reflectionProducerFromEnv,
   SessionLifecycle,
+  type SessionLifecycleService,
   ToolRegistry,
 } from "../compose.js";
 import { runHcnHead } from "../heads/hcn.js";
@@ -60,9 +61,11 @@ import type { RpcInteractions } from "../heads/rpc.js";
 import { PluginInteractionsRpcLive, RpcInteractionsLive, runRpcHead } from "../heads/rpc.js";
 import { makeCliRuntime } from "../plugins/runtime.js";
 import { composeToolGrantFilter, partitionAgentTools } from "../tools/grants.js";
+import { SessionToolGrants, type SessionToolGrantsService } from "../tools/session-grants.js";
 
 import {
   CliArgsError,
+  type CliMode,
   HCN_EFFORT_TO_THINKING_LEVEL,
   type ParsedRunArgs,
   parseArgs,
@@ -397,6 +400,27 @@ export const composeAppendedSystemPrompt = (config: {
     .filter((part): part is string => part !== undefined && part.length > 0)
     .join("\n\n");
 
+/**
+ * The services every Head runs with: the Driver, the rpc interaction channels,
+ * the Plugin interaction channel for the mode, the session lifecycle report,
+ * and the process's per-Session Tool grant store (RFC-04 §5).
+ */
+export const composeHeadRuntime = <E, R>(options: {
+  readonly driver: Layer.Layer<Driver, E, R>;
+  readonly lifecycle: SessionLifecycleService;
+  readonly mode: CliMode;
+  readonly sessionToolGrants: SessionToolGrantsService;
+}) =>
+  Layer.mergeAll(
+    options.driver,
+    RpcInteractionsLive,
+    options.mode === "rpc"
+      ? PluginInteractionsRpcLive.pipe(Layer.provide(RpcInteractionsLive))
+      : PluginInteractionsNullLive,
+    Layer.succeed(SessionLifecycle, options.lifecycle),
+    Layer.succeed(SessionToolGrants, options.sessionToolGrants),
+  );
+
 const runWithConfig = (
   config: CliRunConfig,
   io: CliIo,
@@ -522,16 +546,12 @@ const runWithConfig = (
       const driver = GenerationDriverDefault(currentGen, { lifecycle }).pipe(
         Layer.provide(dependencies),
       );
-      const pluginLive =
-        config.mode === "rpc"
-          ? PluginInteractionsRpcLive.pipe(Layer.provide(RpcInteractionsLive))
-          : PluginInteractionsNullLive;
-      const runtime = Layer.mergeAll(
+      const runtime = composeHeadRuntime({
         driver,
-        RpcInteractionsLive,
-        pluginLive,
-        Layer.succeed(SessionLifecycle, lifecycle),
-      );
+        lifecycle,
+        mode: config.mode,
+        sessionToolGrants: cliRuntime.sessionToolGrants,
+      });
       let head: Effect.Effect<
         HeadExitCode,
         CliRunError | HeadWriteError,
