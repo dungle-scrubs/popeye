@@ -1,264 +1,70 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "last-release-sha": "a2a4fbc81322d75f4b4e0e1141b7d0e67530871f",
+  "release-type": "node",
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": true,
+  "changelog-sections": [
+    {
+      "type": "feat",
+      "section": "Added"
+    },
+    {
+      "type": "fix",
+      "section": "Fixed"
+    },
+    {
+      "type": "perf",
+      "section": "Changed"
+    },
+    {
+      "type": "refactor",
+      "section": "Changed"
+    },
+    {
+      "type": "deps",
+      "section": "Changed"
+    },
+    {
+      "type": "docs",
+      "section": "Changed"
+    },
+    {
+      "type": "chore",
+      "section": "Changed"
+    },
+    {
+      "type": "ci",
+      "section": "Changed"
+    },
+    {
+      "type": "test",
+      "section": "Changed"
+    }
+  ],
+  "plugins": [
+    {
+      "type": "linked-versions",
+      "groupName": "popeye",
+      "components": [
+        "popeye-workspace",
+        "popeye",
+        "popeye-journal",
+        "popeye-kernel",
+        "popeye-plugins",
+        "popeye-protocol"
+      ],
+      "merge": false
+    }
+  ],
   "packages": {
     ".": {
-      "release-type": "node",
-      "changelog-path": "CHANGELOG.md",
-      "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": true,
-      "changelog-sections": [
-        {
-          "type": "feat",
-          "section": "Added"
-        },
-        {
-          "type": "fix",
-          "section": "Fixed"
-        },
-        {
-          "type": "perf",
-          "section": "Changed"
-        },
-        {
-          "type": "refactor",
-          "section": "Changed"
-        },
-        {
-          "type": "deps",
-          "section": "Changed"
-        },
-        {
-          "type": "docs",
-          "section": "Changed"
-        },
-        {
-          "type": "chore",
-          "section": "Changed"
-        },
-        {
-          "type": "ci",
-          "section": "Changed"
-        },
-        {
-          "type": "test",
-          "section": "Changed"
-        }
-      ]
+      "component": "popeye-workspace"
     },
-    "packages/cli": {
-      "release-type": "node",
-      "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": true,
-      "changelog-sections": [
-        {
-          "type": "feat",
-          "section": "Added"
-        },
-        {
-          "type": "fix",
-          "section": "Fixed"
-        },
-        {
-          "type": "perf",
-          "section": "Changed"
-        },
-        {
-          "type": "refactor",
-          "section": "Changed"
-        },
-        {
-          "type": "deps",
-          "section": "Changed"
-        },
-        {
-          "type": "docs",
-          "section": "Changed"
-        },
-        {
-          "type": "chore",
-          "section": "Changed"
-        },
-        {
-          "type": "ci",
-          "section": "Changed"
-        },
-        {
-          "type": "test",
-          "section": "Changed"
-        }
-      ]
-    },
-    "packages/journal": {
-      "release-type": "node",
-      "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": true,
-      "changelog-sections": [
-        {
-          "type": "feat",
-          "section": "Added"
-        },
-        {
-          "type": "fix",
-          "section": "Fixed"
-        },
-        {
-          "type": "perf",
-          "section": "Changed"
-        },
-        {
-          "type": "refactor",
-          "section": "Changed"
-        },
-        {
-          "type": "deps",
-          "section": "Changed"
-        },
-        {
-          "type": "docs",
-          "section": "Changed"
-        },
-        {
-          "type": "chore",
-          "section": "Changed"
-        },
-        {
-          "type": "ci",
-          "section": "Changed"
-        },
-        {
-          "type": "test",
-          "section": "Changed"
-        }
-      ]
-    },
-    "packages/kernel": {
-      "release-type": "node",
-      "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": true,
-      "changelog-sections": [
-        {
-          "type": "feat",
-          "section": "Added"
-        },
-        {
-          "type": "fix",
-          "section": "Fixed"
-        },
-        {
-          "type": "perf",
-          "section": "Changed"
-        },
-        {
-          "type": "refactor",
-          "section": "Changed"
-        },
-        {
-          "type": "deps",
-          "section": "Changed"
-        },
-        {
-          "type": "docs",
-          "section": "Changed"
-        },
-        {
-          "type": "chore",
-          "section": "Changed"
-        },
-        {
-          "type": "ci",
-          "section": "Changed"
-        },
-        {
-          "type": "test",
-          "section": "Changed"
-        }
-      ]
-    },
-    "packages/plugins": {
-      "release-type": "node",
-      "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": true,
-      "changelog-sections": [
-        {
-          "type": "feat",
-          "section": "Added"
-        },
-        {
-          "type": "fix",
-          "section": "Fixed"
-        },
-        {
-          "type": "perf",
-          "section": "Changed"
-        },
-        {
-          "type": "refactor",
-          "section": "Changed"
-        },
-        {
-          "type": "deps",
-          "section": "Changed"
-        },
-        {
-          "type": "docs",
-          "section": "Changed"
-        },
-        {
-          "type": "chore",
-          "section": "Changed"
-        },
-        {
-          "type": "ci",
-          "section": "Changed"
-        },
-        {
-          "type": "test",
-          "section": "Changed"
-        }
-      ]
-    },
-    "packages/protocol": {
-      "release-type": "node",
-      "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": true,
-      "changelog-sections": [
-        {
-          "type": "feat",
-          "section": "Added"
-        },
-        {
-          "type": "fix",
-          "section": "Fixed"
-        },
-        {
-          "type": "perf",
-          "section": "Changed"
-        },
-        {
-          "type": "refactor",
-          "section": "Changed"
-        },
-        {
-          "type": "deps",
-          "section": "Changed"
-        },
-        {
-          "type": "docs",
-          "section": "Changed"
-        },
-        {
-          "type": "chore",
-          "section": "Changed"
-        },
-        {
-          "type": "ci",
-          "section": "Changed"
-        },
-        {
-          "type": "test",
-          "section": "Changed"
-        }
-      ]
-    }
+    "packages/cli": {},
+    "packages/journal": {},
+    "packages/kernel": {},
+    "packages/plugins": {},
+    "packages/protocol": {}
   }
 }

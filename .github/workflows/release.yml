@@ -1,19 +1,37 @@
 name: Release
 
+# One publish path. A push to main runs release-please; when it creates the
+# CLI release (tag popeye-v<version>), the publish job packs every package,
+# checks the tarballs, installs them into a clean npm project, and publishes
+# with npm trusted publishing (OIDC). To recover a failed upload, dispatch this
+# workflow on the release tag itself (gh workflow run release.yml --ref
+# popeye-v<version>); it re-runs the same publish job and skips versions
+# already on the registry. The publish job refuses to run unless the commit it
+# builds is the commit the run was triggered for, so provenance names the
+# source that was built. npm trusted publishing is registered for this file
+# name, so publishing must stay in release.yml.
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release-please:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
+      cli_release_created: ${{ steps.release.outputs['packages/cli--release_created'] }}
+      cli_tag_name: ${{ steps.release.outputs['packages/cli--tag_name'] }}
     steps:
       - uses: googleapis/release-please-action@v5
         id: release
@@ -22,15 +40,19 @@ jobs:
 
   publish:
     needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+    if: >-
+      ${{ !cancelled() && (github.event_name == 'workflow_dispatch' ||
+      needs.release-please.outputs.cli_release_created == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.ref_name || needs.release-please.outputs.cli_tag_name }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
@@ -38,13 +60,20 @@ jobs:
           node-version: "24"
           cache: pnpm
 
-      - name: Update npm (OIDC requires 11.5.1+)
-        run: npm install -g npm@latest
+      - name: Check that the checkout is the commit this run attests
+        run: node scripts/release-packages.mjs source --tag "$RELEASE_TAG" --ref "$GITHUB_REF" --sha "$GITHUB_SHA"
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
 
+      - name: Pack every public package
+        run: node scripts/release-packages.mjs pack --out "$RUNNER_TEMP/packs"
+
+      - name: Check packed manifests and contents against the tag
+        run: node scripts/release-packages.mjs verify --packs "$RUNNER_TEMP/packs" --tag "$RELEASE_TAG"
+
+      - name: Install the tarballs into a clean npm project
+        run: node scripts/release-packages.mjs smoke --packs "$RUNNER_TEMP/packs"
+
       - name: Publish with OIDC provenance
-        run: pnpm -r publish --access public
-        env:
-          NPM_CONFIG_PROVENANCE: true
+        run: node scripts/release-packages.mjs publish --packs "$RUNNER_TEMP/packs" --tag "$RELEASE_TAG"

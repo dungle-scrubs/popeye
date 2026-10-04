@@ -49,7 +49,54 @@ endpoint and model names.
 ## Release versioning
 
 Lockstep: all five packages share one version. release-please tracks
-`packages/*` plus the root; the manifest holds every path. A release
-bumps all five together, even when only one changed. Do not publish
-a single package by hand except to recover a failed release; the
-recovery version becomes the next lockstep base.
+`packages/*` plus the root; the manifest holds every path. Each path
+has its own component: the root is `popeye-workspace`, the CLI is
+`popeye`, and the other packages are `popeye-journal`,
+`popeye-kernel`, `popeye-plugins`, and `popeye-protocol`. A
+`linked-versions` plugin holds all six to one version, so a release
+bumps every package together, even when only one changed.
+
+## Releasing
+
+1. release-please opens or updates the `chore: release main` pull
+   request on each push to `main`. Never open that pull request by
+   hand and never edit its body: release-please reads the body back
+   after merge to create the releases.
+2. Merging it creates one GitHub release per path. The CLI release,
+   tag `popeye-v<version>`, starts the publish job in
+   `.github/workflows/release.yml`.
+3. The publish job checks out the tag, confirms it is the commit the
+   run was started for, packs each package, checks every tarball (no
+   `workspace:` specifier, `dist/` only, entry files present, one
+   version that matches the tag), installs the tarballs into a clean
+   npm project, runs `popeye --version` and `popeye --help`, and then
+   publishes with npm trusted publishing and provenance.
+
+Run the same pack, check, and install test locally before you change
+packaging:
+
+```bash
+pnpm build
+pnpm release:check
+```
+
+If a publish fails after the release exists, run the Release
+workflow by hand (`workflow_dispatch`) on the release tag itself:
+
+```bash
+gh workflow run release.yml --ref popeye-v<version>
+```
+
+In the Actions tab, pick the tag `popeye-v<version>` under "Use
+workflow from". The run publishes the tag it was started on, runs the
+same checks, and skips versions that are already on npm. It refuses
+to publish when started on a branch, or when the checked-out commit
+is not the commit the run was started for, because npm provenance
+records the run's commit, not the checkout. A dispatch retries a
+failed upload or login; it cannot fix a defect in the tagged code,
+which needs a new release.
+
+Never run `npm publish` in a package directory: npm does not replace
+`workspace:*` specifiers, so the published manifest names
+dependencies no consumer can install. Every uninstallable version on
+npm has those specifiers unreplaced.
