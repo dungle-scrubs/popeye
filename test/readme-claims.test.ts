@@ -110,29 +110,25 @@ describe("README package names and release posture", () => {
       );
     }
 
-    // The registry warning names only the packages whose registry manifests carry `workspace:*`
-    // ranges. The Journal package has no such range, so it must not be named.
+    // Install points at npm. The uninstallable versions are named by their `workspace:*` cause,
+    // not by package; the Journal package never carried such a range, so it must not be named.
+    expect(install).toContain("npm install -g @dungle-scrubs/popeye");
     expect(install).toContain("`workspace:*`");
     expect(install).not.toContain("`@dungle-scrubs/popeye-journal`");
-    expect(install).not.toContain("The versions on the registry now do not install");
-    expect(install).toContain(
-      "four of the five current registry versions, including the CLI, do not install",
-    );
-    expect(install).toContain("Install from this repository until a fixed release ships.");
-    expect(install).toContain("[#69](https://github.com/dungle-scrubs/popeye/issues/69)");
+    expect(install).not.toContain("Install from this repository until a fixed release ships.");
+    expect(install).toContain("they are deprecated on npm");
 
-    // The dated registry warning names the release the registry lags. That release must exist in
-    // the CLI package's CHANGELOG, so the claim stays true after later version bumps.
+    // The first installable release must exist in the CLI package's CHANGELOG, so the claim stays
+    // true after later version bumps.
     const releasedVersions = [
       ...read("packages/cli/CHANGELOG.md").matchAll(/^## \[(\d+\.\d+\.\d+)\]/gm),
     ].map((match) => match[1]);
-    const lagged =
-      /As of \d{4}-\d{2}-\d{2},.* the registry lags the (\d+\.\d+\.\d+) release\./.exec(install);
+    const firstInstallable = /Versions before (\d+\.\d+\.\d+) do not install/.exec(install);
     expect(
-      lagged,
-      "Install lacks the dated 'the registry lags the <version> release.' claim",
+      firstInstallable,
+      "Install lacks the 'Versions before <version> do not install' claim",
     ).not.toBeNull();
-    expect(releasedVersions).toContain(lagged?.[1]);
+    expect(releasedVersions).toContain(firstInstallable?.[1]);
 
     // Every other version literal in Install is the pinned pnpm version.
     const rootManifest = JSON.parse(read("package.json")) as { readonly packageManager: string };
@@ -141,8 +137,8 @@ describe("README package names and release posture", () => {
     expect(versions).toContain(pnpmVersion);
     for (const version of versions) {
       expect(
-        version === pnpmVersion || version === lagged?.[1],
-        `Install names ${version}, which is neither the pinned pnpm version nor the lagged release`,
+        version === pnpmVersion || version === firstInstallable?.[1],
+        `Install names ${version}, which is neither the pinned pnpm version nor the first installable release`,
       ).toBe(true);
     }
   });
