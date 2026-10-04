@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.5](https://github.com/dungle-scrubs/popeye/compare/popeye-plugins-v0.1.4...popeye-plugins-v0.1.5) (2026-10-04)
+
+
+### Fixed
+
+* **release:** publish installable packages from one guarded release path ([#79](https://github.com/dungle-scrubs/popeye/issues/79)) ([2eaa24f](https://github.com/dungle-scrubs/popeye/commit/2eaa24f13ddeadd19d8748fed1319f4124b7bf38)), closes [#69](https://github.com/dungle-scrubs/popeye/issues/69)
+
+
+### Changed
+
+* **deps-dev:** bump effect from 3.22.1 to 3.22.2 ([#35](https://github.com/dungle-scrubs/popeye/issues/35)) ([321d3e4](https://github.com/dungle-scrubs/popeye/commit/321d3e4cbf65518cc9597599ee6c4c17f9e0cd93))
+
 ## [0.1.4](https://github.com/dungle-scrubs/popeye/compare/popeye-plugins-v0.1.3...popeye-plugins-v0.1.4) (2026-09-27)
 
 
