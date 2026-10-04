@@ -240,6 +240,24 @@ describe("README Delegation", () => {
   });
 });
 
+describe("README Agent session Turns", () => {
+  // Issue #88: Turns the Kernel opens carry the Agent persona and model; the gap note is gone.
+  test("states that every Turn of an Agent session carries its persona and model", () => {
+    const agents = flat(section(readme, "### Agent definitions"));
+    expect(agents).not.toContain("run with the process model and no persona");
+    expect(agents).not.toContain("Turns the Kernel opens on its own");
+    expect(agents).toContain(
+      "Every Turn the Session runs carries the body as appended system prompt and uses that model",
+    );
+    expect(agents).toContain("a Goal continuation, a `resume-goal` or Goal restart");
+    expect(agents).toContain("a `steer` that becomes a Follow-up");
+    // A delegated child does not inherit the head's system-prompt flags (Delegation section).
+    expect(agents).toContain(
+      "Within a run, every Turn of the head Session carries the agent body, `--append-system-prompt`, `--system-prompt`, and `--effort`",
+    );
+  });
+});
+
 describe("guide accuracy", () => {
   test("the conformance guide names the Vitest peer range the packages declare", () => {
     const guide = flat(read("docs/conformance-suites.md"));

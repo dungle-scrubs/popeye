@@ -18,7 +18,8 @@
  * policy/fairness (RpcDispatcher owns FIFO caps) or for wire error
  * mapping and decode routing (RpcHead owns those).
  * It also binds an rpc Agent Session (RFC-04 §4, §7): the Tool filter in SessionToolGrants
- * and the persona and model every prompt frame for that Session carries; create and fork
+ * and the persona and model, bound as the Session's Turn options in the Kernel so every Turn
+ * it opens carries them (issue 88); create and fork
  * bind through the Driver's bind option before the Session can run, resume binds before
  * recovery, fork copies the binding, and close drops it.
  */
@@ -27,14 +28,13 @@ import type { EntryId, SessionId } from "@dungle-scrubs/popeye-journal";
 import { JournalError, JournalNotFound } from "@dungle-scrubs/popeye-journal";
 import type { InteractionRequest, InteractionResponse } from "@dungle-scrubs/popeye-protocol";
 import { snapshotView } from "@dungle-scrubs/popeye-protocol";
-import { Effect, Exit, Fiber, Option, Predicate, Ref, Stream } from "effect";
+import { Effect, Exit, Fiber, Option, Predicate, Stream } from "effect";
 import {
   AgentSessionError,
   type AgentSessionPlan,
   type AgentSessionResolver,
-  type AgentTurnOptions,
 } from "../agents/session-agent.js";
-import { type Driver, SessionLifecycle } from "../compose.js";
+import { type Driver, SessionLifecycle, type SessionTurnOptions } from "../compose.js";
 import type { ToolGrantFilter } from "../tools/grants.js";
 import { SessionToolGrants, type SessionToolGrantsService } from "../tools/session-grants.js";
 import type { HeadWriteError } from "./head-wire.js";
@@ -200,21 +200,20 @@ export const makeRpcSessionBridge = (options: {
   const interactiveHeads = new Map<string, RpcInteractiveHead>();
   const progressSubscriptions = new Map<string, Fiber.RuntimeFiber<void, HeadWriteError>>();
 
-  // RFC-04 §4: the persona and model each Agent Session's prompt frames carry. A Ref, not a
-  // plain Map like `attached`: close is a control frame and runs outside the Session queue.
-  const agentTurnOptions = Ref.unsafeMake<ReadonlyMap<string, AgentTurnOptions>>(new Map());
-
-  const bindTurnOptions = (sessionId: string, options: AgentTurnOptions): Effect.Effect<void> =>
+  const bindTurnOptions = (
+    sessionId: SessionId,
+    options: SessionTurnOptions,
+  ): Effect.Effect<void> =>
     Object.keys(options).length === 0
       ? Effect.void
-      : Ref.update(agentTurnOptions, (current) => new Map(current).set(sessionId, options));
+      : driver.bindSessionTurnOptions(sessionId, options);
 
   /** Installs an Agent binding; uninterruptible, so no Session holds half of one. */
   const bindAgentSession = (
     sessionId: SessionId,
     grants: Option.Option<SessionToolGrantsService>,
     toolFilters: ReadonlyArray<ToolGrantFilter>,
-    turnOptions: AgentTurnOptions | undefined,
+    turnOptions: SessionTurnOptions | undefined,
   ): Effect.Effect<void> =>
     Effect.uninterruptible(
       Effect.all(
@@ -233,14 +232,7 @@ export const makeRpcSessionBridge = (options: {
   const releaseAgentSession = (sessionId: string): Effect.Effect<void> =>
     releaseSessionToolGrants(sessionId).pipe(
       Effect.zipRight(
-        Ref.update(agentTurnOptions, (current) => {
-          if (!current.has(sessionId)) {
-            return current;
-          }
-          const next = new Map(current);
-          next.delete(sessionId);
-          return next;
-        }),
+        Effect.suspend(() => driver.releaseSessionTurnOptions(sessionId as unknown as SessionId)),
       ),
     );
 
@@ -315,7 +307,7 @@ export const makeRpcSessionBridge = (options: {
       const sessionId = sessionIdText as unknown as SessionId;
       const { grants, plan } = yield* planAgentSession(agent, "resume");
       const held = Option.isSome(grants) ? yield* grants.value.filtersFor(sessionId) : [];
-      if (held.length > 0 || (yield* Ref.get(agentTurnOptions)).has(sessionIdText)) {
+      if (held.length > 0 || (yield* driver.sessionTurnOptions(sessionId)) !== undefined) {
         return yield* new AgentSessionError({
           agent,
           message: `Session ${sessionIdText} already holds an Agent binding in this process: close it, then resume it with agent ${JSON.stringify(agent)}.`,
@@ -341,7 +333,7 @@ export const makeRpcSessionBridge = (options: {
         ),
       );
       const filtersNow = Option.isSome(grants) ? yield* grants.value.filtersFor(sessionId) : [];
-      const turnOptionsNow = (yield* Ref.get(agentTurnOptions)).get(sessionIdText);
+      const turnOptionsNow = yield* driver.sessionTurnOptions(sessionId);
       const intact =
         (plan.toolFilter === undefined || filtersNow.includes(plan.toolFilter)) &&
         (Object.keys(plan.turnOptions).length === 0 || turnOptionsNow === plan.turnOptions);
@@ -511,7 +503,7 @@ export const makeRpcSessionBridge = (options: {
           const parentFilters = Option.isSome(grants)
             ? yield* grants.value.filtersFor(parentId)
             : [];
-          const parentTurnOptions = (yield* Ref.get(agentTurnOptions)).get(parentIdText);
+          const parentTurnOptions = yield* driver.sessionTurnOptions(parentId);
           const snapshot =
             parentFilters.length === 0 && parentTurnOptions === undefined
               ? yield* driver.fork(parentId, fromEntryId, command.expectedRevision)
@@ -614,30 +606,29 @@ export const makeRpcSessionBridge = (options: {
         );
       }
       if (command._tag === "prompt") {
-        return Ref.get(agentTurnOptions).pipe(
-          Effect.flatMap((bound) =>
-            driver.prompt(
-              command.sessionId as unknown as SessionId,
-              command.content as string,
-              {
-                // RFC-04 §4: an Agent Session's persona and model ride every prompt frame.
-                ...bound.get(command.sessionId as string),
-                ...(command.deliveryMode === undefined
-                  ? {}
-                  : { deliveryMode: command.deliveryMode as "steer" | "followUp" }),
-                ...(command.expectedRevision === undefined
-                  ? {}
-                  : { expectedRevision: command.expectedRevision }),
-              },
-              admission.admitted,
+        return driver
+          .prompt(
+            command.sessionId as unknown as SessionId,
+            command.content as string,
+            {
+              // RFC-04 §4, issue 88: the persona and model are the Session's Turn options in the
+              // Kernel; the frame carries only delivery.
+              ...(command.deliveryMode === undefined
+                ? {}
+                : { deliveryMode: command.deliveryMode as "steer" | "followUp" }),
+              ...(command.expectedRevision === undefined
+                ? {}
+                : { expectedRevision: command.expectedRevision }),
+            },
+            admission.admitted,
+          )
+          .pipe(
+            Effect.ensuring(admission.released),
+            Effect.zipRight(driver.getSnapshot(command.sessionId as unknown as SessionId)),
+            Effect.flatMap((snapshot) =>
+              writeSnapshot(command.id, snapshot, attached.has(command.sessionId as string)),
             ),
-          ),
-          Effect.ensuring(admission.released),
-          Effect.zipRight(driver.getSnapshot(command.sessionId as unknown as SessionId)),
-          Effect.flatMap((snapshot) =>
-            writeSnapshot(command.id, snapshot, attached.has(command.sessionId as string)),
-          ),
-        );
+          );
       }
 
       if (command._tag === "resume") {

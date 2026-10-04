@@ -82,7 +82,7 @@ const scriptedProvider = (items: ReadonlyArray<AssistantItem>): ProviderService 
   streamAssistant: () => Stream.fromIterable(items),
 });
 
-const failSecondBranchRead = () => {
+const failBranchRead = (readNumber: number) => {
   const backing = createMemoryJournalBacking();
   const base = JournalMemory(backing);
   return Layer.effect(
@@ -95,7 +95,7 @@ const failSecondBranchRead = () => {
         readBranch: (sessionId) =>
           Ref.updateAndGet(reads, (count) => count + 1).pipe(
             Effect.flatMap((count) =>
-              count === 2
+              count === readNumber
                 ? Effect.fail(
                     new JournalError({
                       corruptionClass: "io_failure",
@@ -190,11 +190,6 @@ const pauseBranchRead = (
     }),
   ).pipe(Layer.provide(base));
 };
-
-const pauseSecondBranchRead = (
-  entered: Deferred.Deferred<void>,
-  release: Deferred.Deferred<void>,
-) => pauseBranchRead(2, entered, release);
 
 const pauseAssistantAppend = (
   entered: Deferred.Deferred<void>,
@@ -918,7 +913,7 @@ test("abort during looped ASSEMBLING does not reuse text from the completed roun
       };
     }).pipe(
       Effect.provide(
-        testLayer(provider, pauseBranchRead(3, loopAssembling, releaseLoopAssembling)),
+        testLayer(provider, pauseBranchRead(4, loopAssembling, releaseLoopAssembling)),
       ),
     ),
   );
@@ -2601,7 +2596,7 @@ test("a journal failure settles progress to IDLE, notifies subscribers, and leav
       yield* Fiber.interrupt(progress);
       const nextSubscriber = yield* Stream.runHead(orchestrator.subscribeProgress(session.id));
       return { error, nextSubscriber };
-    }).pipe(Effect.provide(testLayer(scriptedProvider([]), failSecondBranchRead()))),
+    }).pipe(Effect.provide(testLayer(scriptedProvider([]), failBranchRead(3)))),
   );
 
   expect(result.error).toMatchObject({
@@ -2712,7 +2707,7 @@ test("abort during ASSEMBLING settles an empty assistant entry before the provid
               return Stream.empty;
             },
           },
-          pauseSecondBranchRead(entered, release),
+          pauseBranchRead(3, entered, release),
         ),
       ),
     ),
@@ -4192,7 +4187,6 @@ test("openTurn runs onAdmitted once the Kernel has accepted the prompt, before t
           "Initial",
           undefined,
           {},
-          undefined,
           admitted("registered", initialAdmitted),
         ),
       );
@@ -4206,7 +4200,6 @@ test("openTurn runs onAdmitted once the Kernel has accepted the prompt, before t
           "Steer mode",
           undefined,
           { deliveryMode: "steer" },
-          undefined,
           admitted("steering", steerAdmitted),
         ),
       );
@@ -4217,7 +4210,6 @@ test("openTurn runs onAdmitted once the Kernel has accepted the prompt, before t
           "Follow-up",
           undefined,
           {},
-          undefined,
           admitted("followUp", followUpAdmitted),
         ),
       );
@@ -4256,7 +4248,6 @@ test("openTurn does not run onAdmitted when the Kernel rejects the prompt", asyn
           "Overflow",
           undefined,
           { deliveryMode: "steer" },
-          undefined,
           Effect.sync(() => {
             admitted += 1;
           }),

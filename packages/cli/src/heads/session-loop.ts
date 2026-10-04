@@ -11,7 +11,8 @@
  * boundary; it did not own the lifecycle, so a fix to back-pressure had to be validated in
  * two places.
  * This module owns the lifecycle and exposes one seam: heads supply Progress rendering,
- * per-turn rendering with exit policy, and optional turn options. Turn failures propagate
+ * per-turn rendering with exit policy, and optional turn options, whose Session fields are bound
+ * for the loop's lifetime and whose delivery fields go with each prompt. Turn failures propagate
  * to the caller's boundary; per-turn defects are the boundary's shape, not the loop's.
  * Not responsible for wire encoding (heads own their line formats) or for
  * Protocol framing (rpc-transport owns LF/1MB) or for boundary envelopes (heads own theirs).
@@ -68,6 +69,11 @@ export interface SessionLoopOptions {
   readonly onTurnSettled: HeadTurnHandler;
   readonly prompts: ReadonlyArray<string>;
   readonly sessionId?: SessionId;
+  /**
+   * Split at loop start (issue 88): the Session fields are bound as the Session's Turn options
+   * for the loop's lifetime, so Goal continuations and a sole /goal resume carry them too;
+   * deliveryMode and expectedRevision go with each prompt.
+   */
   readonly turnOptions?: TurnOptions;
 }
 
@@ -88,10 +94,26 @@ export const runSessionLoop = (
     const session = yield* options.sessionId === undefined
       ? driver.createSession()
       : driver.resumeSession(options.sessionId);
-    if (options.onSession !== undefined) {
-      yield* options.onSession(session.id);
-    }
-    const exitCode = yield* runPrompts(driver, session, options);
+    const { deliveryMode, expectedRevision, ...sessionTurnOptions } = options.turnOptions ?? {};
+    const delivery: TurnOptions = {
+      ...(deliveryMode === undefined ? {} : { deliveryMode }),
+      ...(expectedRevision === undefined ? {} : { expectedRevision }),
+    };
+    const loop = Effect.gen(function* () {
+      if (options.onSession !== undefined) {
+        yield* options.onSession(session.id);
+      }
+      return yield* runPrompts(driver, session, options, delivery);
+    });
+    // Issue 88: bind, use, and release as one region, so no exit (an interruption as the bind
+    // lands included) leaves the Session bound.
+    const exitCode = yield* Object.keys(sessionTurnOptions).length === 0
+      ? loop
+      : Effect.acquireUseRelease(
+          driver.bindSessionTurnOptions(session.id, sessionTurnOptions),
+          () => loop,
+          () => driver.releaseSessionTurnOptions(session.id),
+        );
     const lifecycle = yield* Effect.serviceOption(SessionLifecycle);
     if (Option.isSome(lifecycle)) {
       yield* lifecycle.value.headExit(session.id, driver.listSessions());
@@ -103,6 +125,7 @@ const runPrompts = (
   driver: Driver["Type"],
   session: { readonly id: SessionId },
   options: SessionLoopOptions,
+  delivery: TurnOptions,
 ): Effect.Effect<HeadExitCode, unknown> =>
   Effect.gen(function* () {
     let entryCountBefore = (yield* driver.getSnapshot(session.id)).entries.length;
@@ -215,9 +238,7 @@ const runPrompts = (
             );
 
             yield* Deferred.await(subscriptionReady);
-            const result = yield* options.turnOptions === undefined
-              ? driver.prompt(session.id, prompt)
-              : driver.prompt(session.id, prompt, options.turnOptions);
+            const result = yield* driver.prompt(session.id, prompt, delivery);
             const snapshot = yield* driver.getSnapshot(session.id);
             const startedTurns = snapshot.entries.slice(entryCountBefore).filter((entry) => {
               if (entry.kind === "goal_continuation") return true;
@@ -246,9 +267,7 @@ const runPrompts = (
         stopReason = settled.stopReason;
         snapshot = settled.snapshot;
       } else {
-        const result = yield* options.turnOptions === undefined
-          ? driver.prompt(session.id, prompt)
-          : driver.prompt(session.id, prompt, options.turnOptions);
+        const result = yield* driver.prompt(session.id, prompt, delivery);
         snapshot = yield* driver.getSnapshot(session.id);
         stopReason = result.stopReason;
       }

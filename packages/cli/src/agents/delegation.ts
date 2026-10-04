@@ -1,5 +1,5 @@
 /**
- * Owns Delegation: create, narrow, prompt, read, and release a child Session in-process.
+ * Owns Delegation: create, narrow, bind, prompt, read, and release a child Session in-process.
  * A new Session avoids the parent's occupied Mailbox (RFC-04 section 6 step 2).
  * Not responsible for the Tool declaration (features/delegate.ts), discovery (loader.ts),
  * or filter composition (tools/grants.ts).
@@ -13,9 +13,9 @@ import { Context, Data, Effect, Layer, Option, Ref, Schema } from "effect";
 import {
   Driver,
   type DriverService,
+  type SessionTurnOptions,
   type ThinkingLevel,
   type ToolRegistryService,
-  type TurnOptions,
 } from "../compose.js";
 import { type CliModelSource, unknownAgentMessage } from "../entry/config.js";
 import { type DelegationPort, makeDelegatePlugin } from "../features/delegate.js";
@@ -152,6 +152,7 @@ export const makeDelegation = (options: DelegationOptions): Effect.Effect<Delega
                   Effect.logWarning("Delegated session close failed", cause),
                 ),
                 Effect.zipRight(services.sessionToolGrants.release(child.id)),
+                Effect.zipRight(services.driver.releaseSessionTurnOptions(child.id)),
                 Effect.ensuring(
                   Ref.update(depths, (current) => {
                     const next = new Map(current);
@@ -191,7 +192,7 @@ export const makeDelegation = (options: DelegationOptions): Effect.Effect<Delega
           const appendSystemPrompt = [definition.body, cwdLine]
             .filter((part): part is string => part !== undefined && part.length > 0)
             .join("\n\n");
-          const childOptions: TurnOptions = {
+          const childOptions: SessionTurnOptions = {
             ...(appendSystemPrompt === "" ? {} : { appendSystemPrompt }),
             ...(options.modelSource === "flag" || !definition.model
               ? {}
@@ -200,7 +201,8 @@ export const makeDelegation = (options: DelegationOptions): Effect.Effect<Delega
               ? {}
               : { thinkingLevel: options.thinkingLevel }),
           };
-          const turn = yield* services.driver.prompt(child.id, `Task: ${task}`, childOptions).pipe(
+          yield* services.driver.bindSessionTurnOptions(child.id, childOptions);
+          const turn = yield* services.driver.prompt(child.id, `Task: ${task}`).pipe(
             Effect.mapError(
               (cause) =>
                 new DelegationFailure({

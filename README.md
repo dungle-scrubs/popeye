@@ -209,18 +209,21 @@ refuses `--agent`; an RPC client names the Agent per Session with the `agent` fi
 `--agent` is a startup input, like `--system-prompt` and `--append-system-prompt`. Nothing about the
 agent is journaled with the Session: resuming a Session that ran as an agent without passing
 `--agent` again produces an unagented Session, with no warning. Pass `--agent` on resume to continue
-with the same persona.
+with the same persona. Within a run, every Turn of the head Session carries the agent body,
+`--append-system-prompt`, `--system-prompt`, and `--effort`, including a Goal continuation and a
+sole `/goal resume` restart.
 
 An RPC client starts an Agent session with `{"_tag":"create","agent":"<name>"}`. Each such `create`
 reads both directories again, so an edited definition applies to the next one. The name, `model`,
 body, and `tools` list resolve exactly as for `--agent`, but for that Session only: other Sessions
 in the process keep the process model and Tools. `--model` on the process beats the agent `model`,
-which beats `POPEYE_MODEL`, and a later `set-model` for the Session beats all three. Every `prompt`
-frame for the Session carries the body as appended system prompt. Turns the Kernel opens on its own
-(a goal continuation, a `steer` that becomes a Follow-up, or a Goal restart) keep the Agent's Tools
-but run with the process model and no persona. An unknown name, a definition load failure, an
-unresolvable Agent model, or a `tools` list with no granted name fails the `create` with error code
-`agent_error` and creates no Session; `details.reason` names the cause (`agent_model_unresolvable`
+which beats `POPEYE_MODEL`, and a later `set-model` for the Session beats all three. Every Turn
+the Session runs carries the body as appended system prompt and uses that model: a `prompt`, a
+Goal continuation, a `resume-goal` or Goal restart, and a `steer` that becomes a Follow-up alike.
+Compaction requests inside those Turns still use the process model. An unknown name, a definition
+load failure, an unresolvable Agent model, or a `tools` list with no granted name fails the `create`
+with error code `agent_error` and creates no Session; `details.reason` names the cause
+(`agent_model_unresolvable`
 for an unresolvable Agent model), and for `unknown_agent`, `details.available` lists the names.
 Names outside the granted Tools are logged on stderr, and the Session runs with the rest. A `fork`
 of an Agent session runs as the same Agent, even when the fork fails partway and leaves the new

@@ -23,6 +23,12 @@
  * and thinking_change on the current Branch win independently. Branching to an Entry
  * before a change restores the older value. A Branch command waits behind a running
  * Turn, but expectedRevision can reject a stale queued command via SessionView.
+ *
+ * A host binds a Session's own Turn options with bindSessionTurnOptions (issue 88);
+ * every Turn the Session opens resolves them: model is the newest model_change, else the request,
+ * else the binding;
+ * thinkingLevel is the request, else the binding, else the newest thinking_change; every other
+ * field is the request, else the binding. The Driver never drops a binding: the host releases it.
  */
 
 import {
@@ -90,6 +96,7 @@ import {
 import type { ToolRegistry } from "./tool.js";
 import {
   type AbortTurnResult,
+  type SessionTurnOptions,
   type TurnFailure,
   type TurnOptions,
   TurnOrchestrator,
@@ -179,6 +186,20 @@ export interface DriverService {
     expectedRevision?: number,
   ) => Effect.Effect<unknown, InvokeCommandError | MailboxFailure>;
   readonly listSessions: () => Effect.Effect<ReadonlyArray<SessionSummary>, JournalFailure>;
+  /**
+   * Binds the Session's own Turn options, replacing any earlier binding;
+   * invalid options are a defect (issue 88).
+   */
+  readonly bindSessionTurnOptions: (
+    sessionId: SessionId,
+    options: SessionTurnOptions,
+  ) => Effect.Effect<void>;
+  /** Drops the Session's binding; a no-op when it has none. */
+  readonly releaseSessionTurnOptions: (sessionId: SessionId) => Effect.Effect<void>;
+  /** The bound object itself, or undefined. */
+  readonly sessionTurnOptions: (
+    sessionId: SessionId,
+  ) => Effect.Effect<SessionTurnOptions | undefined>;
   readonly prompt: (
     sessionId: SessionId,
     content: string,
@@ -574,30 +595,12 @@ const makeDriverService = (
           })
           .pipe(Effect.map((result) => result.value)),
       listSessions: () => sessions.list(),
+      bindSessionTurnOptions: (sessionId, options) =>
+        orchestrator.bindSessionTurnOptions(sessionId, options),
+      releaseSessionTurnOptions: (sessionId) => orchestrator.releaseSessionTurnOptions(sessionId),
+      sessionTurnOptions: (sessionId) => orchestrator.sessionTurnOptions(sessionId),
       prompt: (sessionId, content, options = {}, onAdmitted = Effect.void) =>
-        orchestrator.openTurn(
-          sessionId,
-          content,
-          undefined,
-          options,
-          (turnOptions) =>
-            Effect.gen(function* () {
-              const entries = yield* store
-                .getBranch(sessionId)
-                .pipe(Effect.catchAll(() => Effect.succeed([] as ReadonlyArray<Entry>)));
-              const settings = yield* deriveViewSettings(entries).pipe(
-                Effect.catchAll(() =>
-                  Effect.succeed({} as import("./session-view.js").SessionSettings),
-                ),
-              );
-              return {
-                ...turnOptions,
-                ...(settings.model === undefined ? {} : { model: settings.model }),
-                thinkingLevel: turnOptions.thinkingLevel ?? settings.thinkingLevel,
-              };
-            }),
-          onAdmitted,
-        ),
+        orchestrator.openTurn(sessionId, content, undefined, options, onAdmitted),
       resumeSession: (sessionId) =>
         orchestrator.endClose(sessionId).pipe(
           Effect.zipRight(sessions.resume(sessionId)),
