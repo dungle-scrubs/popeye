@@ -60,7 +60,7 @@ import {
   type HeadWriter,
   makeWritableLogfmtLogger,
   runHeadBoundary,
-  type SnapshotAuditFields,
+  type SnapshotAuditSource,
   stderrHeadWriter,
   stdoutHeadWriter,
 } from "./head-wire.js";
@@ -87,7 +87,7 @@ export interface RpcHeadOptions {
   readonly input: Readable;
   readonly loggerOutput?: Writable;
   readonly resumeSessionId?: SessionId;
-  readonly snapshotAudit?: SnapshotAuditFields;
+  readonly snapshotAudit?: SnapshotAuditSource;
   readonly writer?: HeadWriter;
 }
 

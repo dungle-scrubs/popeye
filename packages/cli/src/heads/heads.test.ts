@@ -270,3 +270,53 @@ test("golden transcripts stay stable across scripted plain, tool, error, and abo
   expect(first).toBe(second);
   expect(first).toBe(golden);
 });
+
+// Issue #93: a Snapshot audit is either fixed fields or an Effect read at each Snapshot write.
+
+const auditFor = (generationId: string) => ({
+  capabilityGrants: [],
+  loadedGeneration: { id: generationId, plugins: ["audit-fixture"] },
+});
+
+const jsonSnapshotGenerations = (output: string) =>
+  output
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .filter((line) => "loadedGeneration" in line)
+    .map((line) => (line.loadedGeneration as { readonly id: string }).id);
+
+test("json head writes a fixed Snapshot audit on every Snapshot, as before #93", async () => {
+  const capture = captureWriter();
+  const exitCode = await Effect.runPromise(
+    runJsonHead({
+      prompts: [prompts.plain, prompts.plain],
+      snapshotAudit: auditFor("fixed-generation"),
+      writer: capture.writer,
+    }).pipe(Effect.provide(scriptedDriverLayer())),
+  );
+
+  expect(exitCode).toBe(HEAD_EXIT_CODES.done);
+  expect(jsonSnapshotGenerations(capture.output())).toEqual([
+    "fixed-generation",
+    "fixed-generation",
+  ]);
+});
+
+test("json head reads an Effect Snapshot audit again at each Snapshot write", async () => {
+  const capture = captureWriter();
+  let reads = 0;
+  const exitCode = await Effect.runPromise(
+    runJsonHead({
+      prompts: [prompts.plain, prompts.plain],
+      snapshotAudit: Effect.sync(() => {
+        reads += 1;
+        return auditFor(`generation-${reads}`);
+      }),
+      writer: capture.writer,
+    }).pipe(Effect.provide(scriptedDriverLayer())),
+  );
+
+  expect(exitCode).toBe(HEAD_EXIT_CODES.done);
+  expect(jsonSnapshotGenerations(capture.output())).toEqual(["generation-1", "generation-2"]);
+});

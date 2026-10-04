@@ -94,10 +94,12 @@ export type {
   TrustResolver,
 } from "./generation-runtime.js";
 export {
+  DEFAULT_DRAIN_TIMEOUT_MILLIS,
   DEFAULT_IMPORT_TIMEOUT_MILLIS,
   DEFAULT_TRUST_RESOLVER_TIMEOUT_MILLIS,
   GenerationBusyError,
   GenerationDrainTimeoutError,
+  type GenerationRuntimeOptions,
   loadGeneration,
   makeGenerationRuntime,
   makeGenerationRuntimeWithLoader,

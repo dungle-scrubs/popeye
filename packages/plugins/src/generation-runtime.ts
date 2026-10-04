@@ -1,6 +1,7 @@
 /**
  * Owns GenerationRuntime single owner for checkout/drain/busy/view/close/reload.
  * It exists because D-003 needs one Ref counting the lease; CLI and future TUI reuse without copy.
+ * Tool calls lease the Generation that provided their Tool through checkoutGeneration. A reload prepares the fresh generation (prepareSwap), publishes it in one synchronous step, and hands the old generation to a closer fiber that alone closes it after its drain; the caller waits for that closer for at most drainTimeoutMillis, then returns GenerationDrainTimeoutError (#93).
  * Why this module: the former makePluginRuntime was the single owner but CLI duplicated routing (pendingOlds, isReloading).
  * This module owns the ONE routing Ref<{inFlight,drain}> and ONE isReloading flag; CLI becomes DiscoveryAdapter -> config only.
  * It consumes PluginDiscovery (discovery.ts) as its private seam for phase1/2 source enumeration
@@ -15,7 +16,21 @@
 
 import { randomUUID } from "node:crypto";
 
-import { Clock, Context, Data, Deferred, Effect, Exit, Layer, Ref, Scope } from "effect";
+import {
+  Clock,
+  Context,
+  Data,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  MutableRef,
+  Option,
+  Ref,
+  Scope,
+} from "effect";
 
 import { type CapabilityGrants, createCapabilityGrants } from "./capability.js";
 import type { PluginDiscoveryConfig } from "./discovery.js";
@@ -48,6 +63,8 @@ export type GenerationLoadError =
   | PluginLoadError
   | TrustResolverTimeoutError
   | TrustStoreError;
+
+export const DEFAULT_DRAIN_TIMEOUT_MILLIS = 5_000;
 
 export const DEFAULT_TRUST_RESOLVER_TIMEOUT_MILLIS = 300_000;
 
@@ -90,6 +107,23 @@ export interface PluginRuntimeDebugInfo {
 
 export interface GenerationLease {
   readonly generation: PluginGeneration;
+  readonly holder: string;
+}
+
+export interface GenerationRuntimeOptions<E = GenerationLoadError> {
+  /** How long a reload waits for the old generation's leases. Default DEFAULT_DRAIN_TIMEOUT_MILLIS. */
+  readonly drainTimeoutMillis?: number;
+  /**
+   * Runs once after a generation's Scope closes: a replaced generation after its drain, a fresh
+   * generation discarded before it was published, and the current generation in close.
+   */
+  readonly onGenerationClosed?: (generation: PluginGeneration) => Effect.Effect<void>;
+  /**
+   * Runs after a reload loads `fresh` and before routing changes; `fresh` is not observable
+   * until it returns. A failure, defect, or interruption here closes `fresh` and ends the
+   * reload; the current generation keeps serving.
+   */
+  readonly prepareSwap?: (fresh: PluginGeneration) => Effect.Effect<void, E>;
 }
 
 export class GenerationBusyError extends Data.TaggedError("GenerationBusyError")<{
@@ -108,6 +142,20 @@ export class GenerationDrainTimeoutError extends Data.TaggedError("GenerationDra
 export interface GenerationRuntime<E = GenerationLoadError, R = TrustStore> {
   readonly busy: Effect.Effect<boolean>;
   readonly checkout: Effect.Effect<GenerationLease, never, Scope.Scope>;
+  /**
+   * Leases the generation with this id for the enclosing Scope while it admits leases: the
+   * current generation, or a replaced one whose leases are still running. None when it is
+   * unknown, draining to zero, finalizing, closing with the runtime, or closed.
+   */
+  readonly checkoutGeneration: (
+    generationId: string,
+    holder: string,
+  ) => Effect.Effect<Option.Option<GenerationLease>, never, Scope.Scope>;
+  /**
+   * The current generation, read synchronously for plain-TypeScript readers. It changes in the
+   * same step as `currentGeneration`.
+   */
+  readonly unsafeCurrentGeneration: () => PluginGeneration;
   readonly close: Effect.Effect<void>;
   readonly currentGeneration: Effect.Effect<PluginGeneration>;
   readonly debugInfo: Effect.Effect<PluginRuntimeDebugInfo>;
@@ -150,9 +198,19 @@ interface GenerationRuntimeInternal extends PluginGeneration {
 }
 
 interface GenerationRoutingState {
+  /** False once the generation stops admitting id-specific leases (drained to zero, or closing). */
+  readonly admitting: boolean;
   readonly drain: Deferred.Deferred<void> | null;
+  /** One label per lease; holders.length === inFlight. */
+  readonly holders: ReadonlyArray<string>;
   readonly inFlight: number;
 }
+const initialRoutingState: GenerationRoutingState = {
+  admitting: true,
+  drain: null,
+  holders: [],
+  inFlight: 0,
+};
 
 interface RoutableGeneration extends GenerationRuntimeInternal {
   readonly routing: Ref.Ref<GenerationRoutingState>;
@@ -291,7 +349,7 @@ const makeRoutable = (generation: GenerationRuntimeInternal): Effect.Effect<Rout
   Effect.gen(function* () {
     return {
       ...generation,
-      routing: yield* Ref.make<GenerationRoutingState>({ drain: null, inFlight: 0 }),
+      routing: yield* Ref.make<GenerationRoutingState>(initialRoutingState),
     };
   });
 
@@ -311,21 +369,63 @@ const pluginChanges = (
 const makeRuntimeInternal = <E, R>(
   load: () => Effect.Effect<RoutableGeneration, E, R>,
   diagnosticSink: ((d: GenerationSwapDiagnostic) => Effect.Effect<void>) | undefined,
+  options: GenerationRuntimeOptions<E> = {},
 ): Effect.Effect<GenerationRuntime<E, R>, E, R> =>
   Effect.gen(function* () {
     const initial = yield* load();
-    const current = yield* Ref.make(initial);
+    const drainTimeoutMillis = options.drainTimeoutMillis ?? DEFAULT_DRAIN_TIMEOUT_MILLIS;
+    const prepareSwap = options.prepareSwap ?? (() => Effect.void);
+    const onGenerationClosed = options.onGenerationClosed ?? (() => Effect.void);
+    const current = MutableRef.make(initial);
+    const readCurrent: Effect.Effect<RoutableGeneration> = Effect.sync(() =>
+      MutableRef.get(current),
+    );
+    const open = yield* Ref.make<ReadonlyMap<string, RoutableGeneration>>(
+      new Map([[initial.id, initial]]),
+    );
+    const closers = yield* Ref.make<
+      ReadonlyMap<string, Fiber.RuntimeFiber<GenerationSwapDiagnostic>>
+    >(new Map());
+    const withEntry =
+      <V>(key: string, value: V) =>
+      (map: ReadonlyMap<string, V>): ReadonlyMap<string, V> =>
+        new Map([...map, [key, value]]);
+    const withoutKey =
+      <V>(key: string) =>
+      (map: ReadonlyMap<string, V>): ReadonlyMap<string, V> => {
+        const next = new Map(map);
+        next.delete(key);
+        return next;
+      };
     const isReloading = yield* Ref.make(false);
     const reloadMutex = yield* Effect.makeSemaphore(1);
     const routeMutex = yield* Effect.makeSemaphore(1);
     const generationDiagnosticSink =
       diagnosticSink ?? ((d: GenerationSwapDiagnostic) => Effect.logInfo(JSON.stringify(d)));
 
-    const settle = (generation: RoutableGeneration): Effect.Effect<void> =>
+    const acquire = (generation: RoutableGeneration, holder: string) =>
+      Ref.update(generation.routing, (state) => ({
+        ...state,
+        holders: [...state.holders, holder],
+        inFlight: state.inFlight + 1,
+      }));
+
+    const settle = (generation: RoutableGeneration, holder: string): Effect.Effect<void> =>
       routeMutex.withPermits(1)(
         Ref.modify(generation.routing, (state) => {
           const remaining = state.inFlight - 1;
-          return [remaining === 0 ? state.drain : null, { ...state, inFlight: remaining }] as const;
+          const index = state.holders.indexOf(holder);
+          const holders = state.holders.filter((_, i) => i !== index);
+          const drained = remaining === 0 && state.drain !== null;
+          return [
+            drained ? state.drain : null,
+            {
+              ...state,
+              admitting: drained ? false : state.admitting,
+              holders,
+              inFlight: remaining,
+            },
+          ] as const;
         }).pipe(
           Effect.flatMap((drain) =>
             drain === null ? Effect.void : Deferred.succeed(drain, undefined),
@@ -337,16 +437,34 @@ const makeRuntimeInternal = <E, R>(
     const checkout: GenerationRuntime<E, R>["checkout"] = Effect.acquireRelease(
       routeMutex.withPermits(1)(
         Effect.gen(function* () {
-          const selected = yield* Ref.get(current);
-          yield* Ref.update(selected.routing, (state) => ({
-            ...state,
-            inFlight: state.inFlight + 1,
-          }));
-          return { generation: selected } satisfies GenerationLease;
+          const selected = yield* readCurrent;
+          yield* acquire(selected, "checkout");
+          return { generation: selected, holder: "checkout" };
         }),
       ),
-      (lease) => settle(lease.generation as RoutableGeneration),
+      (lease) => settle(lease.generation, lease.holder),
     );
+
+    const checkoutGeneration: GenerationRuntime<E, R>["checkoutGeneration"] = (
+      generationId,
+      holder,
+    ) =>
+      Effect.acquireRelease(
+        routeMutex.withPermits(1)(
+          Effect.gen(function* () {
+            const generation = (yield* Ref.get(open)).get(generationId);
+            if (generation === undefined || !(yield* Ref.get(generation.routing)).admitting) {
+              return Option.none();
+            }
+            yield* acquire(generation, holder);
+            return Option.some({ generation, holder });
+          }),
+        ),
+        (lease) =>
+          Option.isSome(lease)
+            ? settle(lease.value.generation as RoutableGeneration, holder)
+            : Effect.void,
+      );
 
     const use: GenerationRuntime<E, R>["use"] = (run) =>
       Effect.scoped(checkout.pipe(Effect.flatMap((lease) => run(lease.generation))));
@@ -356,74 +474,146 @@ const makeRuntimeInternal = <E, R>(
 
     const busy: GenerationRuntime<E, R>["busy"] = Ref.get(isReloading);
 
-    const currentGeneration: GenerationRuntime<E, R>["currentGeneration"] = Ref.get(current).pipe(
+    const currentGeneration: GenerationRuntime<E, R>["currentGeneration"] = readCurrent.pipe(
       Effect.map((g) => g as PluginGeneration),
     );
 
     const view: GenerationRuntime<E, R>["view"] = (_sessionId: unknown) =>
-      Ref.get(current).pipe(Effect.map((g) => g as PluginGeneration));
+      readCurrent.pipe(Effect.map((g) => g as PluginGeneration));
 
-    const innerDrainReload = Effect.gen(function* () {
-      const fresh = yield* load();
-      const drain = yield* Deferred.make<void>();
-      const { inFlight, old } = yield* routeMutex.withPermits(1)(
-        Effect.gen(function* () {
-          const selected = yield* Ref.get(current);
-          const state = yield* Ref.get(selected.routing);
-          yield* Ref.set(selected.routing, { ...state, drain });
-          yield* Ref.set(current, fresh);
-          return { inFlight: state.inFlight, old: selected };
-        }),
-      );
-      if (inFlight === 0) {
-        yield* Deferred.succeed(drain, undefined);
-      }
-      const drainStartedAt = yield* Clock.currentTimeMillis;
-      yield* Deferred.await(drain);
-      yield* old.close;
-      const drainFinishedAt = yield* Clock.currentTimeMillis;
-      const closed = yield* old.closedResources;
-      const deltas = pluginChanges(old, fresh);
-      const diagnostic: GenerationSwapDiagnostic = {
-        closedResources: closed,
-        drainDurationMillis: drainFinishedAt - drainStartedAt,
-        leaseCount: inFlight,
-        newGenerationId: fresh.id,
-        oldGenerationId: old.id,
-        pluginsAdded: deltas.pluginsAdded,
-        pluginsRemoved: deltas.pluginsRemoved,
-        pluginsReplaced: deltas.pluginsReplaced,
-        type: "generation_swap",
-      };
-      return diagnostic;
-    }).pipe(
-      Effect.tap((diagnostic) =>
-        generationDiagnosticSink(diagnostic).pipe(
-          Effect.zipRight(
-            Effect.annotateCurrentSpan({
-              closedResources: diagnostic.closedResources,
-              drainDurationMillis: diagnostic.drainDurationMillis,
-              leaseCount: diagnostic.leaseCount,
+    const unsafeCurrentGeneration = (): PluginGeneration => MutableRef.get(current);
+
+    const emitSwapDiagnostic = (diagnostic: GenerationSwapDiagnostic) =>
+      generationDiagnosticSink(diagnostic).pipe(
+        Effect.zipRight(
+          Effect.annotateCurrentSpan({
+            closedResources: diagnostic.closedResources,
+            drainDurationMillis: diagnostic.drainDurationMillis,
+            leaseCount: diagnostic.leaseCount,
+            newGenerationId: diagnostic.newGenerationId,
+            oldGenerationId: diagnostic.oldGenerationId,
+            pluginsAdded: JSON.stringify(diagnostic.pluginsAdded),
+            pluginsRemoved: JSON.stringify(diagnostic.pluginsRemoved),
+            pluginsReplaced: JSON.stringify(diagnostic.pluginsReplaced),
+          }),
+        ),
+        Effect.zipRight(
+          Effect.logInfo(JSON.stringify({ diagnosticFamily: "generation", ...diagnostic })).pipe(
+            Effect.annotateLogs({
+              diagnostic: "generation_swap",
               newGenerationId: diagnostic.newGenerationId,
               oldGenerationId: diagnostic.oldGenerationId,
-              pluginsAdded: JSON.stringify(diagnostic.pluginsAdded),
-              pluginsRemoved: JSON.stringify(diagnostic.pluginsRemoved),
-              pluginsReplaced: JSON.stringify(diagnostic.pluginsReplaced),
             }),
           ),
         ),
-      ),
-      Effect.withSpan("plugins.reload"),
-      Effect.tap((diagnostic) =>
-        Effect.logInfo(JSON.stringify({ diagnosticFamily: "generation", ...diagnostic })).pipe(
-          Effect.annotateLogs({
-            diagnostic: "generation_swap",
-            newGenerationId: diagnostic.newGenerationId,
-            oldGenerationId: diagnostic.oldGenerationId,
+      );
+
+    const discard = (generation: RoutableGeneration) =>
+      Ref.update(open, withoutKey(generation.id)).pipe(
+        Effect.zipRight(generation.close),
+        Effect.zipRight(onGenerationClosed(generation)),
+      );
+
+    const closeReplaced = ({
+      drain,
+      drainStartedAt,
+      fresh,
+      leaseCount,
+      old,
+    }: {
+      readonly drain: Deferred.Deferred<void>;
+      readonly drainStartedAt: number;
+      readonly fresh: RoutableGeneration;
+      readonly leaseCount: number;
+      readonly old: RoutableGeneration;
+    }) =>
+      Effect.gen(function* () {
+        yield* Deferred.await(drain);
+        yield* discard(old);
+        const finishedAt = yield* Clock.currentTimeMillis;
+        const closedResources = yield* old.closedResources;
+        const diagnostic: GenerationSwapDiagnostic = {
+          closedResources,
+          drainDurationMillis: finishedAt - drainStartedAt,
+          leaseCount,
+          newGenerationId: fresh.id,
+          oldGenerationId: old.id,
+          ...pluginChanges(old, fresh),
+          type: "generation_swap",
+        };
+        yield* emitSwapDiagnostic(diagnostic);
+        return diagnostic;
+      }).pipe(Effect.ensuring(Ref.update(closers, withoutKey(old.id))));
+
+    const innerDrainReload = Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const fresh = yield* restore(load());
+        yield* restore(prepareSwap(fresh)).pipe(Effect.onError(() => discard(fresh)));
+        const swap = yield* routeMutex.withPermits(1)(
+          Effect.gen(function* () {
+            const old = yield* readCurrent;
+            const state = yield* Ref.get(old.routing);
+            const drain = yield* Deferred.make<void>();
+            yield* Ref.set(old.routing, { ...state, admitting: state.inFlight > 0, drain });
+            yield* Ref.update(open, withEntry(fresh.id, fresh));
+            yield* Effect.sync(() => MutableRef.set(current, fresh));
+            if (state.inFlight === 0) {
+              yield* Deferred.succeed(drain, undefined);
+            }
+            const drainStartedAt = yield* Clock.currentTimeMillis;
+            const registered = yield* Deferred.make<void>();
+            const closer = yield* Effect.forkDaemon(
+              Deferred.await(registered).pipe(
+                Effect.zipRight(
+                  closeReplaced({
+                    drain,
+                    drainStartedAt,
+                    fresh,
+                    leaseCount: state.inFlight,
+                    old,
+                  }),
+                ),
+              ),
+            );
+            yield* Ref.update(closers, withEntry(old.id, closer));
+            yield* Deferred.succeed(registered, undefined);
+            return { closer, old };
           }),
-        ),
-      ),
-    );
+        );
+        const drained = yield* Effect.interruptible(Fiber.join(swap.closer)).pipe(
+          Effect.timeoutOption(Duration.millis(drainTimeoutMillis)),
+        );
+        if (Option.isSome(drained)) {
+          return drained.value;
+        }
+        const completed = yield* Fiber.poll(swap.closer);
+        if (Option.isSome(completed)) {
+          return yield* completed.value;
+        }
+        const old = swap.old;
+        const holders = [...(yield* Ref.get(old.routing)).holders].sort();
+        yield* Effect.logWarning(
+          JSON.stringify({
+            diagnostic: "generation_drain_timeout",
+            drainTimeoutMillis,
+            holders,
+            newGenerationId: fresh.id,
+            oldGenerationId: old.id,
+          }),
+        ).pipe(Effect.annotateLogs({ diagnostic: "generation_drain_timeout" }));
+        return yield* new GenerationDrainTimeoutError({
+          drainTimeoutMillis,
+          holders,
+          leaseCount: holders.length,
+          message:
+            holders.length === 0
+              ? `Reload swapped to generation ${fresh.id}, but generation ${old.id} was still closing after ${drainTimeoutMillis} ms.`
+              : `Reload swapped to generation ${fresh.id}, but generation ${old.id} still has ${holders.length} running lease(s) after ${drainTimeoutMillis} ms (${holders.join(", ")}); it closes when they settle.`,
+          newGenerationId: fresh.id,
+          oldGenerationId: old.id,
+        });
+      }),
+    ).pipe(Effect.withSpan("plugins.reload"));
 
     const reloadWrapped: GenerationRuntime<E, R>["reload"] = Effect.gen(function* () {
       const acquired = yield* Ref.modify(isReloading, (busyFlag) =>
@@ -451,28 +641,30 @@ const makeRuntimeInternal = <E, R>(
           );
         }
         try {
-          const gen = yield* Ref.get(current);
-          const state = yield* Ref.get(gen.routing);
-          if (state.inFlight === 0) {
-            if (state.drain !== null) {
-              yield* Deferred.await(state.drain);
-            }
-            yield* gen.close;
-          } else {
-            const drain = state.drain ?? (yield* Deferred.make<void>());
-            if (state.drain === null) {
-              yield* Ref.set(gen.routing, { ...state, drain });
-            }
-            yield* Deferred.await(drain);
-            yield* gen.close;
-          }
+          const { generation, drain } = yield* routeMutex.withPermits(1)(
+            Effect.gen(function* () {
+              const generation = yield* readCurrent;
+              const state = yield* Ref.get(generation.routing);
+              const drain = state.drain ?? (yield* Deferred.make<void>());
+              yield* Ref.set(generation.routing, { ...state, admitting: false, drain });
+              if (state.inFlight === 0) {
+                yield* Deferred.succeed(drain, undefined);
+              }
+              return { generation, drain };
+            }),
+          );
+          yield* Deferred.await(drain);
+          yield* Effect.forEach([...(yield* Ref.get(closers)).values()], Fiber.await, {
+            discard: true,
+          });
+          yield* discard(generation);
         } finally {
           yield* Ref.set(isReloading, false);
         }
       }),
     );
 
-    const debugInfo: GenerationRuntime<E, R>["debugInfo"] = Ref.get(current).pipe(
+    const debugInfo: GenerationRuntime<E, R>["debugInfo"] = readCurrent.pipe(
       Effect.flatMap((generation) =>
         Ref.get(generation.routing).pipe(
           Effect.map((routing) => ({
@@ -487,18 +679,21 @@ const makeRuntimeInternal = <E, R>(
     return {
       busy,
       checkout,
+      checkoutGeneration,
       close,
       currentGeneration,
       debugInfo,
       reload: reloadWrapped,
       use,
       useSerialized,
+      unsafeCurrentGeneration,
       view,
     } as GenerationRuntime<E, R>;
   });
 
 export const makeGenerationRuntime = (
   options: LoadGenerationOptions,
+  runtimeOptions: GenerationRuntimeOptions = {},
 ): Effect.Effect<
   GenerationRuntime<GenerationLoadError, TrustStore>,
   GenerationLoadError,
@@ -507,11 +702,13 @@ export const makeGenerationRuntime = (
   makeRuntimeInternal<GenerationLoadError, TrustStore>(
     () => loadGenerationRuntimeInternal(options).pipe(Effect.flatMap(makeRoutable)),
     options.generationDiagnosticSink,
+    runtimeOptions,
   );
 
 export const makeGenerationRuntimeWithLoader = <E, R>(
   load: () => Effect.Effect<PluginGeneration, E, R>,
   diagnosticSink: ((d: GenerationSwapDiagnostic) => Effect.Effect<void>) | undefined = undefined,
+  runtimeOptions: GenerationRuntimeOptions<E> = {},
 ): Effect.Effect<GenerationRuntime<E, R>, E, R> =>
   Effect.gen(function* () {
     const loadRoutable = (): Effect.Effect<RoutableGeneration, E, R> =>
@@ -525,7 +722,7 @@ export const makeGenerationRuntimeWithLoader = <E, R>(
           // Need to create routing for generation that came from composePluginRuntime
           // compose returns PluginGeneration with scope not exposed; we adapt
           return Effect.gen(function* () {
-            const routing = yield* Ref.make<GenerationRoutingState>({ drain: null, inFlight: 0 });
+            const routing = yield* Ref.make<GenerationRoutingState>(initialRoutingState);
             const closedResources =
               (gen as unknown as { closedResources?: Effect.Effect<number> }).closedResources ??
               Effect.succeed(0);
@@ -559,7 +756,7 @@ export const makeGenerationRuntimeWithLoader = <E, R>(
           });
         }),
       );
-    return yield* makeRuntimeInternal<E, R>(loadRoutable, diagnosticSink);
+    return yield* makeRuntimeInternal<E, R>(loadRoutable, diagnosticSink, runtimeOptions);
   });
 
 export const loadGeneration = (

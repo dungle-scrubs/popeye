@@ -233,8 +233,7 @@ granted for that Session.
 A host can also narrow one Session's Tools by name (an RPC Agent session does this). That Session
 is offered only the Tools that both the process-level grant and its own filters allow, and a
 call to any other Tool returns `Unknown tool: <name>.` Narrowing never changes Capability
-grants. A Plugin reload during a Turn does not change which names the Turn may call; a call
-runs the Tool as the reloaded Plugins now provide it.
+grants. A Plugin reload during a Turn does not change which names the Turn may call. A call that starts after the swap runs the Tool as the reloaded Plugins provide it; a call already running finishes on the generation it started on.
 
 ### Commands
 
@@ -309,14 +308,17 @@ a point with no caller never runs.
 | `tool-call-gate` | [`tool-invocation-pipeline.ts`](../packages/cli/src/tools/tool-invocation-pipeline.ts), before each Tool call |
 | `tool-result` | none |
 | `resource-discovery` | none |
-| `compaction-gate` | [`compose.ts`](../packages/cli/src/compose.ts) and [`runtime.ts`](../packages/cli/src/plugins/runtime.ts), for manual and overflow Compaction |
+| `compaction-gate` | [`compose.ts`](../packages/cli/src/compose.ts), for manual and overflow Compaction, on the generation current when the gate runs |
 | `trust` | [`trust.ts`](../packages/plugins/src/trust.ts), when an external Plugin loads |
 | `turn-lifecycle` | none: diagnostic only |
 | `progress` | none: diagnostic only |
 | `session-lifecycle` | Kernel callers: end of `create` and end of `resume` in [`sessions.ts`](../packages/kernel/src/sessions.ts), end of `closeSession` in [`driver.ts`](../packages/kernel/src/driver.ts); plus a Head's normal exit (see below) |
 
 `session-lifecycle` reaches Plugins through
-[`generationLifecycleTap`](../packages/cli/src/compose.ts). The Kernel receives it as a function
+[`currentGenerationLifecycleTap`](../packages/cli/src/compose.ts) in the shipped CLI, which emits
+on the generation current at each emit, or through
+[`generationLifecycleTap`](../packages/cli/src/compose.ts) in a host bound to one fixed
+generation. The Kernel receives it as a function
 (`DriverDefaultOptions.lifecycle`) and never imports the Plugin package. `created` is emitted
 after the Journal Session exists and its Mailbox is active. `resumed` is emitted after recovery
 succeeds; a failed resume emits nothing. `closed` is emitted after the close settles and its
@@ -404,8 +406,8 @@ Two gates ship as linkable modules and never load by default. Their sources are 
 `packages/cli/src/features/`, and `pnpm build` writes the loadable modules to
 `packages/cli/dist/features/`:
 
-- `trust-gate.ts` - contributes to the `trust` Hook. It raises a confirm interaction (project path, digest, change summary) with a 25s timeout and fallback `untrusted`. With the null `PluginInteractions` layer (print/json heads and startup composition in every mode) the fallback resolves immediately: unknown project code is denied without stalling. Over rpc with an interactive Head, the Head answers; `trusted` loads stage-2 project plugins, fallback `untrusted` swaps without them and the `/reload` result reports the reduced counts. The shipped `/reload` command does not swap Generations yet ([#93](https://github.com/dungle-scrubs/popeye/issues/93)); `CliRuntime.reload` does.
-- `tool-vetting.ts` - contributes to `tool-call-gate`. It raises a select (`allow once` / `allow for session` / `reject`) with a 25s timeout and fallback `reject`. Session memory is generation-scoped: a reload forgets prior allows (fail-closed). A rejection becomes a model-visible error `ToolResult` with `isError: true` in the call's journal position, preserving call order.
+- `trust-gate.ts` - contributes to the `trust` Hook. It raises a confirm interaction (project path, digest, change summary) with a 25s timeout and fallback `untrusted`. With the null `PluginInteractions` layer (print/json heads and startup composition in every mode) the fallback resolves immediately: unknown project code is denied without stalling. Over rpc with an interactive Head, the Head answers; `trusted` loads stage-2 project plugins, fallback `untrusted` swaps without them and the `/reload` result lists the project Plugins that left in `pluginsRemoved`.
+- `tool-vetting.ts` - contributes to `tool-call-gate`. It raises a select (`allow once` / `allow for session` / `reject`) with a 25s timeout and fallback `reject`. Session memory is keyed by the generation whose gate answered: a reload starts with no allows, and an answer given to the previous generation's gate after the reload never authorizes the new generation's calls (fail-closed). A rejection becomes a model-visible error `ToolResult` with `isError: true` in the call's journal position, preserving call order.
 
 Install them by symlinking the built modules into a user-global Plugin directory (the host's `userPluginDir`, by default `~/.popeye/plugins/`). Run `pnpm build` first:
 
@@ -462,27 +464,48 @@ file and construct. Use `as const` objects, string literal unions, and ordinary 
 
 ## Reload and generation drain
 
-Each generation owns an Effect `Scope`. Reload builds a fresh generation before it changes routing.
-If the build fails, the current generation stays active. A successful reload then:
+The first-party `reload` Plugin contributes the `/reload` Command. Send it as a print or json
+prompt (`/reload`) or as an rpc `invoke-command` frame with `name: "reload"` and `args: {}`. It
+rebuilds the Plugin generation from the discovery inputs the process started with, so it picks
+up added, removed, and edited Plugin entry files.
 
-1. swaps the current generation reference;
+Each generation owns an Effect `Scope`. Reload builds a fresh generation and adapts its Tools
+before it changes routing. If either step fails, the current generation stays active, the fresh
+generation closes, and `/reload` fails. A successful build then:
+
+1. swaps the current generation reference, and with it the Tools that Tool calls resolve, in one step;
 2. routes new generation checkouts to the fresh generation;
 3. lets leased in-flight work finish on its captured generation;
-4. waits at a drain barrier for those leases;
+4. waits at a drain barrier for those leases, for at most 5 seconds;
 5. closes the old `Scope` and runs its finalizers once;
 6. emits a generation-swap diagnostic with IDs, Plugin changes, drain time, and closed resources.
 
-The runtime serializes reload operations. Hosts use `useSerialized` for gates that must not
-interleave with a reload.
+`/reload` returns that diagnostic: `{ type: "generation_swap", oldGenerationId,
+newGenerationId, pluginsAdded, pluginsRemoved, pluginsReplaced, drainDurationMillis,
+leaseCount, closedResources }`. The Plugin lists hold sorted manifest names; `pluginsReplaced`
+names every Plugin present in both generations, changed or not. The print Head writes the
+diagnostic as one JSON line, rpc returns it as the `commandInvoked` value, and the json Head
+writes the Session's Snapshot, whose `loadedGeneration` names the new generation.
 
-A Turn holds no generation lease. The Tools offered to the model are fixed when the Turn opens,
-while each Tool call resolves its implementation through the process-wide Tool cache. After a
-successful `CliRuntime.reload` returns, the cache supplies the reloaded Tools and their gate
-Hooks; a call to a name the reloaded Plugins no longer provide returns `Unknown tool: <name>.`
-During an in-progress reload, the cache can still supply the previous generation's Tools after
-the current generation reference has changed. Turns and Tool calls do not acquire generation
-leases, so their lifetimes do not contribute to the drain count; a running Tool's generation can
-close under it.
+The runtime serializes reload operations. A `/reload` while another reload is running fails with
+`Reload is already in progress.` (over rpc: `invoke_command_error`, reason `command_failed`).
+Hosts use `useSerialized` for gates that must not interleave with a reload.
+
+A Tool call holds a lease on the generation that provided its Tool from the start of its
+execution until it settles, so a reload never closes a generation while one of its Tools runs.
+A Turn holds no lease: the Tools offered to the model are fixed when the Turn opens, while each
+call resolves its Tool when it starts. A call that starts after the swap runs the reloaded Tool
+and its gate Hooks; a call to a name the reloaded Plugins no longer provide returns
+`Unknown tool: <name>.` A call that resolved its Tool just before the swap but starts after that
+generation stopped taking leases does not run; it returns an error result that asks the model to
+call the Tool again.
+
+When leases outlast the 5-second drain timeout, the swap stands and the new generation serves,
+but `/reload` fails with a message that names both generation IDs and the lease holders (for
+example `tool:delegate`). The old generation closes, and the generation-swap diagnostic is
+logged, when its last lease settles, even if the `/reload` caller is gone. Closing the runtime
+waits for those leases too. Commands, the compaction gate, and `session-lifecycle` Taps take no
+lease; they run on the generation that is current when they start.
 
 Cache busting re-imports the Plugin entry file with fresh module state. It does not change relative
 sibling URLs. Restart the process after a sibling module changes. Each entry reload also remains in

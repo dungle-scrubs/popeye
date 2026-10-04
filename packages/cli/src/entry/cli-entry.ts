@@ -35,8 +35,8 @@ import { makeAgentSessionResolver } from "../agents/session-agent.js";
 import type { AssistantItem, Driver, ProviderService } from "../compose.js";
 import {
   AssistantStopReasonSchema,
-  GenerationDriverDefault,
-  generationLifecycleTap,
+  CliRuntimeDriverDefault,
+  currentGenerationLifecycleTap,
   makeSessionLifecycle,
   PiAiProviderLive,
   Provider,
@@ -482,15 +482,7 @@ const runWithConfig = (
       ),
     );
     return yield* Effect.gen(function* () {
-      const snapshotAudit = yield* cliRuntime.snapshotAudit.pipe(
-        Effect.mapError((cause) =>
-          runError(
-            "composition_failed",
-            `Could not compose snapshot audit (composition_failed): ${errorMessage(cause)}`,
-            cause,
-          ),
-        ),
-      );
+      const startupSnapshotAudit = yield* cliRuntime.snapshotAudit;
       const tools = Layer.succeed(ToolRegistry, cliRuntime.toolRegistry);
       const journalLayer = selectJournalLayer(config.sessionDir, env);
       const startupView = yield* cliRuntime.processToolView;
@@ -551,7 +543,6 @@ const runWithConfig = (
             }).pipe(Layer.provide(Layer.merge(tools, journalLayer)))
           : Layer.succeed(Provider, provider);
       const dependencies = Layer.mergeAll(journalLayer, providerLayer, tools);
-      const currentGen = yield* cliRuntime.currentGeneration;
       // ADR-0002: one lifecycle report per process. The Tap broadcast is diagnostic; the
       // reflection send exists only when POPEYE_REFLECT_INTAKE names an executable file.
       const reflection = reflectionProducerFromEnv(
@@ -560,9 +551,9 @@ const runWithConfig = (
       );
       const lifecycle = makeSessionLifecycle({
         ...(reflection === undefined ? {} : { producer: reflection }),
-        tap: generationLifecycleTap(currentGen),
+        tap: currentGenerationLifecycleTap(cliRuntime.currentGeneration),
       });
-      const driver = GenerationDriverDefault(currentGen, { lifecycle }).pipe(
+      const driver = CliRuntimeDriverDefault(cliRuntime, { lifecycle }).pipe(
         Layer.provide(dependencies),
       );
       const runtime = composeHeadRuntime({
@@ -641,7 +632,7 @@ const runWithConfig = (
           input: io.input,
           loggerOutput: io.stderr,
           ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
-          snapshotAudit,
+          snapshotAudit: cliRuntime.snapshotAudit,
           writer,
         });
       } else if (config.prompt === undefined && resumeSessionId === undefined) {
@@ -652,7 +643,7 @@ const runWithConfig = (
         head = runHcnHead({
           prompts: config.prompt === undefined ? [] : [config.prompt],
           ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
-          snapshotAudit,
+          snapshotAudit: startupSnapshotAudit,
           ...(turnOptions === undefined ? {} : { turnOptions }),
           writer,
         });
@@ -660,7 +651,7 @@ const runWithConfig = (
         head = runJsonHead({
           prompts: config.prompt === undefined ? [] : [config.prompt],
           ...(resumeSessionId === undefined ? {} : { sessionId: resumeSessionId }),
-          snapshotAudit,
+          snapshotAudit: cliRuntime.snapshotAudit,
           ...(turnOptions === undefined ? {} : { turnOptions }),
           writer,
         });

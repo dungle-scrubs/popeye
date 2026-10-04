@@ -17,8 +17,10 @@ import {
   encodeSnapshotLine,
   exitCodeForStopReason,
   type HeadWriter,
+  readSnapshotAudit,
   runHeadBoundary,
   type SnapshotAuditFields,
+  type SnapshotAuditSource,
   stdoutHeadWriter,
 } from "./head-wire.js";
 import { runSessionLoop } from "./session-loop.js";
@@ -26,7 +28,7 @@ import { runSessionLoop } from "./session-loop.js";
 export interface JsonHeadOptions {
   readonly prompts: ReadonlyArray<string>;
   readonly sessionId?: SessionId;
-  readonly snapshotAudit?: SnapshotAuditFields;
+  readonly snapshotAudit?: SnapshotAuditSource;
   readonly turnOptions?: TurnOptions;
   readonly writer?: HeadWriter;
 }
@@ -57,7 +59,8 @@ export const runJsonHead = (options: JsonHeadOptions) =>
         onProgress: (progress) => encodeProgressLine(progress).pipe(Effect.flatMap(writer.write)),
         onSession: (sessionId) => writer.write(sessionIdLine(sessionId)),
         onTurnSettled: (turn) =>
-          encodeSnapshotLineForHead(turn.snapshot, options.snapshotAudit).pipe(
+          readSnapshotAudit(options.snapshotAudit).pipe(
+            Effect.flatMap((audit) => encodeSnapshotLineForHead(turn.snapshot, audit)),
             Effect.flatMap(writer.write),
             Effect.as(exitCodeForStopReason(turn.stopReason)),
           ),

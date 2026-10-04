@@ -2,7 +2,7 @@
  * Owns the opt-in tool-vetting Plugin as a linkable module (second adapter for tool-call-gate).
  * It exists so a human can vet each Tool call via PluginInteractions: allow once, allow for session, or reject.
  * Why this module: provides the human vetting decision as a Hook contribution; session memory
- * itself lives in ToolSessionMemory's generation-scoped Ref, accessed via a neutral seam.
+ * itself lives in ToolSessionMemory, keyed by the generation whose gate runs this Hook, accessed via a neutral seam.
  * This module depends on ToolSessionMemory, not on ToolInvocationPipeline, so the dependency
  * direction is Plugin -> memory, not Plugin -> gate.
  * Not responsible for transport (heads own that) or for Hook emission (emitter owns that); this module only owns the vetting prompt decision.

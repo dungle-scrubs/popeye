@@ -21,6 +21,7 @@ import {
   PluginPipelineConfigError,
   PluginPipelineError,
 } from "./pipeline.js";
+import { ReloadUnavailableError } from "./reload.js";
 
 const testSessionId = (name: string) => Schema.decodeSync(SessionIdSchema)(name);
 
@@ -122,6 +123,18 @@ test("an empty project exposes only the invokable first-party commands", async (
         const commands = yield* generation.registry.list(CommandContributionKind, grants);
         const invocations: Array<string> = [];
         for (const command of commands) {
+          if (command.name === "reload") {
+            const error = yield* invokeRegisteredCommand(
+              command,
+              {},
+              testCommandContext("pipeline-test-session"),
+            ).pipe(Effect.flip);
+            expect(error).toBeInstanceOf(ReloadUnavailableError);
+            expect(error).toMatchObject({
+              message: "Reload is not available in this host: it composes no ReloadControl.",
+            });
+            continue;
+          }
           yield* invokeRegisteredCommand(
             command,
             command.name === "session-name"

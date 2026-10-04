@@ -56,6 +56,13 @@ import {
 import { Effect, Layer, Logger, Schema } from "effect";
 
 import { composePluginRuntime, type FirstPartyPlugin } from "./plugins/pipeline.js";
+import {
+  ReloadBusyError,
+  ReloadControl,
+  type ReloadControlService,
+  ReloadDrainTimeoutError,
+  ReloadUnavailableError,
+} from "./plugins/reload.js";
 
 export type {
   AssistantDiagnostic,
@@ -159,11 +166,25 @@ const commandExecutionContext = (
   setSessionName: context.setSessionName,
 });
 
-const pluginHostService = (generation: PluginGeneration): PluginHostService => {
-  const { emitter, registry } = generation;
+const commandFailure = (name: string, cause: unknown): InvokeCommandError =>
+  cause instanceof InvokeCommandError
+    ? cause
+    : cause instanceof ReloadBusyError ||
+        cause instanceof ReloadDrainTimeoutError ||
+        cause instanceof ReloadUnavailableError
+      ? invokeCommandError(name, "command_failed", cause.message, cause)
+      : invokeCommandError(name, "command_failed", `Command ${name} failed.`, cause);
+
+/** Where a PluginHost finds its Plugins: the Generation current at each call, and reload control if any. */
+export interface PluginHostSource {
+  readonly currentGeneration: Effect.Effect<PluginGeneration>;
+  readonly reloadControl?: ReloadControlService;
+}
+export const makePluginHostService = (source: PluginHostSource): PluginHostService => {
   const compactionGate: PluginHostService["compactionGate"] = (sessionId, request) => {
     const grants = createCapabilityGrants(sessionId);
-    return emitCompactionGate(emitter, grants, request).pipe(
+    return source.currentGeneration.pipe(
+      Effect.flatMap(({ emitter }) => emitCompactionGate(emitter, grants, request)),
       Effect.catchAll((error) =>
         Effect.succeed({
           action: "skip" as const,
@@ -175,6 +196,7 @@ const pluginHostService = (generation: PluginGeneration): PluginHostService => {
 
   const invokeCommand: PluginHostService["invokeCommand"] = (name, args, context) =>
     Effect.gen(function* () {
+      const { emitter, registry } = yield* source.currentGeneration;
       const grants = createCapabilityGrants(context.sessionId);
       const commands = yield* registry
         .list(CommandContributionKind, grants)
@@ -222,22 +244,22 @@ const pluginHostService = (generation: PluginGeneration): PluginHostService => {
         ),
       );
       const commandContext = commandExecutionContext(name, context, emitter, grants);
-      return yield* command.payload
-        .execute(input, commandContext)
-        .pipe(
-          Effect.mapError((cause) =>
-            cause instanceof InvokeCommandError
-              ? cause
-              : invokeCommandError(name, "command_failed", `Command ${name} failed.`, cause),
-          ),
-        );
+      const base = command.payload.execute(input, commandContext);
+      const withReload =
+        source.reloadControl === undefined
+          ? base
+          : base.pipe(Effect.provideService(ReloadControl, source.reloadControl));
+      return yield* withReload.pipe(Effect.mapError((cause) => commandFailure(name, cause)));
     });
 
   return { compactionGate, invokeCommand };
 };
 
 export const GenerationPluginHostLive = (generation: PluginGeneration): Layer.Layer<PluginHost> =>
-  Layer.succeed(PluginHost, pluginHostService(generation));
+  Layer.succeed(
+    PluginHost,
+    makePluginHostService({ currentGeneration: Effect.succeed(generation) }),
+  );
 
 /**
  * The `session-lifecycle` Tap broadcast for one Plugin generation. Diagnostic only: Tap delivery
@@ -263,6 +285,35 @@ export const GenerationDriverDefault = (
     GenerationPluginHostLive(generation),
   );
 
+/** The session-lifecycle Tap broadcast on whichever Generation is current at each emit. */
+export const currentGenerationLifecycleTap =
+  (currentGeneration: Effect.Effect<PluginGeneration>): SessionLifecycleTap =>
+  (input) =>
+    currentGeneration.pipe(
+      Effect.flatMap((generation) => generationLifecycleTap(generation)(input)),
+    );
+
+/** A host whose Plugins follow the current Generation (CliRuntime satisfies it). */
+export interface CurrentGenerationHost {
+  readonly currentGeneration: Effect.Effect<PluginGeneration>;
+  readonly pluginHost: PluginHostService;
+}
+
+/** The Driver for a reloadable host: Commands, `/reload`, the compaction gate, and the lifecycle Tap follow its current Generation. */
+export const CliRuntimeDriverDefault = (
+  host: CurrentGenerationHost,
+  options: DriverDefaultOptions = {},
+) =>
+  DriverDefault(
+    {
+      ...options,
+      lifecycle:
+        options.lifecycle ??
+        makeSessionLifecycle({ tap: currentGenerationLifecycleTap(host.currentGeneration) }),
+    },
+    Layer.succeed(PluginHost, host.pluginHost),
+  );
+
 export const FirstPartyPluginHostLive = (
   options: FirstPartyPluginHostOptions = {},
 ): Layer.Layer<PluginHost> =>
@@ -281,7 +332,11 @@ export const FirstPartyPluginHostLive = (
         Effect.orDie,
       ),
       (generation) => generation.close,
-    ).pipe(Effect.map(pluginHostService)),
+    ).pipe(
+      Effect.map((generation) =>
+        makePluginHostService({ currentGeneration: Effect.succeed(generation) }),
+      ),
+    ),
   );
 
 export const FirstPartyDriverDefault = (

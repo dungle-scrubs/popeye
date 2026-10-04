@@ -23,6 +23,18 @@ import type { DriverSnapshot, TurnResult } from "../compose.js";
 
 export type SnapshotAuditFields = Required<Pick<Snapshot, "capabilityGrants" | "loadedGeneration">>;
 
+/** Snapshot audit fields, or an Effect read at each Snapshot write so a Snapshot audits the Generation current then (#93). */
+export type SnapshotAuditSource = SnapshotAuditFields | Effect.Effect<SnapshotAuditFields>;
+
+export const readSnapshotAudit = (
+  source: SnapshotAuditSource | undefined,
+): Effect.Effect<SnapshotAuditFields | undefined> =>
+  source === undefined
+    ? Effect.succeed(undefined)
+    : Effect.isEffect(source)
+      ? source
+      : Effect.succeed(source);
+
 export const protocolSnapshot = (
   snapshot: DriverSnapshot,
   snapshotAudit: SnapshotAuditFields | undefined,

@@ -38,7 +38,12 @@ import { type Driver, SessionLifecycle, type SessionTurnOptions } from "../compo
 import type { ToolGrantFilter } from "../tools/grants.js";
 import { SessionToolGrants, type SessionToolGrantsService } from "../tools/session-grants.js";
 import type { HeadWriteError } from "./head-wire.js";
-import { protocolSnapshot, type SnapshotAuditFields } from "./head-wire.js";
+import {
+  protocolSnapshot,
+  readSnapshotAudit,
+  type SnapshotAuditFields,
+  type SnapshotAuditSource,
+} from "./head-wire.js";
 import type { RpcInteractionsService } from "./rpc.js";
 import { RPC_NO_TURN_ADMISSION, type RpcTurnAdmission } from "./rpc-dispatch.js";
 
@@ -189,7 +194,7 @@ export const makeRpcSessionBridge = (options: {
   readonly agents?: AgentSessionResolver;
   readonly driver: Driver["Type"];
   readonly interactions: RpcInteractionsService;
-  readonly snapshotAudit?: SnapshotAuditFields;
+  readonly snapshotAudit?: SnapshotAuditSource;
   readonly transport: { readonly send: (payload: unknown) => Effect.Effect<void, HeadWriteError> };
 }): RpcSessionBridge => {
   const { agents, driver, interactions, snapshotAudit, transport } = options;
@@ -374,7 +379,9 @@ export const makeRpcSessionBridge = (options: {
     snapshot: import("../compose.js").DriverSnapshot,
     isAttached: boolean,
   ): Effect.Effect<void, HeadWriteError> =>
-    writeSnapshotResponse(transport, id, snapshot, isAttached, snapshotAudit);
+    readSnapshotAudit(snapshotAudit).pipe(
+      Effect.flatMap((audit) => writeSnapshotResponse(transport, id, snapshot, isAttached, audit)),
+    );
 
   const handle: RpcSessionBridge["handle"] = (command, admission = RPC_NO_TURN_ADMISSION) =>
     Effect.suspend((): Effect.Effect<void, unknown> => {

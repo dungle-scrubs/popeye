@@ -45,6 +45,8 @@ export {
   HeadWriteError,
   type HeadWriter,
   makeWritableHeadWriter,
+  type SnapshotAuditFields,
+  type SnapshotAuditSource,
   stdoutHeadWriter,
 } from "./heads/head-wire.js";
 export { type JsonHeadOptions, runJsonHead } from "./heads/json.js";
