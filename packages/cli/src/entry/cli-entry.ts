@@ -25,11 +25,12 @@ import { join, resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
 
 import { JournalStore, type JournalStoreEnv, SessionIdSchema } from "@dungle-scrubs/popeye-journal";
-import { accountingRows } from "@dungle-scrubs/popeye-kernel";
+import { accountingRows, unresolvedModelMessage } from "@dungle-scrubs/popeye-kernel";
 import { type PluginInteractions, PluginInteractionsNullLive } from "@dungle-scrubs/popeye-plugins";
 import { Cause, Data, Effect, Exit, Layer, Logger, Schema, Stream } from "effect";
 
 import { discoverAgents } from "../agents/loader.js";
+import { makeAgentSessionResolver } from "../agents/session-agent.js";
 import type { AssistantItem, Driver, ProviderService } from "../compose.js";
 import {
   AssistantStopReasonSchema,
@@ -472,9 +473,7 @@ const runWithConfig = (
       );
       const tools = Layer.succeed(ToolRegistry, cliRuntime.toolRegistry);
       const journalLayer = selectJournalLayer(config.sessionDir, env);
-      const startupView = yield* cliRuntime.toolRegistry.view(
-        SessionIdSchema.make("startup-toolcount"),
-      );
+      const startupView = yield* cliRuntime.processToolView;
       const startupToolCount = startupView.list().length;
       // RFC-04 §1/§3: the Agent tools list already narrows the startup view
       // (composeToolGrantFilter). A name is outside the grant when no Tool has
@@ -574,16 +573,43 @@ const runWithConfig = (
                 ? {}
                 : { thinkingLevel: HCN_EFFORT_TO_THINKING_LEVEL[config.effort] }),
             };
-      if (config.mode === "rpc" && (turnOptions !== undefined || config.agent !== undefined)) {
+      if (config.mode === "rpc" && config.agent !== undefined) {
         return yield* Effect.fail(
           runError(
             "composition_failed",
-            "--effort, --system-prompt, --append-system-prompt, and --agent have no RPC wire carrier: prompt frames carry content only (set-model and set-thinking cover model and thinking level). Omit them in RPC mode.",
+            "--agent is not accepted in RPC mode: name the Agent per Session with the agent field of the create and resume commands.",
           ),
         );
       }
+      if (config.mode === "rpc" && turnOptions !== undefined) {
+        return yield* Effect.fail(
+          runError(
+            "composition_failed",
+            "--effort, --system-prompt, and --append-system-prompt have no RPC wire carrier: prompt frames carry content only (set-model and set-thinking cover model and thinking level). Omit them in RPC mode.",
+          ),
+        );
+      }
+
       if (config.mode === "rpc") {
+        // RFC-04 §4: each create with an agent field resolves the definition per Session, with
+        // the --agent scopes, against the process-level Tool view (#54 Decision 7).
+        const agents = makeAgentSessionResolver({
+          discover: discoverAgents({
+            projectPath: process.cwd(),
+            userDir: resolveUserAgentsDir(env),
+          }),
+          grantedToolNames: cliRuntime.processToolView.pipe(
+            Effect.map((view) => new Set(view.list().map((tool) => tool.name))),
+          ),
+          modelSource: config.modelSource,
+          unresolvedModelMessage:
+            provider === undefined
+              ? (modelId) =>
+                  unresolvedModelMessage({ provider: "openai", baseUrl: config.baseUrl }, modelId)
+              : () => undefined,
+        });
         head = runRpcHead({
+          agents,
           errorWriter,
           input: io.input,
           loggerOutput: io.stderr,

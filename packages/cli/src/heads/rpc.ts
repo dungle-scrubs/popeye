@@ -51,6 +51,7 @@ import {
   Stream,
 } from "effect";
 
+import type { AgentSessionResolver } from "../agents/session-agent.js";
 import { Driver } from "../compose.js";
 import {
   HEAD_EXIT_CODES,
@@ -81,6 +82,7 @@ export const MAX_RPC_FRAME_BYTES = TRANSPORT_MAX_BYTES;
 export class RpcReadError extends TransportRpcReadError {}
 
 export interface RpcHeadOptions {
+  readonly agents?: AgentSessionResolver;
   readonly errorWriter?: HeadWriter;
   readonly input: Readable;
   readonly loggerOutput?: Writable;
@@ -508,6 +510,16 @@ const stringField = (
   field: string,
 ): string | undefined => (typeof record[field] === "string" ? record[field] : undefined);
 
+const stringArrayField = (
+  record: Readonly<Record<string, unknown>>,
+  field: string,
+): ReadonlyArray<string> | undefined => {
+  const value = record[field];
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? value
+    : undefined;
+};
+
 const wireErrorFromFailure = (
   failure: unknown,
   kind: "defect" | "failure" = "failure",
@@ -517,6 +529,19 @@ const wireErrorFromFailure = (
   const message = taggedErrorMessage(failure);
 
   switch (tag) {
+    case "AgentSessionError":
+      return {
+        code: "agent_error",
+        details: {
+          agent: stringField(record, "agent"),
+          available: stringArrayField(record, "available"),
+          reason: stringField(record, "reason"),
+          tag,
+          ungrantedTools: stringArrayField(record, "ungrantedTools"),
+        },
+        message,
+      };
+
     case "BudgetExceeded":
       return {
         code: "budget_exceeded",
@@ -798,6 +823,7 @@ export const runRpcHead = (options: RpcHeadOptions) => {
         const driver = yield* Driver;
         const interactions = yield* RpcInteractions;
         const bridge = makeRpcSessionBridge({
+          ...(options.agents === undefined ? {} : { agents: options.agents }),
           driver,
           interactions,
           transport,

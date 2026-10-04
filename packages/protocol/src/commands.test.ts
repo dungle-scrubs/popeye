@@ -92,3 +92,67 @@ test("Schema frames exist for every kernel primitive and invoke-command", () => 
     expect(Schema.encodeSync(CommandSchema)(decoded)).toEqual(frame);
   }
 });
+
+// RFC-04 §4 (issue #55): create carries an optional Agent definition name.
+test("RPC create accepts an optional agent name and round-trips it", () => {
+  const frame = { _tag: "create", agent: "reviewer", id: "create-agent" };
+  const decoded = Schema.decodeUnknownSync(CommandSchema, { onExcessProperty: "error" })(frame);
+
+  expect(decoded).toEqual(frame);
+  expect(Schema.encodeSync(CommandSchema)(decoded)).toEqual(frame);
+});
+
+test("RPC create without agent decodes exactly as before", () => {
+  const frame = { _tag: "create", id: "create-plain" };
+  const decoded = Schema.decodeUnknownSync(CommandSchema, { onExcessProperty: "error" })(frame);
+
+  expect(decoded).toEqual(frame);
+  expect("agent" in decoded).toBe(false);
+  expect(Schema.encodeSync(CommandSchema)(decoded)).toEqual(frame);
+});
+
+test.each([
+  ["an empty agent name", ""],
+  ["a non-string agent name", 7],
+])("RPC create rejects %s", (_label, agent) => {
+  expect(() =>
+    Schema.decodeUnknownSync(CommandSchema, { onExcessProperty: "error" })({
+      _tag: "create",
+      agent,
+      id: "create-bad-agent",
+    }),
+  ).toThrow();
+});
+
+// RFC-04 §7 (issue #55 binding decision): a resumed Agent Session needs the field again, so
+// resume carries the same optional Agent definition name as create.
+test("RPC resume accepts an optional agent name and round-trips it", () => {
+  const frame = { _tag: "resume", agent: "reviewer", id: "resume-agent", sessionId: "session-1" };
+  const decoded = Schema.decodeUnknownSync(CommandSchema, { onExcessProperty: "error" })(frame);
+
+  expect(decoded).toEqual(frame);
+  expect(Schema.encodeSync(CommandSchema)(decoded)).toEqual(frame);
+});
+
+test("RPC resume without agent decodes exactly as before", () => {
+  const frame = { _tag: "resume", id: "resume-plain", sessionId: "session-1" };
+  const decoded = Schema.decodeUnknownSync(CommandSchema, { onExcessProperty: "error" })(frame);
+
+  expect(decoded).toEqual(frame);
+  expect("agent" in decoded).toBe(false);
+  expect(Schema.encodeSync(CommandSchema)(decoded)).toEqual(frame);
+});
+
+test.each([
+  ["an empty agent name", ""],
+  ["a non-string agent name", 7],
+])("RPC resume rejects %s", (_label, agent) => {
+  expect(() =>
+    Schema.decodeUnknownSync(CommandSchema, { onExcessProperty: "error" })({
+      _tag: "resume",
+      agent,
+      id: "resume-bad-agent",
+      sessionId: "session-1",
+    }),
+  ).toThrow();
+});

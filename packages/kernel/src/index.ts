@@ -4,7 +4,11 @@
  */
 export const kernelPackage = "@dungle-scrubs/popeye-kernel";
 
-export { type PiAiProviderLayerOptions, PiAiProviderLive } from "./ai/seam.js";
+export {
+  type PiAiProviderLayerOptions,
+  PiAiProviderLive,
+  unresolvedModelMessage,
+} from "./ai/seam.js";
 export {
   Compaction,
   type CompactionFailure,
@@ -192,6 +196,7 @@ export {
 export {
   type ResumedSessionInfo,
   ResumedSessionInfoSchema,
+  type SessionCreateOptions,
   type SessionInfo,
   SessionInfoSchema,
   type SessionSummary,

@@ -981,6 +981,15 @@ const resolveModel = (options: PiAiProviderLayerOptions): ResolvedModel | undefi
   };
 };
 
+/** The startup unknown-model message, shared with per-Session Agent resolution. */
+export const unresolvedModelMessage = (
+  options: Pick<PiAiProviderLayerOptions, "provider" | "baseUrl">,
+  modelId: string,
+): string | undefined =>
+  resolveModel({ ...options, modelId }) === undefined
+    ? `Unknown pi-ai model ${options.provider}/${modelId}.`
+    : undefined;
+
 export const PiAiProviderLive = (
   options: PiAiProviderLayerOptions,
 ): Layer.Layer<Provider, ProviderError, ToolRegistry> => {
@@ -994,7 +1003,9 @@ export const PiAiProviderLive = (
   return resolved === undefined
     ? Layer.fail(
         new ProviderError({
-          message: `Unknown pi-ai model ${options.provider}/${options.modelId}.`,
+          message:
+            unresolvedModelMessage(options, options.modelId) ??
+            "Model resolution changed during startup.",
           transient: false,
         }),
       )

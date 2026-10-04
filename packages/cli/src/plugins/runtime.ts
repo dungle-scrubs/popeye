@@ -48,6 +48,7 @@ export interface CliRuntime {
   }>;
   readonly currentGeneration: Effect.Effect<PluginGeneration>;
   readonly pluginHost: PluginHostService;
+  readonly processToolView: Effect.Effect<SessionToolView>;
   readonly reload: Effect.Effect<GenerationSwapDiagnostic, unknown>;
   readonly sessionToolGrants: SessionToolGrantsService;
   readonly snapshotAudit: Effect.Effect<SnapshotAuditFields>;
@@ -109,30 +110,38 @@ export const makeCliRuntime = (
       } satisfies SnapshotAuditFields;
     });
 
+    const buildView = (
+      sessionId: SessionId,
+      sessionFilters: ReadonlyArray<ToolGrantFilter>,
+    ): Effect.Effect<SessionToolView> =>
+      Effect.gen(function* () {
+        const gen = yield* generationRuntime.view(sessionId as unknown as string);
+        const grantsForAdapt = createCapabilityGrants(sessionId, generationCapabilityUnion(gen));
+        const tools = yield* adaptTools(gen as PluginGeneration, grantsForAdapt).pipe(
+          Effect.catchAll(() => Effect.succeed([] as unknown as ReadonlyArray<Tool.Any>)),
+        );
+        // HCN grant filter, then the Session's own filters (RFC-04 §5): both run after
+        // plugin trust, before model visibility. Capabilities stay as the author declared them.
+        const granted = filterSessionGrantedTools(tools, grants, sessionFilters);
+        // The process-wide surface (deprecated get/list) mirrors the process-level view only;
+        // a narrowed Session's view never replaces it.
+        if (sessionFilters.length === 0) {
+          currentToolsCache = granted;
+        }
+        const map = new Map(granted.map((t) => [t.name, t as unknown as RegisteredTool]));
+        return {
+          admits: (name: string) => isToolGrantedToSession(name, grants, sessionFilters),
+          get: (name: string) => map.get(name),
+          list: () => granted as unknown as ReadonlyArray<RegisteredTool>,
+        } satisfies SessionToolView;
+      });
+
+    const processToolView = buildView(SessionIdSchema.make("process-tool-view"), []);
     const toolRegistry: ToolRegistryService = {
       view: (sessionId) =>
-        Effect.gen(function* () {
-          const gen = yield* generationRuntime.view(sessionId as unknown as string);
-          const grantsForAdapt = createCapabilityGrants(sessionId, generationCapabilityUnion(gen));
-          const tools = yield* adaptTools(gen as PluginGeneration, grantsForAdapt).pipe(
-            Effect.catchAll(() => Effect.succeed([] as unknown as ReadonlyArray<Tool.Any>)),
-          );
-          const sessionFilters = yield* sessionToolGrants.filtersFor(sessionId);
-          // HCN grant filter, then the Session's own filters (RFC-04 §5): both run after
-          // plugin trust, before model visibility. Capabilities stay as the author declared them.
-          const granted = filterSessionGrantedTools(tools, grants, sessionFilters);
-          // The process-wide surface (deprecated get/list) mirrors the process-level view only;
-          // a narrowed Session's view never replaces it.
-          if (sessionFilters.length === 0) {
-            currentToolsCache = granted;
-          }
-          const map = new Map(granted.map((t) => [t.name, t as unknown as RegisteredTool]));
-          return {
-            admits: (name: string) => isToolGrantedToSession(name, grants, sessionFilters),
-            get: (name: string) => map.get(name),
-            list: () => granted as unknown as ReadonlyArray<RegisteredTool>,
-          } satisfies SessionToolView;
-        }),
+        sessionToolGrants
+          .filtersFor(sessionId)
+          .pipe(Effect.flatMap((sessionFilters) => buildView(sessionId, sessionFilters))),
       get: (name: string) => {
         const map = new Map(currentToolsCache.map((t) => [t.name, t as unknown as RegisteredTool]));
         return map.get(name);
@@ -296,6 +305,7 @@ export const makeCliRuntime = (
       currentGeneration,
       debugInfo,
       pluginHost,
+      processToolView,
       reload,
       sessionToolGrants,
       snapshotAudit,

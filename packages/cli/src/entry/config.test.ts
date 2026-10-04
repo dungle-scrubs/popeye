@@ -621,3 +621,36 @@ test("a resolved agent is carried on the run config with its body and tools", as
     tools: ["read", "grep"],
   });
 });
+
+// Issue #55: rpc applies the --agent model precedence per Session, so the run
+// config records which input won the process-level precedence.
+test("modelSource records which input won model precedence", async () => {
+  const env = { POPEYE_BASE_URL: "http://127.0.0.1:1234/v1", POPEYE_MODEL: "env-model" };
+  const discovery = discoveryWith([{ model: "agent-model", name: "scout" }]);
+
+  const fromFlag = await Effect.runPromise(
+    resolveConfig(
+      await parseWithAgent(["-p", "--agent", "scout", "--model", "flag-model", "Explain."]),
+      env,
+      discovery,
+    ),
+  );
+  const fromAgent = await Effect.runPromise(
+    resolveConfig(await parseWithAgent(["-p", "--agent", "scout", "Explain."]), env, discovery),
+  );
+  const fromEnv = await Effect.runPromise(
+    resolveConfig(await parseWithAgent(["-p", "Explain."]), env),
+  );
+  const rpcWithFlag = await Effect.runPromise(
+    resolveConfig(await parseWithAgent(["-p", "--mode", "rpc", "--model", "flag-model"]), env),
+  );
+  const rpcFromEnv = await Effect.runPromise(
+    resolveConfig(await parseWithAgent(["-p", "--mode", "rpc"]), env),
+  );
+
+  expect(fromFlag).toMatchObject({ model: "flag-model", modelSource: "flag" });
+  expect(fromAgent).toMatchObject({ model: "agent-model", modelSource: "agent" });
+  expect(fromEnv).toMatchObject({ model: "env-model", modelSource: "env" });
+  expect(rpcWithFlag).toMatchObject({ model: "flag-model", modelSource: "flag" });
+  expect(rpcFromEnv).toMatchObject({ model: "env-model", modelSource: "env" });
+});

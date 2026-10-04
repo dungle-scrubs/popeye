@@ -147,7 +147,9 @@ Rpc mode refuses the flag, matching `--system-prompt`.
 The rpc `create` command gains an OPTIONAL `agent` string field. When
 present, the created session resolves the definition the same way `--agent`
 does (including model precedence and tool filter composition), applied per
-session. Unknown name fails the create.
+session. Unknown name fails the create. The rpc `resume` command accepts
+the same OPTIONAL field, resolved the same way, because a resumed agent
+session requires the field again (§7).
 
 ### 5. Per-session grant variation
 

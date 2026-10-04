@@ -44,6 +44,9 @@ export interface CliAgentSelection {
   readonly tools: ReadonlyArray<string> | undefined;
 }
 
+/** Which input won RFC-04 §3 model precedence for the process. */
+export type CliModelSource = "agent" | "env" | "flag";
+
 export interface CliRunConfig {
   readonly action: "run";
   readonly access: string | undefined;
@@ -63,6 +66,8 @@ export interface CliRunConfig {
   readonly memory: boolean | undefined;
   readonly mode: CliMode;
   readonly model: string;
+  /** rpc applies the agent model per Session only when the process model is not from --model. */
+  readonly modelSource: CliModelSource;
   readonly noProjectPlugins: boolean;
   readonly pluginPaths: ReadonlyArray<string>;
   readonly prompt: string | undefined;
@@ -167,6 +172,20 @@ const resolveApiKey = (
     : Effect.succeed(providerKey);
 };
 
+/**
+ * RFC-04 E-Agent-Unknown: the one message contract for --agent, the rpc create and resume agent field,
+ * and the delegate Tool.
+ */
+export const unknownAgentMessage = (
+  name: string,
+  discovery: AgentDiscoveryResult | undefined,
+): string => {
+  const available = [...(discovery?.agents.values() ?? [])]
+    .map((definition) => `${definition.name} (${definition.scope})`)
+    .join(", ");
+  return `Unknown agent ${JSON.stringify(name)}. Available agents: ${available.length > 0 ? available : "none"}.`;
+};
+
 export const resolveConfig = (
   parsed: ParsedArgs,
   env: CliEnvironment,
@@ -187,13 +206,7 @@ export const resolveConfig = (
     if (agentName !== undefined) {
       const discovered = agentDiscovery?.agents.get(agentName);
       if (discovered === undefined) {
-        const available = [...(agentDiscovery?.agents.values() ?? [])]
-          .map((definition) => `${definition.name} (${definition.scope})`)
-          .join(", ");
-        return yield* configError(
-          "unknown_agent",
-          `Unknown agent ${JSON.stringify(agentName)}. Available agents: ${available.length > 0 ? available : "none"}.`,
-        );
+        return yield* configError("unknown_agent", unknownAgentMessage(agentName, agentDiscovery));
       }
       agent = {
         body: discovered.body,
@@ -222,6 +235,12 @@ export const resolveConfig = (
     if (model === undefined) {
       return yield* configError("missing_model", `Missing model. ${MODEL_SETUP}`);
     }
+    const modelSource: CliModelSource =
+      parsed.model !== undefined
+        ? "flag"
+        : configured(agent?.model) !== undefined
+          ? "agent"
+          : "env";
     if (parsed.baseUrl === "") {
       return yield* configError(
         "invalid_base_url",
@@ -268,6 +287,7 @@ export const resolveConfig = (
       memory: parsed.memory,
       mode: parsed.mode,
       model,
+      modelSource,
       noProjectPlugins: parsed.noProjectPlugins,
       pluginPaths: parsed.pluginPaths,
       prompt: parsed.prompt,

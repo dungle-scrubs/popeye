@@ -39,13 +39,18 @@ const ExpectedRevisionFields = {
   expectedRevision: Schema.optional(NonNegativeIntegerSchema),
 };
 
+const AgentFields = {
+  /** RFC-04 §4 and §7: the Agent definition the Session runs as. Absent: a plain Session. */
+  agent: Schema.optional(Schema.NonEmptyString),
+};
+
 export const THINKING_LEVELS = ["high", "low", "max", "medium", "minimal", "off", "xhigh"] as const;
 
 export const ThinkingLevelSchema = Schema.Literal(...THINKING_LEVELS);
 
 export const CommandSchema = Schema.Union(
-  Schema.TaggedStruct("create", CorrelationFields),
-  Schema.TaggedStruct("resume", SessionFields),
+  Schema.TaggedStruct("create", { ...CorrelationFields, ...AgentFields }),
+  Schema.TaggedStruct("resume", { ...SessionFields, ...AgentFields }),
   Schema.TaggedStruct("resume-goal", SessionFields),
   Schema.TaggedStruct("list", CorrelationFields),
   Schema.TaggedStruct("prompt", {

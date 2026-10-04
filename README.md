@@ -171,8 +171,8 @@ Plugin with `read-file`, `write-file`, and `run-command` Tools.
 ### Agent definitions
 
 `--agent <name>` starts a headless Session as an Agent definition: a markdown file with YAML
-frontmatter and a body. The frontmatter requires `name` and `description`; `tools` and `model`
-are optional. The body is appended to the system prompt.
+frontmatter and a body. The frontmatter requires `name` and `description`; `tools` and `model` are
+optional. The body is appended to the system prompt.
 
 ```sh
 popeye -p --agent scout "Map the auth flow."
@@ -181,25 +181,46 @@ popeye -p --agent scout "Map the auth flow."
 Discovery reads two flat directories: `~/.popeye/agents` for user definitions and `.popeye/agents`
 at the project root for project definitions. Set `POPEYE_AGENTS_DIR` to read user definitions from
 another directory. A project definition shadows a user definition of the same name. A file with
-invalid frontmatter is skipped with a warning on stderr; the other definitions still load.
-Discovery happens when `--agent` is used.
+invalid frontmatter is skipped with a warning on stderr; the other definitions still load. Discovery
+happens when `--agent` is used.
 
 Name resolution is exact and case-sensitive. An unknown name fails startup and lists the available
-names. Two definitions in one scope with the same name fail startup and name both files. The
-`model` frontmatter key picks the Provider model when `--model` is absent: `--model` beats the
-agent file, and the agent file beats `POPEYE_MODEL`. A `tools` list narrows the Tools the Session
-is offered: the Session gets only the Tools that are both in the list and granted by `--tools`,
-`--exclude-tools`, and `--access`, so no flag can widen it, and a first-party Tool such as
-`manage-goal` must be listed to stay available. `native:<name>` is accepted. A list whose every
-name is outside the granted Tools fails startup, so any non-empty list fails under
-`--isolation tool-free`. Names outside the granted Tools, whether no Tool has that name or a flag
-removed it, are reported on stderr, and the Session runs with the rest. An absent or empty list
-changes nothing. `--agent` is refused in RPC mode, like the system-prompt flags.
+names. Two definitions in one scope with the same name fail startup and name both files. The `model`
+frontmatter key picks the Provider model when `--model` is absent: `--model` beats the agent file,
+and the agent file beats `POPEYE_MODEL`. A `tools` list narrows the Tools the Session is offered:
+the Session gets only the Tools that are both in the list and granted by `--tools`, `--exclude-
+tools`, and `--access`, so no flag can widen it, and a first-party Tool such as `manage-goal` must
+be listed to stay available. `native:<name>` is accepted. A list whose every name is outside the
+granted Tools fails startup, so any non-empty list fails under `--isolation tool-free`. Names
+outside the granted Tools, whether no Tool has that name or a flag removed it, are reported on
+stderr, and the Session runs with the rest. An absent or empty list changes nothing. RPC mode
+refuses `--agent`; an RPC client names the Agent per Session with the `agent` field of `create`
+(below).
 
-`--agent` is a startup input, like `--system-prompt` and `--append-system-prompt`. Nothing about
-the agent is journaled with the Session: resuming a Session that ran as an agent without passing
-`--agent` again produces an unagented Session, with no warning. Pass `--agent` on resume to
-continue with the same persona.
+`--agent` is a startup input, like `--system-prompt` and `--append-system-prompt`. Nothing about the
+agent is journaled with the Session: resuming a Session that ran as an agent without passing
+`--agent` again produces an unagented Session, with no warning. Pass `--agent` on resume to continue
+with the same persona.
+
+An RPC client starts an Agent session with `{"_tag":"create","agent":"<name>"}`. Each such `create`
+reads both directories again, so an edited definition applies to the next one. The name, `model`,
+body, and `tools` list resolve exactly as for `--agent`, but for that Session only: other Sessions
+in the process keep the process model and Tools. `--model` on the process beats the agent `model`,
+which beats `POPEYE_MODEL`, and a later `set-model` for the Session beats all three. Every `prompt`
+frame for the Session carries the body as appended system prompt. Turns the Kernel opens on its own
+(a goal continuation, a `steer` that becomes a Follow-up, or a Goal restart) keep the Agent's Tools
+but run with the process model and no persona. An unknown name, a definition load failure, an
+unresolvable Agent model, or a `tools` list with no granted name fails the `create` with error code
+`agent_error` and creates no Session; `details.reason` names the cause (`agent_model_unresolvable`
+for an unresolvable Agent model), and for `unknown_agent`, `details.available` lists the names.
+Names outside the granted Tools are logged on stderr, and the Session runs with the rest. A `fork`
+of an Agent session runs as the same Agent, even when the fork fails partway and leaves the new
+Session behind. After `close`, a `resume` without `agent`, in the same process or a new one, is a
+plain Session; `{"_tag":"resume","sessionId":"<id>","agent":"<name>"}` resumes it as the Agent,
+resolved the same way, with the Agent's Tools already in force for crash recovery. The same failures
+fail the `resume` with `agent_error` and leave the Session unresumed. A `resume` with `agent` of a
+Session that already runs as an Agent in this process fails with `details.reason`
+`agent_session_bound`: `close` it first.
 
 ### Reasoning and Tool selection
 

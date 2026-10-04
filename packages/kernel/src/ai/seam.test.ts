@@ -31,7 +31,7 @@ import {
 import { expect, test } from "vitest";
 import { ProviderError } from "../errors.js";
 import type { PiAiProviderLayerOptions } from "../index.js";
-import { PiAiProviderLive } from "../index.js";
+import { PiAiProviderLive, unresolvedModelMessage } from "../index.js";
 import { Provider, ThinkingLevelSchema } from "../provider.js";
 import { accountingRows } from "../request-accounting.js";
 import { defineTool, ToolRegistryLive } from "../tool.js";
@@ -1535,4 +1535,27 @@ test("API key policy distinguishes lmstudio, explicit keys, and known-provider p
       "Bearer env-key",
     ]);
   });
+});
+
+test.each([
+  {
+    label: "known model",
+    options: { provider: "groq" },
+    modelId: "llama-3.1-8b-instant",
+    expected: undefined,
+  },
+  {
+    label: "unknown model without base URL",
+    options: { provider: "groq" },
+    modelId: "not-a-model",
+    expected: "Unknown pi-ai model groq/not-a-model.",
+  },
+  {
+    label: "any model with base URL",
+    options: { provider: "groq", baseUrl: "http://127.0.0.1:1234/v1" },
+    modelId: "not-a-model",
+    expected: undefined,
+  },
+])("unresolvedModelMessage: $label", ({ options, modelId, expected }) => {
+  expect(unresolvedModelMessage(options, modelId)).toBe(expected);
 });

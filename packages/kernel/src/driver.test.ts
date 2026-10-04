@@ -1,13 +1,13 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { JournalError } from "@dungle-scrubs/popeye-journal";
 import {
   type ContextBudgetExceeded,
   createMemoryJournalBacking,
   EntryDraftSchema,
   foldContext,
   Journal,
+  JournalError,
   JournalJsonl,
   JournalMemory,
   type SessionId,
@@ -860,4 +860,142 @@ test("thinking Progress from a retried attempt is published but never enters the
   const serialized = JSON.stringify(snapshot);
   expect(serialized).not.toContain("Discarded text.");
   expect(serialized).not.toContain("thinking.");
+});
+
+// Issue #55: a host binds per-Session state (an rpc Agent Session's Tool filter, persona, and
+// model) through SessionCreateOptions.bind. It runs with the new Session's id before the Session
+// can accept work, so neither createSession nor a fork that fails while copying can leave a
+// Session that runs without its binding.
+const bindProbe = (driver: Driver["Type"], journal: Journal["Type"]) => {
+  const calls: Array<{
+    readonly entryKinds: ReadonlyArray<string>;
+    readonly sessionId: SessionId;
+    readonly snapshotFailure: string | undefined;
+  }> = [];
+  const bind = (sessionId: SessionId) =>
+    Effect.gen(function* () {
+      const snapshot = yield* Effect.either(driver.getSnapshot(sessionId));
+      const branch = yield* Effect.orDie(journal.readBranch(sessionId));
+      calls.push({
+        entryKinds: branch.map((entry) => entry.kind),
+        sessionId,
+        snapshotFailure: snapshot._tag === "Left" ? snapshot.left._tag : undefined,
+      });
+    });
+  return { bind, calls };
+};
+
+test("createSession runs bind with the new Session id before the Session accepts work", async () => {
+  const journalLayer = JournalMemory(createMemoryJournalBacking());
+  const provider: ProviderService = {
+    streamAssistant: () => Stream.succeed({ _tag: "done", stopReason: "done" }),
+  };
+  const layer = Layer.merge(
+    driverLayer(provider, ToolRegistryLive([]), journalLayer),
+    journalLayer,
+  );
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const probe = bindProbe(driver, yield* Journal);
+      const created = yield* driver.createSession({ bind: probe.bind });
+      const plain = yield* driver.createSession();
+      return { calls: probe.calls, created, plain };
+    }).pipe(Effect.provide(layer)),
+  );
+
+  expect(result.calls).toEqual([
+    {
+      entryKinds: ["session_root"],
+      sessionId: result.created.id,
+      snapshotFailure: "MailboxSessionNotFound",
+    },
+  ]);
+  expect(result.plain.id).not.toBe(result.created.id);
+});
+
+test("fork runs bind with the child id after creating it and before copying the Branch", async () => {
+  const journalLayer = JournalMemory(createMemoryJournalBacking());
+  const provider: ProviderService = {
+    streamAssistant: () => Stream.succeed({ _tag: "done", stopReason: "done" }),
+  };
+  const layer = Layer.merge(
+    driverLayer(provider, ToolRegistryLive([]), journalLayer),
+    journalLayer,
+  );
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const probe = bindProbe(driver, yield* Journal);
+      const parent = yield* driver.createSession();
+      yield* driver.prompt(parent.id, "Copied prompt.");
+      const leaf = (yield* driver.getSnapshot(parent.id)).leaf.id;
+      const forked = yield* driver.fork(parent.id, leaf, undefined, {
+        bind: probe.bind,
+      });
+      return { calls: probe.calls, forked, parent };
+    }).pipe(Effect.provide(layer)),
+  );
+
+  expect(result.calls).toEqual([
+    {
+      entryKinds: ["session_root"],
+      sessionId: result.forked.sessionId,
+      snapshotFailure: "MailboxSessionNotFound",
+    },
+  ]);
+  expect(result.forked.sessionId).not.toBe(result.parent.id);
+  expect(result.forked.entries.length).toBeGreaterThan(1);
+});
+
+test("a fork whose copy fails has already bound the child it leaves in the Journal", async () => {
+  let parentId: SessionId | undefined;
+  let failChildAppends = false;
+  const journalLayer = Layer.effect(
+    Journal,
+    Effect.map(Journal, (journal) => ({
+      ...journal,
+      appendEntry: (sessionId: SessionId, draft: Parameters<typeof journal.appendEntry>[1]) =>
+        failChildAppends && sessionId !== parentId
+          ? Effect.fail(
+              new JournalError({
+                corruptionClass: "io_failure",
+                message: "Injected child-copy persistence failure.",
+              }),
+            )
+          : journal.appendEntry(sessionId, draft),
+    })),
+  ).pipe(Layer.provide(JournalMemory(createMemoryJournalBacking())));
+  const provider: ProviderService = {
+    streamAssistant: () => Stream.succeed({ _tag: "done", stopReason: "done" }),
+  };
+  const layer = Layer.merge(
+    driverLayer(provider, ToolRegistryLive([]), journalLayer),
+    journalLayer,
+  );
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const probe = bindProbe(driver, yield* Journal);
+      const parent = yield* driver.createSession();
+      parentId = parent.id;
+      yield* driver.prompt(parent.id, "Copied prompt.");
+      const leaf = (yield* driver.getSnapshot(parent.id)).leaf.id;
+      failChildAppends = true;
+      const failure = yield* Effect.flip(
+        driver.fork(parent.id, leaf, undefined, { bind: probe.bind }),
+      );
+      failChildAppends = false;
+      const sessions = yield* driver.listSessions();
+      return { calls: probe.calls, failure, parent, sessions };
+    }).pipe(Effect.provide(layer)),
+  );
+
+  const leftover = result.sessions.filter((session) => session.id !== result.parent.id);
+  expect(result.failure).toMatchObject({ _tag: "JournalError", corruptionClass: "io_failure" });
+  expect(leftover).toHaveLength(1);
+  expect(result.calls.map((call) => call.sessionId)).toEqual([leftover[0]?.id]);
 });

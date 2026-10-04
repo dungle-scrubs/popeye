@@ -155,6 +155,7 @@ export const ResponseResultSchema = Schema.Union(
 export type ResponseResult = Schema.Schema.Type<typeof ResponseResultSchema>;
 
 export const WireErrorCodeSchema = Schema.Literal(
+  "agent_error",
   "budget_exceeded",
   "compaction_disabled",
   "gate_rejected",
