@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Cause, Effect, Exit } from "effect";
 import { expect, test } from "vitest";
 
-import { AgentDiscoveryError, discoverAgents } from "./loader.js";
+import { AgentDiscoveryError, discoverAgents, formatAvailableAgents } from "./loader.js";
 
 const makeTempDir = async (): Promise<string> => mkdtemp(join(tmpdir(), "popeye-agents-"));
 
@@ -313,4 +313,19 @@ test("a project agents directory symlinked within the project loads normally", a
 
   expect(result.agents.get("internal")?.name).toBe("internal");
   expect(result.diagnostics).toEqual([]);
+});
+
+test("the available-agents listing names each definition with its scope in discovery order", async () => {
+  const userDir = await makeTempDir();
+  const projectPath = await makeTempDir();
+  await writeDefinition(userDir, "scout.md", "---\nname: scout\ndescription: d\n---\n");
+  await writeDefinition(
+    join(projectPath, ".popeye", "agents"),
+    "planner.md",
+    "---\nname: planner\ndescription: d\n---\n",
+  );
+  const discovered = await Effect.runPromise(discoverAgents({ projectPath, userDir }));
+
+  expect(formatAvailableAgents(discovered.agents)).toBe("scout (user), planner (project)");
+  expect(formatAvailableAgents(new Map())).toBe("none");
 });

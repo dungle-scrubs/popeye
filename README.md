@@ -154,16 +154,21 @@ A resumed print, JSON, or HCN Head with no new prompt continues an active Goal. 
 `resume-goal` after `resume` when they want to continue without a new prompt. After abort, resume a
 paused Goal explicitly through `/goal resume` or the corresponding user RPC path.
 
-The CLI auto-trusts discovered Plugin code. It loads user-global Plugins from `~/.popeye/plugins` and
-project Plugins from `.popeye/plugins`. Tools contributed by loaded Plugins are available to the
+The CLI auto-trusts discovered Plugin code. It loads user-global Plugins from `~/.popeye/plugins`
+and project Plugins from `.popeye/plugins`. Tools contributed by loaded Plugins are available to the
 model. Running `popeye` inside a repository executes that repository's Plugin code, the same trust
 you extend to its own scripts; use `--no-project-plugins` to opt out, or install a Trust-gate
-Plugin user-globally.
+Plugin user-globally. Project-scope Agents are also discovered at every headless start: their
+descriptions enter the model's context through `delegate`, and their bodies can become child
+personas. `--no-project-plugins` skips project-scope Agents at startup and on every delegate or rpc
+Agent resolution; only user-scope Agents remain available.
 
 ### Default Tools
 
 The headless host ships no filesystem or shell coding Tools. With the default first-party Plugins
 (`compact`, `goal`, `reload`, and `session-name`), the only model-visible Tool is `manage-goal`.
+When at least one Agent definition is discoverable, the first-party `delegation` Plugin adds the
+`delegate` Tool (see Delegation).
 The model cannot read or write files or run commands until a Plugin adds Tools for that.
 [Plugin authoring](docs/plugin-authoring.md#minimal-local-coding-plugin) has a minimal local coding
 Plugin with `read-file`, `write-file`, and `run-command` Tools.
@@ -181,8 +186,12 @@ popeye -p --agent scout "Map the auth flow."
 Discovery reads two flat directories: `~/.popeye/agents` for user definitions and `.popeye/agents`
 at the project root for project definitions. Set `POPEYE_AGENTS_DIR` to read user definitions from
 another directory. A project definition shadows a user definition of the same name. A file with
-invalid frontmatter is skipped with a warning on stderr; the other definitions still load. Discovery
-happens when `--agent` is used.
+invalid frontmatter is skipped with a warning on stderr; the other definitions still load.
+Discovery runs at every headless start. With `--agent`, a load error fails startup and
+each skipped file is reported on stderr. Without `--agent`, nothing changes unless at
+least one definition is discoverable: then skipped files are reported the same way and the
+`delegate` Tool is registered. A load error, or files that are all skipped, leaves stderr
+and the Tool list as they were.
 
 Name resolution is exact and case-sensitive. An unknown name fails startup and lists the available
 names. Two definitions in one scope with the same name fail startup and name both files. The `model`
@@ -221,6 +230,45 @@ resolved the same way, with the Agent's Tools already in force for crash recover
 fail the `resume` with `agent_error` and leave the Session unresumed. A `resume` with `agent` of a
 Session that already runs as an Agent in this process fails with `details.reason`
 `agent_session_bound`: `close` it first.
+
+#### Delegation
+
+When at least one Agent definition is discoverable at startup, the first-party `delegation`
+Plugin registers the `delegate` Tool in every mode. Its arguments are `agent` (an exact
+definition name), `task`, and an optional `cwd`. Each call discovers definitions again, so
+edits apply to the next call. A call creates a new child Session in the same
+`--session-dir`, applies the definition's body, `model`, and `tools` to it, prompts it with
+`Task: <task>`, and returns the child's final message as the Tool result. The child sees only
+the task, not the parent's conversation. Its Tools are the intersection of the process
+grant, the parent Session's own filters, and the definition's `tools` list, so a child is
+never offered a Tool its parent cannot call; a child keeps `delegate` only when its parent
+has it and its list does not leave it out. Delegation is capped at depth 3: a Session created or
+resumed by the head is depth 0, and each child is its parent's depth plus 1. A depth-3 child is
+never offered `delegate`, and a direct call at depth 3 or more fails without creating a child.
+Depth is tracked only in-process and dropped on release; a child resumed later is a head Session
+at depth 0. There is no global bound on combined descendant concurrency. `--model` beats
+the definition's `model` for children too, and `--effort` applies to children;
+`--system-prompt` and `--append-system-prompt` do not. In rpc mode a child does not inherit the
+parent Session's `set-model` or `set-thinking`: it uses its Agent's `model` unless `--model`
+was passed, and the head's `--effort`. A child's compaction requests use
+the process model and reasoning level, not the definition's `model` or `--effort`. No
+Agent name or model setting is stored in the child Session and no `model_change` Entry
+is added, so resuming a child does not restore its Agent's model; request accounting
+Records still name the model each request used. `cwd` resolves against the process working
+directory, must be a directory, and reaches the child as a `Working directory:` line in its system
+content; Tools still run in the process working directory. An unknown name returns a failed result
+that lists the available agents. Several `delegate` calls in one response run in parallel
+under the Tool batch limit (4 by default). Aborting the parent Turn aborts the child: a
+child Turn that had started keeps what it completed and an aborted assistant message, and
+one that had not started yet never starts. The child Session resumes with
+`--resume <id>`. The child's final message is returned whole, with no truncation in v1. A
+message larger than the parent's context budget ends the parent Turn with an error: with
+compaction on (the default), summarizing it can exhaust the Turn's Provider round bound
+(`provider_error`); with compaction off, or when the retained message alone still exceeds
+the budget, the error is `budget_exceeded`. Later Turns on that Branch fail the same way
+until the budget or compaction options change or the user branches to an earlier Entry.
+The RPC 1 MiB frame limit still applies to Snapshots that carry it. `--skills` removes the
+Tool unless it names `delegation`.
 
 ### Reasoning and Tool selection
 

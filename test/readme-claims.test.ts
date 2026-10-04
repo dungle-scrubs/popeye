@@ -220,6 +220,26 @@ describe("README default Tools", () => {
   });
 });
 
+describe("README Delegation", () => {
+  // Issue #56: the delegate Tool's registration, child shape, and v1 blast radius are documented.
+  test("documents when the delegate Tool registers and what a delegated child is", () => {
+    const agents = flat(section(readme, "### Agent definitions"));
+    expect(agents).not.toContain("Discovery happens when `--agent` is used.");
+    expect(agents).toContain("Discovery runs at every headless start.");
+    expect(agents).toContain("the `delegate` Tool");
+    expect(agents).toContain("`Task: <task>`");
+    expect(agents).toContain("never offered a Tool its parent cannot call");
+    expect(agents).toContain("no truncation");
+    // No behavior change when no definition is discoverable (issue #56 brief).
+    expect(agents).toContain("leaves stderr and the Tool list as they were");
+    // Oversize results are not promised one diagnostic: compaction can hit the round bound.
+    expect(agents).toContain("Provider round bound");
+    expect(agents).not.toContain("ends the parent Turn with a `budget_exceeded` error");
+    // Compaction requests keep the process Provider defaults.
+    expect(agents).toContain("compaction requests use the process model");
+  });
+});
+
 describe("guide accuracy", () => {
   test("the conformance guide names the Vitest peer range the packages declare", () => {
     const guide = flat(read("docs/conformance-suites.md"));

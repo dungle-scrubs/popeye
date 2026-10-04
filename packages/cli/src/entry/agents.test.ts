@@ -456,7 +456,8 @@ test("an absent or empty tools key leaves the default grant unchanged", () => {
     const { result } = runFixtureAgent(frontmatter);
 
     expect(result.status).toBe(0);
-    expect(startupToolCount(result.stderr)).toBe(DEFAULT_TOOL_COUNT);
+    // The discoverable definition also registers the delegate Tool (RFC-04 §6, issue #56).
+    expect(startupToolCount(result.stderr)).toBe(DEFAULT_TOOL_COUNT + 1);
   }
 }, 30_000);
 
@@ -499,3 +500,19 @@ test("a list whose every name is outside the granted set fails closed, even when
   expect(result.stderr).toContain("lists only tools this session does not grant: bash");
   expect(startupToolCount(result.stderr)).toBeUndefined();
 });
+
+test("--no-project-plugins makes a project-only --agent unknown and lists only user Agents", () => {
+  const projectPath = tempDirectory();
+  const agentsDir = tempDirectory();
+  userAgent(join(projectPath, ".popeye", "agents"), "project-only");
+  userAgent(agentsDir, "user-only");
+  const result = runAsAgent(["--no-project-plugins", "--agent", "project-only"], {
+    agentsDir,
+    cwd: projectPath,
+  });
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain(
+    'Unknown agent "project-only". Available agents: user-only (user).',
+  );
+  expect(result.stderr).not.toContain("project-only (project)");
+}, 15_000);

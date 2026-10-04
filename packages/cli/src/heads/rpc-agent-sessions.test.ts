@@ -10,6 +10,7 @@
  * over makeCliRuntime and the real Driver; the production composition root is
  * covered by entry/rpc-agent.test.ts.
  */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,7 +34,6 @@ import {
 import { defineToolContribution } from "@dungle-scrubs/popeye-plugins";
 import { Data, Effect, Layer, Logger, Schema, Stream } from "effect";
 import { expect, test } from "vitest";
-
 import type { AgentDiscoveryResult } from "../agents/loader.js";
 import { type AgentSessionResolver, makeAgentSessionResolver } from "../agents/session-agent.js";
 import {
@@ -44,6 +44,7 @@ import {
   ToolRegistry,
 } from "../compose.js";
 import { type CliRuntime, makeCliRuntime } from "../plugins/runtime.js";
+import { fakeProviderEnvironment, runBuiltBin } from "../test-support/cli.js";
 import { composeToolGrantFilter, type ToolGrantFilter } from "../tools/grants.js";
 import { SessionToolGrants } from "../tools/session-grants.js";
 import type { HeadWriter } from "./head-wire.js";
@@ -1201,3 +1202,53 @@ test("a tagged JournalNotFound from another package copy releases the resume bin
   expect(result.error).toMatchObject({ _tag: "JournalNotFound", what: "session", id: sessionId });
   expect(result.filters).toEqual([]);
 });
+
+test("rpc create under --no-project-plugins rejects a project-only Agent with unknown_agent", () => {
+  const projectPath = mkdtempSync(join(tmpdir(), "popeye-rpc-agent-opt-out-"));
+  try {
+    const agentsDir = join(projectPath, ".popeye", "agents");
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(
+      join(agentsDir, "project-only.md"),
+      "---\nname: project-only\ndescription: project agent\n---\nPersona.\n",
+    );
+    const userDir = join(projectPath, "user-agents");
+    mkdirSync(userDir);
+    writeFileSync(
+      join(userDir, "user-only.md"),
+      "---\nname: user-only\ndescription: user agent\n---\nPersona.\n",
+    );
+    const result = runBuiltBin(
+      [
+        "-p",
+        "--mode",
+        "rpc",
+        "--no-project-plugins",
+        "--session-dir",
+        join(projectPath, "sessions"),
+      ],
+      {
+        cwd: projectPath,
+        env: {
+          ...fakeProviderEnvironment(),
+          POPEYE_AGENTS_DIR: userDir,
+          POPEYE_USER_PLUGIN_DIR: join(projectPath, "absent-plugins"),
+        },
+        input: `${JSON.stringify({ _tag: "create", agent: "project-only", id: "c-project" })}\n`,
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const frames = result.stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(frames.find((frame) => frame.id === "c-project")).toMatchObject({
+      error: {
+        code: "agent_error",
+        details: { reason: "unknown_agent", available: ["user-only"] },
+      },
+    });
+  } finally {
+    rmSync(projectPath, { recursive: true, force: true });
+  }
+}, 15_000);

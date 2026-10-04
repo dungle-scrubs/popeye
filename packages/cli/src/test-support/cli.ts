@@ -1,4 +1,7 @@
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 export const BUILT_BIN_PATH = new URL("../../dist/bin/popeye.js", import.meta.url).pathname;
 export const FAKE_PROVIDER_PROMPT = "Capture the CLI JSON stream.";
@@ -7,6 +10,17 @@ export const FAKE_PROVIDER_SCRIPT_PATH = new URL(
   import.meta.url,
 ).pathname;
 export const WORKSPACE_PATH = new URL("../../../..", import.meta.url).pathname;
+
+/**
+ * A user-scope Agent directory that never exists. Discovery treats a missing directory as empty,
+ * so a spawned CLI never reads the developer's ~/.popeye/agents: Tool counts and the delegate
+ * Tool's registration (RFC-04 §6) stay independent of the machine. A test that needs Agent
+ * definitions sets POPEYE_AGENTS_DIR to its own directory.
+ */
+export const ABSENT_AGENTS_DIR = new URL(
+  "../../test-fixtures/agents-dir-never-created",
+  import.meta.url,
+).pathname;
 
 export const cleanCliEnvironment = (): NodeJS.ProcessEnv => {
   const env = { ...process.env };
@@ -26,6 +40,7 @@ export const cleanCliEnvironment = (): NodeJS.ProcessEnv => {
   ]) {
     delete env[key];
   }
+  env.POPEYE_AGENTS_DIR = ABSENT_AGENTS_DIR;
   return env;
 };
 
@@ -44,11 +59,20 @@ export const runBuiltBin = (
     readonly env?: NodeJS.ProcessEnv;
     readonly input?: string;
   } = {},
-) =>
-  spawnSync(process.execPath, [BUILT_BIN_PATH, ...args], {
-    cwd: options.cwd ?? WORKSPACE_PATH,
-    encoding: "utf8",
-    env: options.env ?? cleanCliEnvironment(),
-    input: options.input,
-    maxBuffer: 4 * 1024 * 1024,
-  });
+) => {
+  const temporaryCwd =
+    options.cwd === undefined ? mkdtempSync(join(tmpdir(), "popeye-bin-")) : undefined;
+  try {
+    return spawnSync(process.execPath, [BUILT_BIN_PATH, ...args], {
+      cwd: options.cwd ?? temporaryCwd,
+      encoding: "utf8",
+      env: options.env ?? cleanCliEnvironment(),
+      input: options.input,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+  } finally {
+    if (temporaryCwd !== undefined) {
+      rmSync(temporaryCwd, { force: true, recursive: true });
+    }
+  }
+};

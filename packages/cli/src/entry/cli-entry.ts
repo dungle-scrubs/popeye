@@ -29,6 +29,7 @@ import { accountingRows, unresolvedModelMessage } from "@dungle-scrubs/popeye-ke
 import { type PluginInteractions, PluginInteractionsNullLive } from "@dungle-scrubs/popeye-plugins";
 import { Cause, Data, Effect, Exit, Layer, Logger, Schema, Stream } from "effect";
 
+import { makeDelegation, withDelegation } from "../agents/delegation.js";
 import { discoverAgents } from "../agents/loader.js";
 import { makeAgentSessionResolver } from "../agents/session-agent.js";
 import type { AssistantItem, Driver, ProviderService } from "../compose.js";
@@ -45,6 +46,7 @@ import {
   type SessionLifecycleService,
   ToolRegistry,
 } from "../compose.js";
+import { defaultFirstPartyPlugins } from "../features/first-party-suite.js";
 import { runHcnHead } from "../heads/hcn.js";
 import {
   errorMessage,
@@ -443,7 +445,25 @@ const runWithConfig = (
       isolation: config.isolation,
       tools: config.tools,
     });
+    const delegation =
+      config.discoveredAgents.size === 0
+        ? undefined
+        : yield* makeDelegation({
+            discover: discoverAgents({
+              noProjectAgents: config.noProjectPlugins,
+              projectPath: process.cwd(),
+              userDir: config.userAgentsDir,
+            }),
+            modelSource: config.modelSource,
+            projectPath: process.cwd(),
+            startupAgents: config.discoveredAgents,
+            thinkingLevel:
+              config.effort === undefined ? undefined : HCN_EFFORT_TO_THINKING_LEVEL[config.effort],
+          });
     const cliRuntime = yield* makeCliRuntime({
+      ...(delegation === undefined
+        ? {}
+        : { firstPartyPlugins: [...defaultFirstPartyPlugins, delegation.plugin] }),
       ...(config.isolation === undefined ? {} : { isolation: config.isolation }),
       noProjectPlugins: config.noProjectPlugins,
       pluginPaths: config.pluginPaths,
@@ -546,7 +566,13 @@ const runWithConfig = (
         Layer.provide(dependencies),
       );
       const runtime = composeHeadRuntime({
-        driver,
+        driver:
+          delegation === undefined
+            ? driver
+            : withDelegation(driver, delegation, {
+                sessionToolGrants: cliRuntime.sessionToolGrants,
+                toolRegistry: cliRuntime.toolRegistry,
+              }),
         lifecycle,
         mode: config.mode,
         sessionToolGrants: cliRuntime.sessionToolGrants,
@@ -595,6 +621,7 @@ const runWithConfig = (
         // the --agent scopes, against the process-level Tool view (#54 Decision 7).
         const agents = makeAgentSessionResolver({
           discover: discoverAgents({
+            noProjectAgents: config.noProjectPlugins,
             projectPath: process.cwd(),
             userDir: resolveUserAgentsDir(env),
           }),
@@ -762,26 +789,34 @@ export const executeCli = async (
   const program = Effect.gen(function* () {
     const initial = yield* parseArgs(argv);
     const parsed = initial.action === "run" ? yield* completePrompt(initial, io.input) : initial;
-    // RFC-04 slice 1: discovery runs lazily, only when --agent names a persona.
-    // Diagnostics land on stderr immediately, before any fallible config step,
-    // so a load failure never hides why a file was skipped.
+    // Discovery runs for every run action. Without --agent, zero valid definitions
+    // leave stderr and the Tool list unchanged. Report skips before resolving config.
+    const discover = discoverAgents({
+      noProjectAgents: parsed.action === "run" && parsed.noProjectPlugins,
+      projectPath: process.cwd(),
+      userDir: resolveUserAgentsDir(env),
+    });
     const agentDiscovery =
-      parsed.action === "run" && parsed.agent !== undefined
-        ? yield* discoverAgents({
-            projectPath: process.cwd(),
-            userDir: resolveUserAgentsDir(env),
-          }).pipe(
-            Effect.mapError(
-              (cause) =>
-                new CliConfigError({
-                  ...(cause.cause === undefined ? {} : { cause: cause.cause }),
-                  message: cause.message,
-                  reason: cause.reason,
-                }),
-            ),
-          )
-        : undefined;
-    if (agentDiscovery !== undefined) {
+      parsed.action !== "run"
+        ? undefined
+        : parsed.agent !== undefined
+          ? yield* discover.pipe(
+              Effect.mapError(
+                (cause) =>
+                  new CliConfigError({
+                    ...(cause.cause === undefined ? {} : { cause: cause.cause }),
+                    message: cause.message,
+                    reason: cause.reason,
+                  }),
+              ),
+            )
+          : yield* discover.pipe(
+              Effect.catchTag("AgentDiscoveryError", () => Effect.succeed(undefined)),
+            );
+    const reportSkipped =
+      agentDiscovery !== undefined &&
+      ((parsed.action === "run" && parsed.agent !== undefined) || agentDiscovery.agents.size > 0);
+    if (reportSkipped) {
       for (const diagnostic of agentDiscovery.diagnostics) {
         yield* errorWriter
           .write(`Agent definition ${diagnostic.filePath} skipped: ${diagnostic.detail}.\n`)

@@ -43,8 +43,9 @@ import {
   SessionIdSchema,
 } from "@dungle-scrubs/popeye-journal";
 import type { ProtocolError } from "@dungle-scrubs/popeye-protocol";
-import { Context, Effect, Layer, Schema, type Stream } from "effect";
+import { Clock, Context, Effect, Layer, Schema, type Stream } from "effect";
 
+import { boundedWait } from "./bounded-wait.js";
 import {
   Compaction,
   type CompactionFailure,
@@ -488,13 +489,22 @@ const makeDriverService = (
       sessionId: SessionId,
     ): Effect.Effect<CloseSessionResult, JournalFailure | MailboxFailure> =>
       Effect.gen(function* () {
-        // One 5s budget for the whole close: abort plus drain race it
-        // together instead of stacking two serial graces. On expiry the
-        // HCN close path takes over; the snapshot read still runs.
-        const settled = yield* Effect.gen(function* () {
-          yield* orchestrator.abortTurn(sessionId);
-          return yield* mailbox.closeSession(sessionId);
-        }).pipe(Effect.timeoutOption(`${CLOSE_GRACE_MS} millis`));
+        const startedAt = yield* Clock.currentTimeMillis;
+        // Admission stops first, so a Turn still being admitted never starts (issue 56).
+        yield* orchestrator.beginClose(sessionId);
+        // The uninterruptible abort stage lasts abortGraceMs plus force-settle and is not
+        // capped at CLOSE_GRACE_MS. The drain gets what is left of the close budget.
+        yield* boundedWait(orchestrator.abortTurn(sessionId), CLOSE_GRACE_MS);
+        const elapsed = (yield* Clock.currentTimeMillis) - startedAt;
+        // Deactivation always runs, whatever the abort stage did.
+        const drainedWithinGrace = yield* mailbox.closeSession(
+          sessionId,
+          Math.max(0, CLOSE_GRACE_MS - elapsed),
+        );
+        // Past grace, in-flight work may still reach registration: admission stays stopped.
+        if (drainedWithinGrace) {
+          yield* orchestrator.endClose(sessionId);
+        }
         const snapshot = yield* readSnapshotCore(sessionId).pipe(
           Effect.flatMap((core) =>
             journal
@@ -502,11 +512,10 @@ const makeDriverService = (
               .pipe(Effect.map((revision) => makeSnapshot(core, revision))),
           ),
         );
-        const drainedWithinGrace = settled !== undefined;
         // Reported only after the close settled and its Snapshot read succeeded.
         yield* lifecycle.closed(sessionId, drainedWithinGrace, store.listSessions());
         return { drainedWithinGrace, snapshot };
-      });
+      }).pipe(Effect.uninterruptible);
 
     return {
       abortTurn: (sessionId) => orchestrator.abortTurn(sessionId),
@@ -590,7 +599,10 @@ const makeDriverService = (
           onAdmitted,
         ),
       resumeSession: (sessionId) =>
-        sessions.resume(sessionId).pipe(Effect.tap(() => readSnapshot(sessionId))),
+        orchestrator.endClose(sessionId).pipe(
+          Effect.zipRight(sessions.resume(sessionId)),
+          Effect.tap(() => readSnapshot(sessionId)),
+        ),
       resumeGoal: (sessionId) => orchestrator.resumeGoal(sessionId),
       setModel: updateModel,
       setThinkingLevel: updateThinkingLevel,
