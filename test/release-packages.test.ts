@@ -22,7 +22,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+
+// Every test here spawns node, tar, or npm; the 5 s default flakes on slower CI runners.
+vi.setConfig({ testTimeout: 15_000 });
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const script = join(repositoryRoot, "scripts", "release-packages.mjs");
