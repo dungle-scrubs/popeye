@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/dungle-scrubs/popeye/compare/popeye-v0.1.5...popeye-v0.1.6) (2026-10-04)
+
+
+### Added
+
+* **cli:** an Agent tools list narrows the session's Tool grant ([#83](https://github.com/dungle-scrubs/popeye/issues/83)) ([354d520](https://github.com/dungle-scrubs/popeye/commit/354d520e57ad25f51386bd51026fca13e5eb70f1)), closes [#53](https://github.com/dungle-scrubs/popeye/issues/53)
+
 ## [0.1.5](https://github.com/dungle-scrubs/popeye/compare/popeye-v0.1.4...popeye-v0.1.5) (2026-10-04)
 
 

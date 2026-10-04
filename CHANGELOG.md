@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6](https://github.com/dungle-scrubs/popeye/compare/popeye-workspace-v0.1.5...popeye-workspace-v0.1.6) (2026-10-04)
+
+
+### Added
+
+* **cli:** an Agent tools list narrows the session's Tool grant ([#83](https://github.com/dungle-scrubs/popeye/issues/83)) ([354d520](https://github.com/dungle-scrubs/popeye/commit/354d520e57ad25f51386bd51026fca13e5eb70f1)), closes [#53](https://github.com/dungle-scrubs/popeye/issues/53)
+
+
+### Fixed
+
+* **kernel:** publish thinking Progress while the model reasons ([#84](https://github.com/dungle-scrubs/popeye/issues/84)) ([21568fc](https://github.com/dungle-scrubs/popeye/commit/21568fc1428f902c53d4a881a5ec5c5000b025fb)), closes [#74](https://github.com/dungle-scrubs/popeye/issues/74)
+
+
+### Changed
+
+* give the release-packages subprocess tests a 15 s timeout ([#81](https://github.com/dungle-scrubs/popeye/issues/81)) ([ecd3dc3](https://github.com/dungle-scrubs/popeye/commit/ecd3dc3a7e225bd4032311acd969ab04626bb9e0))
+
 ## [0.1.5](https://github.com/dungle-scrubs/popeye/compare/popeye-workspace-v0.1.4...popeye-workspace-v0.1.5) (2026-10-04)
 
 
