@@ -6,7 +6,7 @@
 import { defineCommandContribution, type PluginManifest } from "@dungle-scrubs/popeye-plugins";
 import { Effect, Option, Schema } from "effect";
 
-import { ReloadControl } from "../plugins/reload.js";
+import { ReloadControl, ReloadUnavailableError } from "../plugins/reload.js";
 
 export const reloadPlugin = {
   contributions: [
@@ -17,17 +17,11 @@ export const reloadPlugin = {
         Effect.flatMap(Effect.serviceOption(ReloadControl), (option) =>
           Option.isSome(option)
             ? option.value.reload
-            : Effect.succeed({
-                closedResources: 0,
-                drainDurationMillis: 0,
-                leaseCount: 0,
-                newGenerationId: "test-no-reload-control",
-                oldGenerationId: "test-no-reload-control",
-                pluginsAdded: [],
-                pluginsRemoved: [],
-                pluginsReplaced: [],
-                type: "generation_swap" as const,
-              }),
+            : Effect.fail(
+                new ReloadUnavailableError({
+                  message: "Reload is not available in this host: it composes no ReloadControl.",
+                }),
+              ),
         ),
       name: "reload",
     }),

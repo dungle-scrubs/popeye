@@ -2556,3 +2556,62 @@ test("rpc routes the remaining M20 Driver commands with correlated protocol resu
     (capture.lines()[4]?.result as { readonly sessionId?: unknown } | undefined)?.sessionId,
   );
 });
+
+// Issue #93: a Snapshot audit is either fixed fields or an Effect read at each Snapshot write.
+
+const rpcAuditFor = (generationId: string) => ({
+  capabilityGrants: [],
+  loadedGeneration: { id: generationId, plugins: ["audit-fixture"] },
+});
+
+const snapshotTwice = (
+  snapshotAudit: Parameters<typeof runRpcHead>[0]["snapshotAudit"],
+): Promise<ReadonlyArray<unknown>> => {
+  const capture = captureWriter();
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = yield* Driver;
+      const session = yield* driver.createSession();
+      const input = Readable.from(
+        `${[
+          { _tag: "get-snapshot", id: "snapshot-1", sessionId: session.id },
+          { _tag: "get-snapshot", id: "snapshot-2", sessionId: session.id },
+        ]
+          .map((frame) => JSON.stringify(frame))
+          .join("\n")}\n`,
+      );
+      const exitCode = yield* runRpcHead({
+        input,
+        writer: capture.writer,
+        ...(snapshotAudit === undefined ? {} : { snapshotAudit }),
+      });
+      expect(exitCode).toBe(0);
+      return capture
+        .lines()
+        .map(
+          (line) =>
+            (line.result as { readonly loadedGeneration?: { readonly id: string } } | undefined)
+              ?.loadedGeneration?.id,
+        );
+    }).pipe(Effect.provide(rpcDriverLayer)),
+  );
+};
+
+test("rpc writes a fixed Snapshot audit on every Snapshot, as before #93", async () => {
+  expect(await snapshotTwice(rpcAuditFor("fixed-generation"))).toEqual([
+    "fixed-generation",
+    "fixed-generation",
+  ]);
+});
+
+test("rpc reads an Effect Snapshot audit again at each Snapshot write", async () => {
+  let reads = 0;
+  expect(
+    await snapshotTwice(
+      Effect.sync(() => {
+        reads += 1;
+        return rpcAuditFor(`generation-${reads}`);
+      }),
+    ),
+  ).toEqual(["generation-1", "generation-2"]);
+});

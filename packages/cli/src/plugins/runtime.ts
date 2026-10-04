@@ -3,26 +3,27 @@
  * Owns the CLI composition root as pure adapter: discovery config via pipeline, Tool adaptation via adapter, host wiring via compose.
  * It exists so startup and reload share ONE recomposition function and GenerationRuntime owns the ONE Ref<{inFlight,drain}> and ONE isReloading flag; no pendingOlds duplication.
  * Tool views vary per Session: the registry applies the process filter and the Session's own filters from SessionToolGrants (RFC-04 §5).
- * Tool execution resolves through the process-wide cache below and holds no Generation lease:
- * a reload that completes during a Turn closes the Turn-open Generation, and the Turn's calls that
- * start after `reload` returns run the reloaded Tools. The cache refreshes only after the swap and drain
- * finish, so during a reload it can still serve the previous Generation's Tools (#89).
+ * Tool execution resolves through the process-wide Tool surface below, which reads the Tools adapted for the
+ * published Generation. Each call leases the Generation that provided its Tool, so a reload waits
+ * (up to its drain timeout) for running calls; a Turn holds no lease (#89). A reload adapts the
+ * fresh Generation's Tools before it publishes the Generation, so a reader that sees the new
+ * Generation also resolves its Tools (#93).
  * Not responsible for generation lifetime (GenerationRuntime owns that), Tool adaptation (adapter owns that) or Turn orchestration.
  */
 
 import { type SessionId, SessionIdSchema } from "@dungle-scrubs/popeye-journal";
 import type { GenerationSwapDiagnostic, PluginGeneration } from "@dungle-scrubs/popeye-plugins";
 import {
-  CommandContributionKind,
+  ContributionRegistryError,
   createCapabilityGrants,
   GenerationBusyError,
+  GenerationDrainTimeoutError,
   makeGenerationRuntimeWithLoader,
 } from "@dungle-scrubs/popeye-plugins";
-import { Effect, Schema, type Scope } from "effect";
+import { Effect, Option, type Scope } from "effect";
 import {
   InvokeCommandError,
-  type PluginCommandContext,
-  type PluginCompactionGateRequest,
+  makePluginHostService,
   type PluginHostService,
   type RegisteredTool,
   type SessionToolView,
@@ -30,7 +31,7 @@ import {
   type ToolRegistryService,
 } from "../compose.js";
 import type { SnapshotAuditFields } from "../heads/head-wire.js";
-import { adaptTools, generationCapabilityUnion } from "../tools/adapter.js";
+import { adaptTools, generationCapabilityUnion, type ToolLease } from "../tools/adapter.js";
 import type { ToolGrantFilter } from "../tools/grants.js";
 import {
   filterGrantedTools,
@@ -38,9 +39,9 @@ import {
   isToolGrantedToSession,
 } from "../tools/grants.js";
 import { makeSessionToolGrants, type SessionToolGrantsService } from "../tools/session-grants.js";
-import { clearToolSessionMemory } from "../tools/tool-session-memory.js";
+import { forgetToolSessionMemoryForGeneration } from "../tools/tool-session-memory.js";
 import { type ComposePluginRuntimeOptions, composePluginRuntime } from "./pipeline.js";
-import { ReloadBusyError, ReloadControl } from "./reload.js";
+import { DRAIN_TIMEOUT_MILLIS, ReloadBusyError, ReloadDrainTimeoutError } from "./reload.js";
 
 export interface CliRuntime {
   readonly checkout: Effect.Effect<{ readonly generation: PluginGeneration }, never, Scope.Scope>;
@@ -65,14 +66,69 @@ export interface CliRuntime {
   ) => Effect.Effect<A, E, R>;
 }
 
+export interface CliRuntimeOptions {
+  /** How long a reload waits for running Tool calls before it fails with ReloadDrainTimeoutError. Default DRAIN_TIMEOUT_MILLIS. */
+  readonly drainTimeoutMillis?: number;
+}
+
 export const makeCliRuntime = (
   options: ComposePluginRuntimeOptions,
+  runtimeOptions: CliRuntimeOptions = {},
 ): Effect.Effect<CliRuntime, unknown> =>
   Effect.gen(function* () {
     const grants: ToolGrantFilter | undefined = options.toolGrants;
     const sessionToolGrants = yield* makeSessionToolGrants;
-    const generationRuntime = yield* makeGenerationRuntimeWithLoader(() =>
-      composePluginRuntime(options),
+    // The process Tool surface, keyed by Generation id. Written by prepareSwap before a Generation
+    // is published and at startup; an entry is removed when its Generation closes, except the
+    // current one (#93). Wrappers carry a pseudo grants id; the gate restamps the caller's id per
+    // call.
+    const toolsByGeneration = new Map<string, ReadonlyArray<Tool.Any>>();
+    const toolLease =
+      (generation: PluginGeneration): ToolLease =>
+      (holder) =>
+        generationRuntime.checkoutGeneration(generation.id, holder).pipe(Effect.map(Option.isSome));
+    const adaptForCache = (generation: PluginGeneration, pseudoId: string) =>
+      adaptTools(
+        generation,
+        createCapabilityGrants(
+          SessionIdSchema.make(pseudoId),
+          generationCapabilityUnion(generation),
+        ),
+        {
+          lease: toolLease(generation),
+        },
+      ).pipe(
+        Effect.map((tools) => (grants === undefined ? tools : filterGrantedTools(tools, grants))),
+      );
+    const prepareSwap = (fresh: PluginGeneration) =>
+      adaptForCache(fresh, "reload-tools").pipe(
+        Effect.mapError(
+          (cause) =>
+            new ContributionRegistryError({
+              ...cause,
+              message: `Tool adaptation failed for generation ${fresh.id}: ${cause.message}`,
+            }),
+        ),
+        Effect.flatMap((tools) =>
+          Effect.sync(() => {
+            toolsByGeneration.set(fresh.id, tools);
+          }),
+        ),
+      );
+    const onGenerationClosed = (generation: PluginGeneration) =>
+      Effect.sync(() => {
+        if (generation.id !== generationRuntime.unsafeCurrentGeneration().id) {
+          toolsByGeneration.delete(generation.id);
+        }
+      }).pipe(Effect.zipRight(forgetToolSessionMemoryForGeneration(generation.id)));
+    const generationRuntime = yield* makeGenerationRuntimeWithLoader(
+      () => composePluginRuntime(options),
+      undefined,
+      {
+        drainTimeoutMillis: runtimeOptions.drainTimeoutMillis ?? DRAIN_TIMEOUT_MILLIS,
+        onGenerationClosed,
+        prepareSwap,
+      },
     );
 
     // checkout/drain/busy/view via one Ref<{inFlight,drain}> in GenerationRuntime; isReloading single flag; no pendingOlds
@@ -85,20 +141,13 @@ export const makeCliRuntime = (
     const useSerialized: CliRuntime["useSerialized"] =
       generationRuntime.useSerialized as CliRuntime["useSerialized"];
 
-    // Sync cache for ToolRegistry.get/list (sync access); Tool execution resolves here. Its
-    // wrappers carry the adapting view's grants id; the gate restamps the caller's id per call.
-    const initialGen = yield* generationRuntime.currentGeneration;
-    const initialGrantsForTools = createCapabilityGrants(
-      SessionIdSchema.make("init-tools"),
-      generationCapabilityUnion(initialGen),
+    const initial = yield* generationRuntime.currentGeneration;
+    toolsByGeneration.set(
+      initial.id,
+      yield* adaptForCache(initial, "init-tools").pipe(Effect.orElseSucceed(() => [])),
     );
-    const initialToolsForCache = yield* adaptTools(initialGen, initialGrantsForTools).pipe(
-      Effect.orElseSucceed(() => [] as unknown as ReadonlyArray<Tool.Any>),
-    );
-    let currentToolsCache: ReadonlyArray<Tool.Any> =
-      grants === undefined
-        ? initialToolsForCache
-        : filterGrantedTools(initialToolsForCache, grants);
+    const currentTools = (): ReadonlyArray<Tool.Any> =>
+      toolsByGeneration.get(generationRuntime.unsafeCurrentGeneration().id) ?? [];
 
     const snapshotAudit: CliRuntime["snapshotAudit"] = Effect.gen(function* () {
       const gen = yield* generationRuntime.currentGeneration;
@@ -122,17 +171,12 @@ export const makeCliRuntime = (
       Effect.gen(function* () {
         const gen = yield* generationRuntime.view(sessionId as unknown as string);
         const grantsForAdapt = createCapabilityGrants(sessionId, generationCapabilityUnion(gen));
-        const tools = yield* adaptTools(gen as PluginGeneration, grantsForAdapt).pipe(
-          Effect.catchAll(() => Effect.succeed([] as unknown as ReadonlyArray<Tool.Any>)),
-        );
+        const tools = yield* adaptTools(gen as PluginGeneration, grantsForAdapt, {
+          lease: toolLease(gen),
+        }).pipe(Effect.catchAll(() => Effect.succeed([] as unknown as ReadonlyArray<Tool.Any>)));
         // HCN grant filter, then the Session's own filters (RFC-04 §5): both run after
         // plugin trust, before model visibility. Capabilities stay as the author declared them.
         const granted = filterSessionGrantedTools(tools, grants, sessionFilters);
-        // The process-wide surface (deprecated get/list) mirrors the process-level view only;
-        // a narrowed Session's view never replaces it.
-        if (sessionFilters.length === 0) {
-          currentToolsCache = granted;
-        }
         const map = new Map(granted.map((t) => [t.name, t as unknown as RegisteredTool]));
         return {
           admits: (name: string) => isToolGrantedToSession(name, grants, sessionFilters),
@@ -147,162 +191,41 @@ export const makeCliRuntime = (
         sessionToolGrants
           .filtersFor(sessionId)
           .pipe(Effect.flatMap((sessionFilters) => buildView(sessionId, sessionFilters))),
-      get: (name: string) => {
-        const map = new Map(currentToolsCache.map((t) => [t.name, t as unknown as RegisteredTool]));
-        return map.get(name);
-      },
-      list: () => currentToolsCache as unknown as ReadonlyArray<RegisteredTool>,
+      get: (name: string) =>
+        currentTools().find((tool) => tool.name === name) as RegisteredTool | undefined,
+      list: () => currentTools() as unknown as ReadonlyArray<RegisteredTool>,
     };
 
-    let reloadControlService:
-      | { readonly reload: Effect.Effect<GenerationSwapDiagnostic, unknown> }
-      | undefined;
-
-    const pluginHost: PluginHostService = {
-      compactionGate: (sessionId: SessionId, request: PluginCompactionGateRequest) =>
-        Effect.gen(function* () {
-          const gen = yield* generationRuntime.currentGeneration;
-          const grants = createCapabilityGrants(sessionId);
-          const result = yield* gen.emitter.emit("compaction-gate", request, grants).pipe(
-            Effect.as({ action: "compact" as const }),
-            Effect.catchTag("GateRejected", (error) =>
-              error.rejection === "block"
-                ? Effect.succeed({ action: "skip" as const, reason: error.reason })
-                : Effect.fail(error),
-            ),
-            Effect.catchAll((error) =>
-              Effect.succeed({
-                action: "skip" as const,
-                reason: `Compaction gate failed closed: ${String(error)}`,
-              }),
-            ),
-          );
-          return result;
-        }),
-      invokeCommand: (name: string, args: unknown, context: PluginCommandContext) =>
-        Effect.gen(function* () {
-          const gen = yield* generationRuntime.currentGeneration;
-          const grants = createCapabilityGrants(context.sessionId);
-          const commands = yield* gen.registry.list(CommandContributionKind, grants).pipe(
-            Effect.mapError(
-              (cause) =>
-                new InvokeCommandError({
-                  cause,
-                  commandName: name,
-                  message: `Command ${name} could not be resolved: ${cause.message}`,
-                  reason: "command_failed",
-                }),
-            ),
-          );
-          const matches = commands.filter((c) => c.name === name);
-          if (matches.length === 0) {
-            return yield* new InvokeCommandError({
-              commandName: name,
-              message: `Command ${name} was not found.`,
-              reason: "command_not_found",
-            });
-          }
-          if (matches.length > 1) {
-            return yield* new InvokeCommandError({
-              commandName: name,
-              message: `Command ${name} has multiple Contributions.`,
-              reason: "command_ambiguous",
-            });
-          }
-          const command = matches[0];
-          if (command === undefined) {
-            return yield* Effect.die("Command resolution lost its selected Contribution.");
-          }
-          const input = yield* Schema.decodeUnknown(command.payload.arguments, {
-            onExcessProperty: "error",
-          })(args).pipe(
-            Effect.mapError(
-              (cause) =>
-                new InvokeCommandError({
-                  cause,
-                  commandName: name,
-                  message: `Command ${name} arguments are invalid.`,
-                  reason: "arguments_invalid",
-                }),
-            ),
-          );
-          const commandContext: PluginCommandContext = {
-            changeGoal: context.changeGoal,
-            compactNow: ((expectedRevision?: number) =>
-              Effect.gen(function* () {
-                const gateResult = yield* gen.emitter
-                  .emit("compaction-gate", { reason: "manual", tokenCount: 0 }, grants)
-                  .pipe(
-                    Effect.as({ action: "compact" as const }),
-                    Effect.catchTag("GateRejected", (error) =>
-                      error.rejection === "block"
-                        ? Effect.succeed({ action: "skip" as const, reason: error.reason })
-                        : Effect.fail(error),
-                    ),
-                  );
-                if (gateResult.action === "skip") {
-                  return yield* new InvokeCommandError({
-                    commandName: name,
-                    message: gateResult.reason,
-                    reason: "command_vetoed",
-                  });
-                }
-                return yield* context.compactNow(expectedRevision);
-              }) as unknown) as PluginCommandContext["compactNow"],
-            getGoal: context.getGoal,
-            sessionId: context.sessionId,
-            setSessionName: context.setSessionName,
-          };
-          const base = command.payload.execute(input, commandContext);
-          const withReload =
-            reloadControlService === undefined
-              ? base
-              : base.pipe(
-                  // biome-ignore lint/suspicious/noExplicitAny: service indirection requires exact type
-                  Effect.provideService(ReloadControl, reloadControlService as any),
-                );
-          return yield* withReload.pipe(
-            Effect.mapError((cause) =>
-              cause instanceof InvokeCommandError
-                ? cause
-                : new InvokeCommandError({
-                    cause,
-                    commandName: name,
-                    message: `Command ${name} failed.`,
-                    reason: "command_failed",
-                  }),
-            ),
-          );
-        }),
-    };
-
-    const reload: CliRuntime["reload"] = Effect.gen(function* () {
-      const diagnostic = yield* generationRuntime.reload.pipe(
-        Effect.mapError((cause) => {
-          if (cause instanceof GenerationBusyError) {
-            return new ReloadBusyError({ message: cause.message });
-          }
-          return cause;
-        }),
-      );
-      // GenerationSwap: clear Tool session memory (generation-scoped forget, fail-closed)
-      yield* clearToolSessionMemory;
-      // Refresh sync cache after successful swap
-      const fresh = yield* generationRuntime.currentGeneration;
-      const freshGrants = createCapabilityGrants(
-        SessionIdSchema.make("reload-tools"),
-        generationCapabilityUnion(fresh as PluginGeneration),
-      );
-      const freshTools = yield* adaptTools(fresh as PluginGeneration, freshGrants).pipe(
-        Effect.orElseSucceed(() => [] as unknown as ReadonlyArray<Tool.Any>),
-      );
-      currentToolsCache =
-        grants === undefined ? freshTools : filterGrantedTools(freshTools, grants);
-      return diagnostic;
+    const reload: CliRuntime["reload"] = generationRuntime.reload.pipe(
+      Effect.mapError((cause) => {
+        if (cause instanceof ContributionRegistryError) {
+          return new InvokeCommandError({
+            cause,
+            commandName: "reload",
+            message: cause.message,
+            reason: "command_failed",
+          });
+        }
+        if (cause instanceof GenerationBusyError) {
+          return new ReloadBusyError({ message: cause.message });
+        }
+        if (cause instanceof GenerationDrainTimeoutError) {
+          return new ReloadDrainTimeoutError({
+            drainTimeoutMillis: cause.drainTimeoutMillis,
+            holders: cause.holders,
+            leaseCount: cause.leaseCount,
+            message: cause.message,
+            newGenerationId: cause.newGenerationId,
+            oldGenerationId: cause.oldGenerationId,
+          });
+        }
+        return cause;
+      }),
+    );
+    const pluginHost = makePluginHostService({
+      currentGeneration: generationRuntime.currentGeneration,
+      reloadControl: { reload },
     });
-
-    // biome-ignore lint/suspicious/noExplicitAny: mutable service ref initialized after declaration
-    reloadControlService = { reload } as any;
 
     return {
       checkout,

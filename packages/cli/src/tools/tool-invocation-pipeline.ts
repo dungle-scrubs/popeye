@@ -4,7 +4,8 @@
  * gate emission, session-scoped allow-list, and diagnostics behind one seam.
  * Why this module: before, adapter owned shadowing, tool-gate owned a global Ref,
  * and tool-vetting imported that Ref upward. The pipeline owns the ONE
- * generation-scoped Ref via ToolSessionMemory and shares ONE gate instance per
+ * session allow-list Ref via ToolSessionMemory, scoped to its generation by
+ * CurrentToolGenerationFiberRef and shares ONE gate instance per
  * generation+grants across all adapted Tools, so "allow for session" is coherent
  * and a new vetting policy plugs as another Hook without touching the cache.
  * When the Tool call supplies a Session id, its gate runs with that id and the adaptation
@@ -16,9 +17,10 @@
 
 import type { SessionId } from "@dungle-scrubs/popeye-journal";
 import type { CapabilityGrants, PluginGeneration } from "@dungle-scrubs/popeye-plugins";
-import { Context, Effect, Layer, type Ref } from "effect";
+import { Context, Effect, Layer, Option, type Ref } from "effect";
 
 import {
+  CurrentToolGenerationFiberRef,
   clearToolSessionMemory,
   hasToolSessionMemory,
   sessionMemoryRef,
@@ -284,6 +286,7 @@ export const makeToolInvocationPipeline = (options: {
       );
       return { _tag: "Allowed" as const };
     }).pipe(
+      Effect.locally(CurrentToolGenerationFiberRef, Option.some(generation.id)),
       Effect.withSpan("tool_gate.vet", { attributes: { toolName, generationId: generation.id } }),
     );
 

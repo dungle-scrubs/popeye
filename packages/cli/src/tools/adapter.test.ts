@@ -403,3 +403,89 @@ test.each([
     }
   },
 );
+
+test.each([
+  ["held", true],
+  ["refused", false],
+] as const)(
+  "an adapted Tool takes its generation lease before the gate and the Tool run, and fails closed without it (lease %s)",
+  async (_label, granted) => {
+    // Issue #93: a Tool call holds a lease on the generation that provided its
+    // Tool. A refused lease (the generation closed after the call resolved the
+    // Tool) runs neither the gate Hooks nor the Tool.
+    const projectPath = await mkdtemp(join(tmpdir(), "popeye-cli-tool-adapter-lease-"));
+    const events: Array<string> = [];
+    const plugin = {
+      contributions: [
+        defineToolContribution({
+          description: "Probe Tool.",
+          execute: () =>
+            Effect.sync(() => {
+              events.push("execute");
+              return { content: "probed" };
+            }),
+          name: "probe",
+          parameters: Schema.Struct({}),
+        }),
+        defineHookContribution({
+          mergeClass: "FirstWins",
+          name: "gate-probe",
+          point: "tool-call-gate",
+          run: () =>
+            Effect.sync(() => {
+              events.push("gate");
+              return { decision: "continue" as const };
+            }),
+        }),
+      ],
+      manifest: { capabilities: [], name: "lease-fixture", version: "1.0.0" },
+    } as const;
+
+    try {
+      const generation = await Effect.runPromise(
+        composePluginRuntime({
+          firstPartyPlugins: [plugin],
+          noProjectPlugins: true,
+          pluginPaths: [],
+          projectPath,
+        }),
+      );
+      const tools = await Effect.runPromise(
+        adaptTools(generation, createCapabilityGrants(SessionIdSchema.make("adapting-view")), {
+          lease: (holder) =>
+            Effect.acquireRelease(
+              Effect.sync(() => {
+                events.push(`lease:${holder}`);
+                return granted;
+              }),
+              () => Effect.sync(() => events.push(`release:${holder}`)),
+            ),
+        }),
+      );
+      const tool = tools.find((candidate) => candidate.name === "probe");
+      if (tool === undefined) {
+        throw new Error("The adapter did not return the probe Tool.");
+      }
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          tool.execute({} as never, testToolContext(SessionIdSchema.make("calling-session"))),
+        ),
+      );
+      await Effect.runPromise(generation.close);
+
+      if (granted) {
+        expect(result).toEqual({ content: "probed" });
+        expect(events).toEqual(["lease:tool:probe", "gate", "execute", "release:tool:probe"]);
+      } else {
+        expect(result).toEqual({
+          content:
+            "Tool probe did not run: a Plugin reload closed the generation that provided it before the call started. Call the Tool again.",
+          isError: true,
+        });
+        expect(events).toEqual(["lease:tool:probe", "release:tool:probe"]);
+      }
+    } finally {
+      await rm(projectPath, { force: true, recursive: true });
+    }
+  },
+);

@@ -2,6 +2,7 @@
  * Owns unqualified Tool-name collision resolution while adapting Plugin Contributions to kernel
  * Tools. Thin adapter over ToolInvocationPipeline (deep module) for vetting;
  * capability filtering remains owned by the grant-aware Plugin registry.
+ * When the host supplies a lease, each call leases the Tool's generation before its gate runs and fails closed when the lease is refused (#93).
  * Not responsible for gate branching or diagnostics (ToolInvocationPipeline + ToolSessionMemory own that) or for Tool execution (Tool owns that).
  * The adapter creates ONE ToolInvocationPipeline per generation+grants and shares it across all adapted Tools,
  * so session memory is generation-scoped and not per-Tool.
@@ -17,7 +18,7 @@ import {
   type RegisteredContribution,
   ToolContributionKind,
 } from "@dungle-scrubs/popeye-plugins";
-import { Effect } from "effect";
+import { Effect, type Scope } from "effect";
 
 import type { Tool } from "../compose.js";
 import { ToolError } from "../compose.js";
@@ -25,6 +26,12 @@ import {
   makeToolInvocationPipeline,
   type ToolInvocationPipeline,
 } from "./tool-invocation-pipeline.js";
+
+/** Leases the generation that provided a Tool for one call; false when it can no longer be leased. */
+export type ToolLease = (holder: string) => Effect.Effect<boolean, never, Scope.Scope>;
+export interface AdaptToolsOptions {
+  readonly lease?: ToolLease;
+}
 
 type RegisteredToolContribution = RegisteredContribution<"tool", AnyToolDeclaration>;
 
@@ -50,12 +57,19 @@ export const generationCapabilityUnion = (generation: PluginGeneration): Readonl
 const adaptTool = (
   contribution: RegisteredToolContribution,
   pipeline: ToolInvocationPipeline,
+  lease: ToolLease | undefined,
 ): Tool.Any => {
   const tool = contribution.payload;
   return {
     description: tool.description,
     execute: (arguments_, context) =>
       Effect.gen(function* () {
+        if (lease !== undefined && !(yield* lease(`tool:${tool.name}`))) {
+          return {
+            content: `Tool ${tool.name} did not run: a Plugin reload closed the generation that provided it before the call started. Call the Tool again.`,
+            isError: true as const,
+          };
+        }
         const toolCallId = (context as { readonly toolCallId?: string }).toolCallId ?? "unknown";
         const sessionId: SessionId | undefined = context.sessionId;
         const decision = yield* pipeline.vet(toolCallId, tool.name, arguments_, sessionId);
@@ -170,6 +184,7 @@ const undeclaredCapabilities = (
 export const adaptTools = (
   generation: PluginGeneration,
   grants: CapabilityGrants,
+  options: AdaptToolsOptions = {},
 ): Effect.Effect<ReadonlyArray<Tool.Any>, ContributionRegistryError> =>
   Effect.gen(function* () {
     const plugins = new Map(
@@ -200,5 +215,7 @@ export const adaptTools = (
     const selectedContributions = yield* resolveShadowing(declaredContributions, plugins);
     // One pipeline per generation+grants: session memory is shared across all Tools in the generation.
     const pipeline = makeToolInvocationPipeline({ generation, grants });
-    return selectedContributions.map((contribution) => adaptTool(contribution, pipeline));
+    return selectedContributions.map((contribution) =>
+      adaptTool(contribution, pipeline, options.lease),
+    );
   });

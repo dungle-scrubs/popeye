@@ -1,13 +1,21 @@
 /**
  * Owns the host control service behind /reload - swap orchestration, busy/drain handling, result reporting.
  * It exists so the reload Command can be tested without a process and so the runtime's swap logic is isolated from Tool adaptation.
+ * Its busy, drain-timeout, and unavailable errors reach Heads as InvokeCommandError messages through compose.ts (#93).
  * Not responsible for Tool adaptation (adapter owns that) or for generation construction (pipeline owns that).
  */
 
-import type { GenerationSwapDiagnostic } from "@dungle-scrubs/popeye-plugins";
+import {
+  DEFAULT_DRAIN_TIMEOUT_MILLIS,
+  type GenerationSwapDiagnostic,
+} from "@dungle-scrubs/popeye-plugins";
 import { Context, Data, type Effect } from "effect";
 
-export const DRAIN_TIMEOUT_MILLIS = 5_000;
+export const DRAIN_TIMEOUT_MILLIS = DEFAULT_DRAIN_TIMEOUT_MILLIS;
+
+export class ReloadUnavailableError extends Data.TaggedError("ReloadUnavailableError")<{
+  readonly message: string;
+}> {}
 
 export class ReloadBusyError extends Data.TaggedError("ReloadBusyError")<{
   readonly message: string;
