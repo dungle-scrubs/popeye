@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -6,6 +6,7 @@ import { afterEach, expect, test } from "vitest";
 
 import {
   BUILT_BIN_PATH,
+  cleanCliEnvironment,
   FAKE_PROVIDER_PROMPT,
   fakeProviderEnvironment,
   runBuiltBin,
@@ -269,7 +270,7 @@ test("the built JSON Head Snapshot audits the current process after Session resu
     },
     sessionId,
   });
-});
+}, 15_000);
 
 test("the built print Head can resume without a new prompt", () => {
   const directory = sessionDirectory();
@@ -632,3 +633,187 @@ test("questions and memory flags are no-op divergences with identical output", (
   }
   expect(diverged.stdout).toBe(plain.stdout);
 }, 15_000);
+
+const INTERCEPT_FETCH_URL = new URL("../../test-fixtures/intercept-fetch.mjs", import.meta.url);
+
+const SYNTHETIC_PROVIDER_KEYS = {
+  ANTHROPIC_API_KEY: "anthropic-synthetic-key",
+  OPENAI_API_KEY: "openai-synthetic-key",
+} as const;
+
+interface InterceptedRequest {
+  readonly authorization: string | null;
+  readonly method: string;
+  readonly url: string;
+  readonly xApiKey: string | null;
+}
+
+// Runs the built bin with global fetch replaced (no network): every outbound Provider request is
+// captured with its auth headers and answered by a one-chunk stream.
+const runWithInterceptedFetch = (env: Readonly<Record<string, string>>) => {
+  const directory = sessionDirectory();
+  const logPath = join(directory, "requests.jsonl");
+  const userPluginDir = join(directory, "user-plugins");
+  mkdirSync(userPluginDir);
+  const result = runBuiltBin(
+    ["-p", "--no-project-plugins", "--session-dir", join(directory, "sessions"), "Reply OK."],
+    {
+      cwd: directory,
+      env: {
+        ...cleanCliEnvironment(),
+        FETCH_INTERCEPT_LOG: logPath,
+        NODE_OPTIONS: `--import=${INTERCEPT_FETCH_URL.href}`,
+        POPEYE_MODEL: "synthetic-model",
+        POPEYE_USER_PLUGIN_DIR: userPluginDir,
+        ...env,
+      },
+    },
+  );
+  const requests = existsSync(logPath)
+    ? readFileSync(logPath, "utf8")
+        .split("\n")
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as InterceptedRequest)
+    : [];
+  return { requests, result };
+};
+
+const bearerRequest = (url: string, key: string): InterceptedRequest => ({
+  authorization: `Bearer ${key}`,
+  method: "POST",
+  url,
+  xApiKey: null,
+});
+
+test("with both provider keys present, each recognized API host receives only its own key", () => {
+  for (const [baseUrl, key] of [
+    ["https://api.anthropic.com/v1", "anthropic-synthetic-key"],
+    ["https://api.openai.com/v1", "openai-synthetic-key"],
+  ] as const) {
+    const { requests, result } = runWithInterceptedFetch({
+      ...SYNTHETIC_PROVIDER_KEYS,
+      POPEYE_BASE_URL: baseUrl,
+    });
+
+    expect(result.stderr).not.toContain("ERROR");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("intercepted\n");
+    expect(requests).toEqual([bearerRequest(`${baseUrl}/chat/completions`, key)]);
+  }
+}, 30_000);
+
+test("a mismatched provider key fails before any request and is never sent", () => {
+  const { requests, result } = runWithInterceptedFetch({
+    OPENAI_API_KEY: "openai-synthetic-key",
+    POPEYE_BASE_URL: "https://api.anthropic.com/v1",
+  });
+
+  expect(result.status).toBe(2);
+  expect(result.stdout).toBe("");
+  expect(result.stderr).toBe(
+    "ERROR CliConfigError: Endpoint https://api.anthropic.com requires POPEYE_API_KEY or ANTHROPIC_API_KEY.\n",
+  );
+  expect(requests).toEqual([]);
+}, 15_000);
+
+test("a custom hosted endpoint receives POPEYE_API_KEY and never a provider key", () => {
+  const withoutOverride = runWithInterceptedFetch({
+    ...SYNTHETIC_PROVIDER_KEYS,
+    POPEYE_BASE_URL: "https://gateway.example.test/v1",
+  });
+  const withOverride = runWithInterceptedFetch({
+    ...SYNTHETIC_PROVIDER_KEYS,
+    POPEYE_API_KEY: "popeye-synthetic-key",
+    POPEYE_BASE_URL: "https://gateway.example.test/v1",
+  });
+
+  expect(withoutOverride.result.status).toBe(2);
+  expect(withoutOverride.result.stdout).toBe("");
+  expect(withoutOverride.result.stderr).toBe(
+    "ERROR CliConfigError: Endpoint https://gateway.example.test requires POPEYE_API_KEY. OPENAI_API_KEY and ANTHROPIC_API_KEY are sent only to their own API hosts.\n",
+  );
+  expect(withoutOverride.requests).toEqual([]);
+  expect(withOverride.result.status).toBe(0);
+  expect(withOverride.requests).toEqual([
+    bearerRequest("https://gateway.example.test/v1/chat/completions", "popeye-synthetic-key"),
+  ]);
+}, 30_000);
+
+test("a loopback endpoint receives the local placeholder, never a provider key", () => {
+  const { requests, result } = runWithInterceptedFetch({
+    ...SYNTHETIC_PROVIDER_KEYS,
+    POPEYE_BASE_URL: "http://127.0.0.1:9/v1",
+  });
+
+  expect(result.status).toBe(0);
+  expect(requests).toEqual([bearerRequest("http://127.0.0.1:9/v1/chat/completions", "local")]);
+}, 15_000);
+
+test("POPEYE_API_KEY overrides provider keys on recognized and loopback endpoints", () => {
+  for (const baseUrl of ["https://api.anthropic.com/v1", "http://127.0.0.1:9/v1"]) {
+    const { requests, result } = runWithInterceptedFetch({
+      ...SYNTHETIC_PROVIDER_KEYS,
+      POPEYE_API_KEY: "popeye-synthetic-key",
+      POPEYE_BASE_URL: baseUrl,
+    });
+
+    expect(result.status).toBe(0);
+    expect(requests).toEqual([
+      bearerRequest(`${baseUrl}/chat/completions`, "popeye-synthetic-key"),
+    ]);
+  }
+}, 30_000);
+
+test("a blank credential never lets pi-ai send an ambient provider key", () => {
+  const blankOverrideCustomHost = runWithInterceptedFetch({
+    ...SYNTHETIC_PROVIDER_KEYS,
+    POPEYE_API_KEY: " ",
+    POPEYE_BASE_URL: "https://gateway.example.test/v1",
+  });
+  const blankAnthropicKey = runWithInterceptedFetch({
+    ANTHROPIC_API_KEY: " ",
+    OPENAI_API_KEY: "openai-synthetic-key",
+    POPEYE_BASE_URL: "https://api.anthropic.com/v1",
+  });
+  const blankOverrideLoopback = runWithInterceptedFetch({
+    ...SYNTHETIC_PROVIDER_KEYS,
+    POPEYE_API_KEY: " ",
+    POPEYE_BASE_URL: "http://127.0.0.1:9/v1",
+  });
+
+  expect(blankOverrideCustomHost.result.status).toBe(2);
+  expect(blankOverrideCustomHost.result.stdout).toBe("");
+  expect(blankOverrideCustomHost.result.stderr).toBe(
+    "ERROR CliConfigError: Endpoint https://gateway.example.test requires POPEYE_API_KEY. OPENAI_API_KEY and ANTHROPIC_API_KEY are sent only to their own API hosts.\n",
+  );
+  expect(blankOverrideCustomHost.requests).toEqual([]);
+  expect(blankAnthropicKey.result.status).toBe(2);
+  expect(blankAnthropicKey.result.stdout).toBe("");
+  expect(blankAnthropicKey.result.stderr).toBe(
+    "ERROR CliConfigError: Endpoint https://api.anthropic.com requires POPEYE_API_KEY or ANTHROPIC_API_KEY.\n",
+  );
+  expect(blankAnthropicKey.requests).toEqual([]);
+  expect(blankOverrideLoopback.result.status).toBe(0);
+  expect(blankOverrideLoopback.requests).toEqual([
+    bearerRequest("http://127.0.0.1:9/v1/chat/completions", "local"),
+  ]);
+}, 45_000);
+
+test("the built help states the host-tied endpoint credential policy", () => {
+  const help = runBuiltBin(["--help"]);
+
+  expect(help.status).toBe(0);
+  expect(help.stdout).toContain(
+    [
+      "Loopback endpoints need no API key; without POPEYE_API_KEY the CLI sends its local placeholder.",
+      "POPEYE_API_KEY is the endpoint credential and overrides every other key.",
+      "Without it, a provider key is read only for its own API host:",
+      "  https://api.openai.com     OPENAI_API_KEY",
+      "  https://api.anthropic.com  ANTHROPIC_API_KEY",
+      "Any other hosted endpoint requires POPEYE_API_KEY.",
+      "",
+      "Environment:",
+    ].join("\n"),
+  );
+  expect(help.stdout).not.toContain("OPENAI_API_KEY, or ANTHROPIC_API_KEY");
+});

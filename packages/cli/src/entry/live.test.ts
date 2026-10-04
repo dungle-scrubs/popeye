@@ -10,7 +10,8 @@
  * The local suite is skipped unless POPEYE_LIVE_ENDPOINT and POPEYE_LIVE_MODEL are set. Spawned local
  * processes have every supported API-key variable removed, so they exercise keyless loopback.
  * The hosted case has a separate POPEYE_LIVE_HOSTED_ENDPOINT, POPEYE_LIVE_HOSTED_MODEL, and
- * POPEYE_LIVE_HOSTED_API_KEY gate. A supported CLI API-key variable can supply the hosted key too.
+ * POPEYE_LIVE_HOSTED_API_KEY gate. POPEYE_API_KEY can supply the hosted key too. Provider key
+ * variables are not read, so a key never reaches another provider's host.
  */
 
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -60,10 +61,7 @@ const providerConfig = (
 const liveConfig = providerConfig(process.env.POPEYE_LIVE_ENDPOINT, process.env.POPEYE_LIVE_MODEL);
 const liveModelAlt = configured(process.env.POPEYE_LIVE_MODEL_ALT);
 const hostedApiKey = configured(
-  process.env.POPEYE_LIVE_HOSTED_API_KEY ??
-    process.env.POPEYE_API_KEY ??
-    process.env.OPENAI_API_KEY ??
-    process.env.ANTHROPIC_API_KEY,
+  process.env.POPEYE_LIVE_HOSTED_API_KEY ?? process.env.POPEYE_API_KEY,
 );
 const hostedConfig =
   hostedApiKey === undefined

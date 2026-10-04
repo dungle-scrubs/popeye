@@ -72,6 +72,7 @@ import {
   CliConfigError,
   type CliEnvironment,
   type CliRunConfig,
+  PROVIDER_API_KEYS,
   resolveConfig,
   resolveUserAgentsDir,
 } from "./config.js";
@@ -128,6 +129,10 @@ const runError = (reason: CliRunError["reason"], message: string, cause?: unknow
 // Shared constants
 // ---------------------------------------------------------------------------
 
+const PROVIDER_KEY_LINES = PROVIDER_API_KEYS.map(
+  (entry) => `  ${entry.origin.padEnd(27)}${entry.variable}`,
+).join("\n");
+
 const CLI_USAGE = `Usage:
   popeye -p "<prompt>"
   popeye -p --mode json "<prompt>"
@@ -150,8 +155,11 @@ Options:
   --session-dir <dir>      Set the Journal directory. Default: .popeye/sessions.
   --version                Print the @dungle-scrubs/popeye version.
 
-Loopback endpoints need no API key; the CLI supplies its local placeholder automatically.
-Hosted endpoints require POPEYE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.
+Loopback endpoints need no API key; without POPEYE_API_KEY the CLI sends its local placeholder.
+POPEYE_API_KEY is the endpoint credential and overrides every other key.
+Without it, a provider key is read only for its own API host:
+${PROVIDER_KEY_LINES}
+Any other hosted endpoint requires POPEYE_API_KEY.
 
 Environment:
   POPEYE_REFLECT_INTAKE    Absolute path of the reflect-intake executable. When set, each
@@ -461,7 +469,7 @@ const runWithConfig = (
           ? PiAiProviderLive({
               accountingProvider: "openai-compatible",
               accountingProviderClass: config.accountingProviderClass,
-              ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
+              apiKey: config.apiKey,
               baseUrl: config.baseUrl,
               // RFC-02 P4 item 6: trusted window override replaces the
               // fabricated 128k default for HCN runs.

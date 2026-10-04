@@ -149,7 +149,8 @@ test("--api-key is rejected without copying its value into the typed error", asy
 
   expect(error).toMatchObject({
     _tag: "CliArgsError",
-    message: expect.stringContaining("POPEYE_API_KEY"),
+    message:
+      "--api-key is not supported. Set POPEYE_API_KEY, or the provider key variable for a recognized API host (see --help).",
     reason: "secret_flag",
   });
   expect(error.message).not.toContain("secret-value");
