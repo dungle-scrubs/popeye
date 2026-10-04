@@ -4,6 +4,8 @@
  * Thin adapter over SessionStore (D-001): all Journal calls go through SessionStore,
  * the single JournalRecovery consumer placement. History-preserving restructure;
  * recovery.ts stays one commit as re-export.
+ * A create's bind option runs before the Session activates, so a host's
+ * per-Session binding is in place before any work or lifecycle signal.
  */
 
 import {
@@ -52,8 +54,19 @@ export interface SessionsOptions {
   readonly recoveryDiagnosticSink?: (report: RecoveryReport) => Effect.Effect<void>;
 }
 
+/** Per-call options for creating a Session (issue #55). */
+export interface SessionCreateOptions {
+  /**
+   * Runs once with the new Session's id, uninterruptibly with the Journal create, before the
+   * Session's mailbox activates and before SessionLifecycle reports it. A host binds
+   * per-Session state here (an rpc Agent Session's Tool filter, persona, and model), so no work
+   * can run in the Session without it, even when a later create or fork step fails.
+   */
+  readonly bind?: (sessionId: SessionId) => Effect.Effect<void>;
+}
+
 export interface SessionsService {
-  readonly create: () => Effect.Effect<SessionInfo, SessionsFailure>;
+  readonly create: (options?: SessionCreateOptions) => Effect.Effect<SessionInfo, SessionsFailure>;
   readonly list: () => Effect.Effect<ReadonlyArray<SessionSummary>, JournalFailure>;
   readonly resume: (sessionId: SessionId) => Effect.Effect<ResumedSessionInfo, SessionsFailure>;
   readonly setSessionName: (
@@ -94,9 +107,14 @@ export const SessionsLive = (
       const lifecycle = options.lifecycle ?? makeSessionLifecycle();
 
       return {
-        create: () =>
+        create: (createOptions = {}) =>
           Effect.gen(function* () {
-            const { id, leaf } = yield* store.createSession();
+            const bind = createOptions.bind;
+            const { id, leaf } = yield* bind === undefined
+              ? store.createSession()
+              : Effect.uninterruptible(
+                  store.createSession().pipe(Effect.tap((created) => bind(created.id))),
+                );
             const revision = yield* store.countDurableLines(id);
             yield* mailbox.activate(id);
             // The Journal Session is durable and active before any signal leaves the process.

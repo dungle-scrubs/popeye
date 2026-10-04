@@ -352,3 +352,28 @@ test("a Plugin reload during a narrowed Session's Turn executes the reloaded Too
   expect(result.offer).toEqual(["Version v1"]);
   expect(result.executed).toBe("alpha-v2");
 });
+
+test("the process Tool view ignores addressable pseudo Session filters", async () => {
+  const result = await withRuntime(
+    { toolGrants: filter({ tools: ["alpha", "beta"] }) },
+    (runtime) =>
+      Effect.gen(function* () {
+        for (const id of ["startup-toolcount", "process-tool-view"]) {
+          yield* runtime.sessionToolGrants.narrow(
+            SessionIdSchema.make(id),
+            filter({ tools: ["alpha"] }),
+          );
+        }
+        const processView = yield* runtime.processToolView;
+        return {
+          process: processView
+            .list()
+            .map((tool) => tool.name)
+            .sort(),
+          session: yield* viewNames(runtime, SessionIdSchema.make("process-tool-view")),
+        };
+      }),
+  );
+  expect(result.process).toEqual(["alpha", "beta"]);
+  expect(result.session).toEqual(["alpha"]);
+});

@@ -170,3 +170,28 @@ test("Response round-trips the error family", () => {
     id: "snapshot-response",
   });
 });
+
+test("Response round-trips the agent_error code (RFC-04 §4, issue #55)", () => {
+  expectRoundTrip(ResponseSchema, {
+    error: {
+      code: "agent_error",
+      details: { agent: "reviewer", reason: "agent_model_unresolvable", tag: "AgentSessionError" },
+      message:
+        "Agent reviewer (/agents/reviewer.md): Unknown pi-ai model groq/not-a-model. The Session fails closed.",
+    },
+    id: "create-bad-model",
+  });
+  expectRoundTrip(ResponseSchema, {
+    error: {
+      code: "agent_error",
+      details: {
+        agent: "ghost",
+        available: ["reviewer"],
+        reason: "unknown_agent",
+        tag: "AgentSessionError",
+      },
+      message: 'Unknown agent "ghost". Available agents: reviewer (user).',
+    },
+    id: "create-ghost",
+  });
+});

@@ -137,7 +137,7 @@ test("unknown --agent names fail startup listing available agents", () => {
   );
 });
 
-test("--agent with --mode rpc is refused like --system-prompt", () => {
+test("--agent with --mode rpc is refused and points at the create and resume agent field", () => {
   const agentsDir = tempDirectory();
   userAgent(agentsDir, "scout");
 
@@ -149,7 +149,10 @@ test("--agent with --mode rpc is refused like --system-prompt", () => {
   );
 
   expect(result.status).toBe(2);
-  expect(result.stderr).toContain("--agent have no RPC wire carrier");
+  expect(result.stderr).toContain(
+    "--agent is not accepted in RPC mode: name the Agent per Session with the agent field of the create and resume commands.",
+  );
+  expect(result.stderr).not.toContain("--agent have no RPC wire carrier");
 }, 15_000);
 
 test("an invalid definition is skipped with a diagnostic while a valid --agent run completes", () => {

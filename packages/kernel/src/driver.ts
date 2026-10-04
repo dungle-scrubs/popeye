@@ -15,8 +15,9 @@
  * DriverDefault is the supported composition. It shares one ProgressHub instance between
  * TurnOrchestrator, Compaction, and Driver. Composing those layers with separate ProgressHub
  * instances makes phases and subscriptions disagree. Fork copies entries after it creates the
- * target Session. A later copy failure leaves that target Session in the Journal because the
- * Journal has no compensation API.
+ * target Session. A bind option runs before that copy, so a target Session a failed copy leaves
+ * behind is already bound by the host. A later copy failure leaves that target Session in the
+ * Journal because the Journal has no compensation API.
  *
  * Settings are Branch-derived via SessionView. The newest model_change, session_name,
  * and thinking_change on the current Branch win independently. Branching to an Entry
@@ -77,6 +78,7 @@ import { makeSessionStoreForTest } from "./session-store.js";
 import { deriveSettings as deriveViewSettings, requireRevision } from "./session-view.js";
 import {
   type ResumedSessionInfo,
+  type SessionCreateOptions,
   type SessionInfo,
   type SessionSummary,
   Sessions,
@@ -157,11 +159,14 @@ export interface DriverService {
   readonly closeSession: (
     sessionId: SessionId,
   ) => Effect.Effect<CloseSessionResult, JournalFailure | MailboxFailure>;
-  readonly createSession: () => Effect.Effect<SessionInfo, SessionsFailure>;
+  readonly createSession: (
+    options?: SessionCreateOptions,
+  ) => Effect.Effect<SessionInfo, SessionsFailure>;
   readonly fork: (
     sessionId: SessionId,
     fromEntryId: EntryId,
     expectedRevision?: number,
+    options?: SessionCreateOptions,
   ) => Effect.Effect<DriverSnapshot, JournalFailure | MailboxFailure>;
   readonly getSnapshot: (
     sessionId: SessionId,
@@ -372,6 +377,7 @@ const makeDriverService = (
     const forkBranch = (
       sessionId: SessionId,
       fromEntryId: EntryId,
+      options: SessionCreateOptions | undefined,
     ): Effect.Effect<DriverSnapshot, JournalFailure | MailboxFailure> =>
       Effect.gen(function* () {
         const source = yield* store.getBranch(sessionId);
@@ -382,7 +388,7 @@ const makeDriverService = (
             message: `Fork Entry ${fromEntryId} is not on the current Branch.`,
           });
         }
-        const created = yield* sessions.create();
+        const created = yield* sessions.create(options);
         const sourceRoot = source[0];
         if (sourceRoot === undefined) {
           return yield* new JournalError({
@@ -518,13 +524,13 @@ const makeDriverService = (
           .pipe(Effect.map((result) => makeSnapshot(result.value, result.revision))),
       compactNow: (sessionId, expectedRevision) =>
         compaction.compactNow(sessionId, expectedRevision),
-      createSession: () => sessions.create(),
-      fork: (sessionId, fromEntryId, expectedRevision) =>
+      createSession: (options) => sessions.create(options),
+      fork: (sessionId, fromEntryId, expectedRevision, options) =>
         mailbox
           .enqueue(sessionId, {
             ...(expectedRevision === undefined ? {} : { expectedRevision }),
             name: "fork",
-            run: () => forkBranch(sessionId, fromEntryId),
+            run: () => forkBranch(sessionId, fromEntryId, options),
           })
           .pipe(Effect.map((result) => result.value)),
       getSnapshot: readSnapshot,
