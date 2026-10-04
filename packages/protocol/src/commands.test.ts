@@ -2,8 +2,25 @@ import { Schema } from "effect";
 import { expect, test } from "vitest";
 
 import { CommandSchema } from "./commands.js";
+import { SnapshotThinkingLevelSchema } from "./snapshot.js";
 
 const sessionId = "session-20";
+
+test("RPC set-thinking accepts and round-trips explicit off", () => {
+  const frame = {
+    _tag: "set-thinking",
+    expectedRevision: 6,
+    id: "thinking-off",
+    sessionId,
+    thinkingLevel: "off",
+  };
+  const decoded = Schema.decodeUnknownSync(CommandSchema, { onExcessProperty: "error" })(frame);
+  expect(Schema.encodeSync(CommandSchema)(decoded)).toEqual(frame);
+});
+
+test("Snapshot thinking off is a known level rather than an unknown enum", () => {
+  expect(Schema.decodeUnknownSync(SnapshotThinkingLevelSchema)("off")).toBe("off");
+});
 
 test("Schema frames exist for every kernel primitive and invoke-command", () => {
   const frames = [

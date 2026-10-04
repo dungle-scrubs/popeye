@@ -67,7 +67,14 @@ interface PiAiRuntime {
   ) => AssistantMessageEventStream;
 }
 
-export type PiAiProviderThinkingLevel = "high" | "low" | "max" | "medium" | "minimal" | "xhigh";
+export type PiAiProviderThinkingLevel =
+  | "high"
+  | "low"
+  | "max"
+  | "medium"
+  | "minimal"
+  | "off"
+  | "xhigh";
 
 export interface PiAiProviderLayerOptions {
   readonly accountingProvider?: string;
@@ -88,7 +95,8 @@ export interface PiAiProviderLayerOptions {
 }
 
 // This assignment is a compile-time pin: an upstream ThinkingLevel addition or rename fails here.
-const pinThinkingLevel = (level: ThinkingLevel): PiAiProviderThinkingLevel => level;
+// Off is the seam's own public value and bypasses the upstream pin: pi-ai's ThinkingLevel does not include it.
+const pinThinkingLevel = (level: ThinkingLevel): Exclude<PiAiProviderThinkingLevel, "off"> => level;
 
 const defaultRuntime: PiAiRuntime = {
   classifyError: isRetryableAssistantError,
@@ -578,8 +586,75 @@ export interface MakePiAiProviderLayerOptions {
   readonly accountingProvider?: string;
   readonly accountingProviderClass?: "hosted" | "local" | "unknown";
   readonly baseWindowTrusted?: boolean;
+  readonly isFabricatedModel?: (modelId: string) => boolean;
   readonly recordUsage?: boolean;
 }
+
+/**
+ * Map of Kernel thinking levels onto the wire words used by fabricated base-URL
+ * models. The map is the only artifact that opts an unknown model into OpenAI-style
+ * reasoning control, and the same string is reused for the off word (`none`).
+ * Max saturates to `xhigh` because the demonstrated endpoint rejects `max` and
+ * accepts `xhigh`; the seam does not retry with another word.
+ */
+const FABRICATED_REASONING_MAP = {
+  high: "high",
+  low: "low",
+  max: "xhigh",
+  medium: "medium",
+  minimal: "minimal",
+  off: "none",
+  xhigh: "xhigh",
+} as const satisfies Record<PiAiProviderThinkingLevel, string>;
+
+/**
+ * Per-request model preparation for explicit thinking control.
+ *
+ * Behavior:
+ * - Undefined level: return the original model unchanged.
+ * - Fabricated: clone the model, set `reasoning: true`, attach the fabricated map,
+ *   and override the compat object so the adapter sends `reasoning_effort` as a
+ *   top-level OpenAI field. The original `supportsDeveloperRole` is preserved
+ *   for default fabricated models; explicitly reasoning-enabled models keep their
+ *   own value (including absence, so pi-ai still auto-detects it).
+ * - Non-fabricated with `reasoning: false`: fail with the exact non-transient
+ *   ProviderError diagnostic.
+ * - Non-fabricated reasoning model: return the original model so the existing
+ *   pi-ai support/clamping rules continue to apply.
+ *
+ * Never mutates the base model, registry model, or a shared map. The
+ * returned clone is request-local.
+ */
+const prepareRequestModel = (
+  model: Model<Api>,
+  level: PiAiProviderThinkingLevel,
+  fabricated: boolean,
+): Effect.Effect<Model<Api>, ProviderError> => {
+  if (!fabricated) {
+    if (model.reasoning === false) {
+      return Effect.fail(
+        new ProviderError({
+          message: `Thinking level "${level}" cannot be applied to model ${model.provider}/${model.id}: the model does not support reasoning. Omit the thinking level or choose a reasoning-capable model.`,
+          transient: false,
+        }),
+      );
+    }
+    return Effect.succeed(model);
+  }
+  const baseCompat = model.compat ?? {};
+  const preparedCompat = {
+    ...baseCompat,
+    ...(model.reasoning === false ? { supportsDeveloperRole: false } : {}),
+    supportsReasoningEffort: true,
+    thinkingFormat: "openai" as const,
+  };
+  return Effect.succeed({
+    ...model,
+    compat: preparedCompat,
+    reasoning: true,
+    thinkingLevelMap: FABRICATED_REASONING_MAP,
+  });
+};
 
 export const makePiAiProviderLayer = (
   model: Model<Api>,
@@ -663,6 +738,15 @@ export const makePiAiProviderLayer = (
                   transient: false,
                 });
               }
+              const requestThinkingLevel = options.thinkingLevel ?? thinkingLevel;
+              const preparedRequestModel: Model<Api> =
+                requestThinkingLevel === undefined
+                  ? requestModel
+                  : yield* prepareRequestModel(
+                      requestModel,
+                      requestThinkingLevel,
+                      layerOptions.isFabricatedModel?.(requestModel.id) ?? false,
+                    );
               const piAiContext = yield* Effect.try({
                 catch: (cause) =>
                   new ProviderError({
@@ -672,7 +756,7 @@ export const makePiAiProviderLayer = (
                         : "Provider context conversion failed.",
                     transient: false,
                   }),
-                try: () => toPiAiContext(context, requestModel, declarations),
+                try: () => toPiAiContext(context, preparedRequestModel, declarations),
               });
               const requestStarted: RequestStarted | undefined =
                 journal === undefined ||
@@ -772,12 +856,16 @@ export const makePiAiProviderLayer = (
                     transient: false,
                   }),
                 try: () => {
-                  const requestThinkingLevel = options.thinkingLevel ?? thinkingLevel;
                   const reasoning =
                     requestThinkingLevel === undefined
                       ? undefined
-                      : clampThinkingLevel(requestModel, pinThinkingLevel(requestThinkingLevel));
-                  return runtime.streamSimple(requestModel, piAiContext, {
+                      : requestThinkingLevel === "off"
+                        ? ("off" as const)
+                        : clampThinkingLevel(
+                            preparedRequestModel,
+                            pinThinkingLevel(requestThinkingLevel),
+                          );
+                  return runtime.streamSimple(preparedRequestModel, piAiContext, {
                     maxRetries: 0,
                     ...(reasoning === undefined || reasoning === "off" ? {} : { reasoning }),
                     ...(apiKey === undefined ? {} : { apiKey }),
@@ -929,6 +1017,9 @@ export const PiAiProviderLive = (
               : options.baseUrl === undefined
                 ? "hosted"
                 : "unknown"),
+          isFabricatedModel: (modelId) =>
+            options.baseUrl !== undefined &&
+            getModelRegistry().getModel(options.provider, modelId) === undefined,
           ...(options.recordUsage === undefined ? {} : { recordUsage: options.recordUsage }),
         },
       );

@@ -150,6 +150,16 @@ source/result/record envelopes:
    first-party tools.
 3. Effort maps onto thinkingLevel: low to minimal, medium-low to low,
    medium to medium, medium-high to high, high to xhigh, xhigh to max.
+   The ladder is extended with `off`: `--effort off` sends thinking level
+   `off`. For models pi-ai does not know, reached through `--base-url`,
+   the seam forces top-level `reasoning_effort` with the additive wire
+   map (`off=none`, `low=minimal`, `medium-low=low`, `medium=medium`,
+   `medium-high=high`, `high=xhigh`, `xhigh=xhigh`); an explicit Turn
+   level for a registry model without reasoning support ends the Turn
+   with a Provider error. Registry reasoning models keep pi-ai's
+   model-specific mapping, so off is not guaranteed to disable their
+   reasoning. RPC clients use `set-thinking` with Kernel levels; off
+   sends `reasoning_effort none` to fabricated base-URL models.
 4. System-prompt replace runs fragments-off plus given text; append adds an
    extra fragment last.
 5. Skills allowlist filters plugin names; isolation tool-free maps to
