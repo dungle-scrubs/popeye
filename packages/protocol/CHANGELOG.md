@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.7](https://github.com/dungle-scrubs/popeye/compare/popeye-protocol-v0.1.6...popeye-protocol-v0.1.7) (2026-10-04)
+
+
+### Added
+
+* **rpc:** create and resume accept an agent field ([#87](https://github.com/dungle-scrubs/popeye/issues/87)) ([383e763](https://github.com/dungle-scrubs/popeye/commit/383e76319cc327558f29db48d175e1fba5fc60a3)), closes [#55](https://github.com/dungle-scrubs/popeye/issues/55)
+
 ## [0.1.6](https://github.com/dungle-scrubs/popeye/compare/popeye-protocol-v0.1.5...popeye-protocol-v0.1.6) (2026-10-04)
 
 
