@@ -578,9 +578,7 @@ const makeDriverService = (
               return {
                 ...turnOptions,
                 ...(settings.model === undefined ? {} : { model: settings.model }),
-                ...(settings.thinkingLevel === undefined
-                  ? {}
-                  : { thinkingLevel: settings.thinkingLevel }),
+                thinkingLevel: turnOptions.thinkingLevel ?? settings.thinkingLevel,
               };
             }),
           onAdmitted,

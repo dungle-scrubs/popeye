@@ -189,6 +189,61 @@ the agent is journaled with the Session: resuming a Session that ran as an agent
 `--agent` again produces an unagented Session, with no warning. Pass `--agent` on resume to
 continue with the same persona.
 
+### Reasoning and Tool selection
+
+`--effort <level>` controls Provider reasoning. The accepted words are
+`off`, `low`, `medium-low`, `medium`, `medium-high`, `high`, and `xhigh`.
+The Kernel maps each CLI word onto a Kernel thinking level; the table below
+shows the wire word sent to models pi-ai does not know when they are reached
+through `--base-url`. Models pi-ai does not know, reached through --base-url,
+use the wire mapping in this table. For models pi-ai does not know, the field
+is always top-level reasoning_effort, whatever the endpoint.
+
+| CLI effort | Kernel thinking level | Wire `reasoning_effort` |
+| --- | --- | --- |
+| unset | no effective level | absent field |
+| off | off | none |
+| low | minimal | minimal |
+| medium-low | low | low |
+| medium | medium | medium |
+| medium-high | high | high |
+| high | xhigh | xhigh |
+| xhigh | max | xhigh |
+
+Print, JSON, and HCN Heads share the same `--effort` surface:
+
+```sh
+popeye -p --effort off --exclude-tools manage-goal "Reply with one short sentence."
+```
+
+`max` saturates to `xhigh` on the wire because the demonstrated endpoint rejects
+`max` and accepts `xhigh`; the same word is sent for both `high` and `xhigh`.
+Reasoning levels are endpoint hints, not timing guarantees: the model and the
+endpoint decide the actual cost. With no explicit Turn level, saved Session
+level, or Provider layer default, models pi-ai does not know send no
+`reasoning_effort` field. RPC uses set-thinking with Kernel levels; off sends
+reasoning_effort none to those models. Registry reasoning models keep
+pi-ai's model-specific mapping, so off is not guaranteed to disable their
+reasoning.
+
+An explicit level, including off, for a registry model without reasoning
+support ends the Turn with a Provider error (exit 1 in print, JSON, and
+HCN). The diagnostic names the model and the missing capability. The forced
+OpenAI field is deliberate even when URL detection would select an
+endpoint-native thinking format. Endpoint rejection follows the existing
+Provider error handling, with no fallback.
+
+`--tools <names>` and `--exclude-tools <names>` filter the Tools the model
+may call. Each name is a contributed Tool name; `native:<name>` is accepted.
+`--isolation tool-free` loads first-party Plugins only and exposes no Tools.
+`--skills <names>` is a Plugin-name allowlist, not a trust setting. RPC
+clients use `set-thinking` with Kernel words, not CLI HCN words; `--effort`
+remains refused in RPC mode.
+
+RPC frames arrive in order: `create`, capture the returned Session ID,
+`set-thinking` with that Session ID and `thinkingLevel: "off"`, await its
+Snapshot acknowledgement, then `prompt`.
+
 ## Guides
 
 - [Plugin authoring](docs/plugin-authoring.md) covers manifests, all 4 Contribution kinds, Hook

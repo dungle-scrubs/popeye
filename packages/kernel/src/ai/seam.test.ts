@@ -32,7 +32,7 @@ import { expect, test } from "vitest";
 import { ProviderError } from "../errors.js";
 import type { PiAiProviderLayerOptions } from "../index.js";
 import { PiAiProviderLive } from "../index.js";
-import { Provider } from "../provider.js";
+import { Provider, ThinkingLevelSchema } from "../provider.js";
 import { accountingRows } from "../request-accounting.js";
 import { defineTool, ToolRegistryLive } from "../tool.js";
 import {
@@ -1286,6 +1286,212 @@ test("per-request model and thinking level change the pi-ai wire request", async
       { model: "wire-default", reasoning_effort: "minimal" },
       { model: "wire-override", reasoning_effort: "high" },
     ]);
+  });
+});
+
+const reasoningWireChunks = [
+  {
+    choices: [{ delta: { content: "ok" }, finish_reason: "stop", index: 0 }],
+    id: "completion-reasoning-control",
+    model: "wire-reasoning",
+    object: "chat.completion.chunk",
+  },
+];
+
+const fabricatedReasoningCases: ReadonlyArray<readonly [string | undefined, string | undefined]> = [
+  [undefined, undefined],
+  ["off", "none"],
+  ["minimal", "minimal"],
+  ["low", "low"],
+  ["medium", "medium"],
+  ["high", "high"],
+  ["xhigh", "xhigh"],
+  ["max", "xhigh"],
+];
+
+test.each(fabricatedReasoningCases)(
+  "fabricated base-URL thinking %s sends reasoning_effort %s",
+  async (thinkingLevel, wireWord) => {
+    await withOpenAiSseServer(reasoningWireChunks, async (baseUrl, requests) => {
+      const providerLayer = PiAiProviderLive({
+        apiKey: "offline-key",
+        baseUrl,
+        modelId: "wire-reasoning",
+        provider: "offline-openai",
+      });
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const provider = yield* Provider;
+          yield* Stream.runDrain(
+            provider.streamAssistant([{ content: "Run it.", role: "user" }], {
+              attempt: 1,
+              ...(thinkingLevel === undefined
+                ? {}
+                : {
+                    thinkingLevel: yield* Schema.decodeUnknown(ThinkingLevelSchema)(thinkingLevel),
+                  }),
+              turnOrdinal: 1,
+            }),
+          );
+        }).pipe(Effect.provide(providerLayer), Effect.provide(ToolRegistryLive([]))),
+      );
+      expect(requests).toHaveLength(1);
+      if (wireWord === undefined) {
+        expect(requests[0]?.body).not.toHaveProperty("reasoning_effort");
+      } else {
+        expect(requests[0]?.body).toHaveProperty("reasoning_effort", wireWord);
+      }
+    });
+  },
+);
+
+test("fabricated reasoning is request-local across off, model override, and unset", async () => {
+  await withOpenAiSseServer(reasoningWireChunks, async (baseUrl, requests) => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const provider = yield* Provider;
+        for (const options of [
+          { thinkingLevel: "off" as const },
+          { model: "wire-other", thinkingLevel: "max" as const },
+          {},
+        ]) {
+          yield* Stream.runDrain(
+            provider.streamAssistant([{ content: "Run it.", role: "user" }], {
+              attempt: 1,
+              turnOrdinal: 1,
+              ...(options.model === undefined ? {} : { model: options.model }),
+              ...(options.thinkingLevel === undefined
+                ? {}
+                : {
+                    thinkingLevel: yield* Schema.decodeUnknown(ThinkingLevelSchema)(
+                      options.thinkingLevel,
+                    ),
+                  }),
+            }),
+          );
+        }
+      }).pipe(
+        Effect.provide(
+          PiAiProviderLive({
+            apiKey: "offline-key",
+            baseUrl,
+            modelId: "wire-reasoning",
+            provider: "offline-openai",
+          }),
+        ),
+        Effect.provide(ToolRegistryLive([])),
+      ),
+    );
+    expect(requests).toHaveLength(3);
+    expect(requests[0]?.body).toMatchObject({ model: "wire-reasoning", reasoning_effort: "none" });
+    expect(requests[1]?.body).toMatchObject({ model: "wire-other", reasoning_effort: "xhigh" });
+    expect(requests[2]?.body).not.toHaveProperty("reasoning_effort");
+  });
+});
+
+test("per-request off overrides a fabricated Provider layer thinking default", async () => {
+  await withOpenAiSseServer(reasoningWireChunks, async (baseUrl, requests) => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const provider = yield* Provider;
+        for (const thinkingLevel of [undefined, "off", undefined] as const) {
+          yield* Stream.runDrain(
+            provider.streamAssistant([{ content: "Run it.", role: "user" }], {
+              attempt: 1,
+              ...(thinkingLevel === undefined
+                ? {}
+                : {
+                    thinkingLevel: yield* Schema.decodeUnknown(ThinkingLevelSchema)(thinkingLevel),
+                  }),
+              turnOrdinal: 1,
+            }),
+          );
+        }
+      }).pipe(
+        Effect.provide(
+          PiAiProviderLive({
+            apiKey: "offline-key",
+            baseUrl,
+            modelId: "wire-reasoning",
+            provider: "offline-openai",
+            thinkingLevel: "low",
+          }),
+        ),
+        Effect.provide(ToolRegistryLive([])),
+      ),
+    );
+    expect(requests.map((request) => request.body)).toMatchObject([
+      { reasoning_effort: "low" },
+      { reasoning_effort: "none" },
+      { reasoning_effort: "low" },
+    ]);
+  });
+});
+
+test.each(["off", "medium"] as const)(
+  "registry non-reasoning model rejects explicit thinking %s before transport",
+  async (thinkingLevel) => {
+    await withOpenAiSseServer(reasoningWireChunks, async (baseUrl, requests) => {
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const provider = yield* Provider;
+          return yield* Stream.runDrain(
+            provider.streamAssistant([{ content: "Run it.", role: "user" }], {
+              attempt: 1,
+              thinkingLevel: yield* Schema.decodeUnknown(ThinkingLevelSchema)(thinkingLevel),
+              turnOrdinal: 1,
+            }),
+          ).pipe(Effect.either);
+        }).pipe(
+          Effect.provide(
+            PiAiProviderLive({
+              apiKey: "offline-key",
+              baseUrl,
+              modelId: "llama-3.1-8b-instant",
+              provider: "groq",
+            }),
+          ),
+          Effect.provide(ToolRegistryLive([])),
+        ),
+      );
+      expect(result).toMatchObject({
+        _tag: "Left",
+        left: {
+          _tag: "ProviderError",
+          message: `Thinking level "${thinkingLevel}" cannot be applied to model groq/llama-3.1-8b-instant: the model does not support reasoning. Omit the thinking level or choose a reasoning-capable model.`,
+          transient: false,
+        },
+      });
+      expect(requests).toHaveLength(0);
+    });
+  },
+);
+
+test("registry non-reasoning model remains usable with thinking unset", async () => {
+  await withOpenAiSseServer(reasoningWireChunks, async (baseUrl, requests) => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const provider = yield* Provider;
+        yield* Stream.runDrain(
+          provider.streamAssistant([{ content: "Run it.", role: "user" }], {
+            attempt: 1,
+            turnOrdinal: 1,
+          }),
+        );
+      }).pipe(
+        Effect.provide(
+          PiAiProviderLive({
+            apiKey: "offline-key",
+            baseUrl,
+            modelId: "llama-3.1-8b-instant",
+            provider: "groq",
+          }),
+        ),
+        Effect.provide(ToolRegistryLive([])),
+      ),
+    );
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.body).not.toHaveProperty("reasoning_effort");
   });
 });
 

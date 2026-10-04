@@ -22,7 +22,7 @@ export type AssistantStopReason = (typeof ASSISTANT_STOP_REASONS)[number];
 
 export const AssistantStopReasonSchema = Schema.Literal(...ASSISTANT_STOP_REASONS);
 
-export const THINKING_LEVELS = ["high", "low", "max", "medium", "minimal", "xhigh"] as const;
+export const THINKING_LEVELS = ["high", "low", "max", "medium", "minimal", "off", "xhigh"] as const;
 
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 

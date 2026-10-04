@@ -12,7 +12,15 @@ export class CliArgsError extends Data.TaggedError("CliArgsError")<{
   readonly reason: "invalid_arguments" | "secret_flag";
 }> {}
 
-export const HCN_EFFORTS = ["low", "medium-low", "medium", "medium-high", "high", "xhigh"] as const;
+export const HCN_EFFORTS = [
+  "off",
+  "low",
+  "medium-low",
+  "medium",
+  "medium-high",
+  "high",
+  "xhigh",
+] as const;
 
 export type HcnEffort = (typeof HCN_EFFORTS)[number];
 
@@ -23,6 +31,7 @@ export const HCN_EFFORT_TO_THINKING_LEVEL = {
   medium: "medium",
   "medium-high": "high",
   "medium-low": "low",
+  off: "off",
   xhigh: "max",
 } as const satisfies Record<HcnEffort, string>;
 

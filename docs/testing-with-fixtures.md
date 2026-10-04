@@ -4,6 +4,46 @@ Recorded Journal fixtures preserve the durable boundary of a Session. They conta
 header, Entries, and Records that the JSONL Journal wrote during a deterministic Driver script.
 Tests use them to detect schema drift, fold drift, and recovery errors without a live Provider.
 
+## Wire-level built-bin fixture (Node fetch preload)
+
+Built-bin tests for Provider behavior need to assert the request body the
+Kernel sends without contacting a real Provider. The Node `--import`
+preload at
+[`packages/cli/test-fixtures/reasoning-wire-fetch.mjs`](../packages/cli/test-fixtures/reasoning-wire-fetch.mjs)
+replaces transport only. The real CLI, Driver, Turn, pi-ai adapter, request
+serialization, and streamed response parsing still run. The preload swaps
+`globalThis.fetch`, captures the JSON body of POST requests to a known
+offline base URL, and supplies an in-memory SSE response. Other URLs and
+methods are rejected. The preload never forwards a request to the real
+fetch and opens no sockets.
+
+The capture path is supplied by `POPEYE_TEST_WIRE_CAPTURE`. The preload
+also rejects POST `/v1/responses` (the registry `openai-responses` API)
+with a deterministic offline transport sentinel, so a registry non-reasoning
+case that reaches transport fails the acceptance test instead of slipping
+through.
+
+The
+[`packages/cli/src/entry/reasoning-wire.test.ts`](../packages/cli/src/entry/reasoning-wire.test.ts)
+file clears `NODE_OPTIONS` for the child process, isolates cwd and user
+Plugins, and excludes `manage-goal` so the Goal Tool cannot race the Turn.
+Like `bin.test.ts`, the file does not build inside Vitest; run
+`pnpm build` before targeted built-bin tests or `pnpm test` so dist is fresh.
+
+The local live recipe is the same shape, against a real endpoint:
+
+```sh
+POPEYE_LIVE_ENDPOINT=http://127.0.0.1:1234/v1 \
+POPEYE_LIVE_MODEL=qwen/qwen3.6-27b \
+pnpm vitest run --project @dungle-scrubs/popeye src/entry/live.test.ts
+```
+
+Local Turns request reasoning off and exclude `manage-goal`. The RPC abort
+test uses `keepDefaultTools: true` and is the authorized exception to
+manage-goal exclusion, not to reasoning off. A hosted Provider with
+`POPEYE_LIVE_HOSTED_*` env vars runs the keyed test without the reasoning
+or Tool policy.
+
 ## Canonical M14 fixture
 
 [`packages/kernel/test-fixtures/canonical-driver-session.jsonl`](../packages/kernel/test-fixtures/canonical-driver-session.jsonl)
