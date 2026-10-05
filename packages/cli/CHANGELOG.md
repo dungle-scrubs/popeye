@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/dungle-scrubs/popeye/compare/popeye-v0.2.0...popeye-v0.2.1) (2026-10-05)
+
+
+### Changed
+
+* **popeye:** Synchronize popeye versions
+
 ## [0.2.0](https://github.com/dungle-scrubs/popeye/compare/popeye-v0.1.7...popeye-v0.2.0) (2026-10-05)
 
 
