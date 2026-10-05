@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0](https://github.com/dungle-scrubs/popeye/compare/popeye-kernel-v0.1.7...popeye-kernel-v0.2.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **kernel:** the kernel no longer exports TurnOptionsResolver or keepTurnOptions, and TurnOrchestratorService.openTurn loses its resolveOptions parameter (onAdmitted moves from the sixth position to the fifth). Direct openTurn callers now get Branch settings applied (a journaled model beats the request model) at the cost of one more Branch read per Turn, and Goal continuations re-resolve options on each Turn, so a set-model or set-thinking recorded during a Goal chain applies to the next continuation.
+
+### Fixed
+
+* **deps:** upgrade pi-ai to 1.0.2 ([#78](https://github.com/dungle-scrubs/popeye/issues/78)) ([54ee9fa](https://github.com/dungle-scrubs/popeye/commit/54ee9fad4e23fd5eb278f2a1c85da477023f282a))
+* **kernel:** every Turn opener resolves a Session's bound Turn options ([#95](https://github.com/dungle-scrubs/popeye/issues/95)) ([80cbd5e](https://github.com/dungle-scrubs/popeye/commit/80cbd5e2f3dcc4e440bacee6907939af2be0b3c2)), closes [#88](https://github.com/dungle-scrubs/popeye/issues/88)
+
 ## [0.1.7](https://github.com/dungle-scrubs/popeye/compare/popeye-kernel-v0.1.6...popeye-kernel-v0.1.7) (2026-10-04)
 
 

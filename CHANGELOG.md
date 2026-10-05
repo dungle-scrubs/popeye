@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0](https://github.com/dungle-scrubs/popeye/compare/popeye-workspace-v0.1.7...popeye-workspace-v0.2.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **kernel:** the kernel no longer exports TurnOptionsResolver or keepTurnOptions, and TurnOrchestratorService.openTurn loses its resolveOptions parameter (onAdmitted moves from the sixth position to the fifth). Direct openTurn callers now get Branch settings applied (a journaled model beats the request model) at the cost of one more Branch read per Turn, and Goal continuations re-resolve options on each Turn, so a set-model or set-thinking recorded during a Goal chain applies to the next continuation.
+
+### Fixed
+
+* **cli:** /reload performs a real Generation swap ([#96](https://github.com/dungle-scrubs/popeye/issues/96)) ([a64954e](https://github.com/dungle-scrubs/popeye/commit/a64954e0e07ea21912abe1f787527be304ada6fa)), closes [#93](https://github.com/dungle-scrubs/popeye/issues/93)
+* **cli:** tool-call gate Hooks see the calling Session's grants id ([#94](https://github.com/dungle-scrubs/popeye/issues/94)) ([ed5ba0c](https://github.com/dungle-scrubs/popeye/commit/ed5ba0c59a184db551df46e1607dc6d3eb8aa166)), closes [#89](https://github.com/dungle-scrubs/popeye/issues/89)
+* **deps:** upgrade pi-ai to 1.0.2 ([#78](https://github.com/dungle-scrubs/popeye/issues/78)) ([54ee9fa](https://github.com/dungle-scrubs/popeye/commit/54ee9fad4e23fd5eb278f2a1c85da477023f282a))
+* **kernel:** every Turn opener resolves a Session's bound Turn options ([#95](https://github.com/dungle-scrubs/popeye/issues/95)) ([80cbd5e](https://github.com/dungle-scrubs/popeye/commit/80cbd5e2f3dcc4e440bacee6907939af2be0b3c2)), closes [#88](https://github.com/dungle-scrubs/popeye/issues/88)
+
+
+### Changed
+
+* **lint:** point biome.json at the installed Biome 2.5.15 schema ([#97](https://github.com/dungle-scrubs/popeye/issues/97)) ([1b3e470](https://github.com/dungle-scrubs/popeye/commit/1b3e47007d55e651d1568955de089ed63074eed3))
+* **release:** drop the last-release-sha override ([#91](https://github.com/dungle-scrubs/popeye/issues/91)) ([6ffbbd1](https://github.com/dungle-scrubs/popeye/commit/6ffbbd15817f9e82ce8297b46be6c4298b92b067))
+
 ## [0.1.7](https://github.com/dungle-scrubs/popeye/compare/popeye-workspace-v0.1.6...popeye-workspace-v0.1.7) (2026-10-04)
 
 

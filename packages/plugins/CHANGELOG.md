@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/dungle-scrubs/popeye/compare/popeye-plugins-v0.1.7...popeye-plugins-v0.2.0) (2026-10-05)
+
+
+### Fixed
+
+* **cli:** /reload performs a real Generation swap ([#96](https://github.com/dungle-scrubs/popeye/issues/96)) ([a64954e](https://github.com/dungle-scrubs/popeye/commit/a64954e0e07ea21912abe1f787527be304ada6fa)), closes [#93](https://github.com/dungle-scrubs/popeye/issues/93)
+
 ## [0.1.7](https://github.com/dungle-scrubs/popeye/compare/popeye-plugins-v0.1.6...popeye-plugins-v0.1.7) (2026-10-04)
 
 

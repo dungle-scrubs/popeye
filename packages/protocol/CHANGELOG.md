@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/dungle-scrubs/popeye/compare/popeye-protocol-v0.1.7...popeye-protocol-v0.2.0) (2026-10-05)
+
+
+### Changed
+
+* **popeye-protocol:** Synchronize popeye versions
+
 ## [0.1.7](https://github.com/dungle-scrubs/popeye/compare/popeye-protocol-v0.1.6...popeye-protocol-v0.1.7) (2026-10-04)
 
 
