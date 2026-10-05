@@ -61,7 +61,11 @@ bumps every package together, even when only one changed.
 1. release-please opens or updates the `chore: release main` pull
    request on each push to `main`. Never open that pull request by
    hand and never edit its body: release-please reads the body back
-   after merge to create the releases.
+   after merge to create the releases. release-please runs with a
+   GitHub App token (variable `RELEASE_APP_CLIENT_ID`, secret
+   `RELEASE_APP_PRIVATE_KEY`), so the pull request's CI runs without
+   approval; GitHub holds CI on a pull request that `GITHUB_TOKEN`
+   created until someone approves it.
 2. Merging it creates one GitHub release per path. The CLI release,
    tag `popeye-v<version>`, starts the publish job in
    `.github/workflows/release.yml`.

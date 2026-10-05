@@ -26,17 +26,24 @@ jobs:
   release-please:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
+    permissions: {}
     outputs:
       cli_release_created: ${{ steps.release.outputs['packages/cli--release_created'] }}
       cli_tag_name: ${{ steps.release.outputs['packages/cli--tag_name'] }}
     steps:
+      # A GitHub App token, not GITHUB_TOKEN: GitHub holds the pull_request runs of a pull
+      # request that GITHUB_TOKEN created or updated until someone approves them, so the
+      # release pull request's CI would wait. The App has contents, issues, and pull requests
+      # write access and is installed on this repository only.
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
       - uses: googleapis/release-please-action@v5
         id: release
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
 
   publish:
     needs: release-please

@@ -89,6 +89,14 @@ describe("release workflow", () => {
     expect(publishers).toEqual(["release.yml"]);
   });
 
+  test("release-please runs with a GitHub App token, so its pull request's CI runs without approval", () => {
+    expect(release).toContain("uses: actions/create-github-app-token@v3");
+    expect(release).toMatch(/client-id: \$\{\{ vars\.RELEASE_APP_CLIENT_ID \}\}/u);
+    expect(release).toMatch(/private-key: \$\{\{ secrets\.RELEASE_APP_PRIVATE_KEY \}\}/u);
+    expect(release).toMatch(/token: \$\{\{ steps\.app-token\.outputs\.token \}\}/u);
+    expect(release).not.toContain("secrets.GITHUB_TOKEN");
+  });
+
   test("publish is gated on the CLI path release, with manual dispatch as the recovery path", () => {
     expect(release).toContain("steps.release.outputs['packages/cli--release_created']");
     expect(release).toContain("steps.release.outputs['packages/cli--tag_name']");
