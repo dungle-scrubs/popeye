@@ -15,7 +15,9 @@ public.
 - **Run the live e2e:** `POPEYE_LIVE_ENDPOINT=http://127.0.0.1:1234/v1
   POPEYE_LIVE_MODEL=<model-id> pnpm vitest run --project @dungle-scrubs/popeye
   src/entry/live.test.ts` (model ids in `AGENTS.local.md`).
-- **Other live smoke:** `packages/kernel/src/ai/live-smoke.test.ts` gates on the same endpoint
+- **Kernel live smoke:** `POPEYE_LIVE_SMOKE=1
+  POPEYE_SMOKE_BASE_URL=http://127.0.0.1:1234/v1 POPEYE_SMOKE_MODEL=<model-id> pnpm vitest run
+  packages/kernel/src/ai/live-smoke.test.ts`; it skips unless all three variables are set
 
 This keeps traffic on loopback and satisfies the privacy rule — local
 work never routes to a hosted model.
