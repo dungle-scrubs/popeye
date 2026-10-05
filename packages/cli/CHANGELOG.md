@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/dungle-scrubs/popeye/compare/popeye-v0.1.7...popeye-v0.2.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **kernel:** the kernel no longer exports TurnOptionsResolver or keepTurnOptions, and TurnOrchestratorService.openTurn loses its resolveOptions parameter (onAdmitted moves from the sixth position to the fifth). Direct openTurn callers now get Branch settings applied (a journaled model beats the request model) at the cost of one more Branch read per Turn, and Goal continuations re-resolve options on each Turn, so a set-model or set-thinking recorded during a Goal chain applies to the next continuation.
+
+### Fixed
+
+* **cli:** /reload performs a real Generation swap ([#96](https://github.com/dungle-scrubs/popeye/issues/96)) ([a64954e](https://github.com/dungle-scrubs/popeye/commit/a64954e0e07ea21912abe1f787527be304ada6fa)), closes [#93](https://github.com/dungle-scrubs/popeye/issues/93)
+* **cli:** tool-call gate Hooks see the calling Session's grants id ([#94](https://github.com/dungle-scrubs/popeye/issues/94)) ([ed5ba0c](https://github.com/dungle-scrubs/popeye/commit/ed5ba0c59a184db551df46e1607dc6d3eb8aa166)), closes [#89](https://github.com/dungle-scrubs/popeye/issues/89)
+* **kernel:** every Turn opener resolves a Session's bound Turn options ([#95](https://github.com/dungle-scrubs/popeye/issues/95)) ([80cbd5e](https://github.com/dungle-scrubs/popeye/commit/80cbd5e2f3dcc4e440bacee6907939af2be0b3c2)), closes [#88](https://github.com/dungle-scrubs/popeye/issues/88)
+
 ## [0.1.7](https://github.com/dungle-scrubs/popeye/compare/popeye-v0.1.6...popeye-v0.1.7) (2026-10-04)
 
 
