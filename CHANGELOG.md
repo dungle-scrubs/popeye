@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1](https://github.com/dungle-scrubs/popeye/compare/popeye-workspace-v0.2.0...popeye-workspace-v0.2.1) (2026-10-05)
+
+
+### Changed
+
+* **agents:** give the kernel live smoke its full command ([#98](https://github.com/dungle-scrubs/popeye/issues/98)) ([97096b1](https://github.com/dungle-scrubs/popeye/commit/97096b1b24ca868353d9941ce4ff4c0cd7d3fd38))
+
 ## [0.2.0](https://github.com/dungle-scrubs/popeye/compare/popeye-workspace-v0.1.7...popeye-workspace-v0.2.0) (2026-10-05)
 
 
