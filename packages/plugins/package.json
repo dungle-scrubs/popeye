@@ -23,7 +23,7 @@
   },
   "devDependencies": {
     "@dungle-scrubs/popeye-kernel": "workspace:*",
-    "effect": "3.22.2"
+    "effect": "4.0.1"
   },
   "license": "MIT",
   "author": "Kevin Frilot",

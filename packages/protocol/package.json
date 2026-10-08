@@ -24,7 +24,7 @@
     "effect": "^3.22.1"
   },
   "devDependencies": {
-    "effect": "3.22.2"
+    "effect": "4.0.1"
   },
   "license": "MIT",
   "author": "Kevin Frilot",
