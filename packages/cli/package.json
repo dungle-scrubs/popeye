@@ -1,5 +1,6 @@
 {
   "name": "@dungle-scrubs/popeye",
+  "description": "A headless coding agent that carries only the plugins you give it.",
   "version": "0.2.0",
   "type": "module",
   "bin": {

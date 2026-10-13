@@ -62,10 +62,19 @@ source files.
 
 Node resolves a Plugin's imports from the Plugin file's location upward, so
 `@dungle-scrubs/popeye-plugins` and `effect` must be in a `node_modules` directory at or above the
-Plugin file. The registry packages do not install yet (see the README Install section). Until they
-do, keep your Plugin files in a checkout of this repository, below `packages/cli/`, where
-`pnpm install` links both packages, and load them with `--plugin <path>`. Git ignores every
-`.popeye/` directory, so `packages/cli/.popeye/local-plugins/` keeps them out of commits.
+Plugin file. Install both from npm in the Plugin's folder, and set `"type": "module"` in that
+folder's `package.json` so Node loads a `.ts` Plugin as an ES module:
+
+```sh
+npm init -y
+npm pkg set type=module
+npm install @dungle-scrubs/popeye-plugins 'effect@^3.22.1'
+```
+
+In a checkout of this repository, Plugin files below `packages/cli/` resolve both packages through
+`pnpm install` instead. Git ignores every `.popeye/` directory, so
+`packages/cli/.popeye/local-plugins/` keeps them out of commits. Load a Plugin with
+`--plugin <path>`.
 
 ## Minimal local coding Plugin
 

@@ -24,8 +24,8 @@ const section = (text: string, heading: string): string => {
   return (end < 0 ? rest : rest.slice(0, end)).join("\n");
 };
 
-const deferredItems = (readme: string): ReadonlyArray<string> => {
-  const lines = section(readme, "## v1 scope").split("\n");
+const deferredItems = (text: string): ReadonlyArray<string> => {
+  const lines = section(text, "## v1 scope").split("\n");
   const start = lines.indexOf("The following work is deferred:");
   expect(start, "missing deferred-work list").toBeGreaterThanOrEqual(0);
   const items: string[] = [];
@@ -53,6 +53,7 @@ const manifests: ReadonlyArray<PackageManifest> = packageDirectories.map(
 );
 
 const readme = read("README.md");
+const reference = read("docs/reference.md");
 
 describe("README license", () => {
   test("names the MIT License that LICENSE and every package manifest declare", () => {
@@ -70,12 +71,13 @@ describe("README license", () => {
 describe("README package names and release posture", () => {
   test("names every package by its package.json name and never by an old @popeye/ name", () => {
     expect(manifests.length).toBe(5);
-    const architecture = section(readme, "## Architecture at a glance");
+    const architecture = section(reference, "## Architecture at a glance");
     for (const manifest of manifests) {
       expect(manifest.name.startsWith("@dungle-scrubs/popeye"), manifest.name).toBe(true);
       expect(architecture, manifest.name).toContain(`| \`${manifest.name}\` |`);
     }
     expect(readme).not.toContain("@popeye/");
+    expect(reference).not.toContain("@popeye/");
   });
 
   test("the guides and contributor files use the published package names", () => {
@@ -150,10 +152,10 @@ describe("README Journal Layers", () => {
     expect(store).toContain('explicit === "sqlite"');
     expect(store).toContain("journal.sqlite");
 
-    for (const item of deferredItems(readme)) {
+    for (const item of deferredItems(reference)) {
       expect(item).not.toMatch(/sqlite/i);
     }
-    const scope = flat(section(readme, "## v1 scope"));
+    const scope = flat(section(reference, "## v1 scope"));
     expect(scope).toContain("memory, JSONL, and SQLite Journal Layers");
     expect(scope).toContain("`POPEYE_JOURNAL_LAYER=sqlite`");
     expect(scope).toContain("`journal.sqlite`");
@@ -166,7 +168,7 @@ describe("README usage accounting", () => {
     expect(read("packages/cli/src/entry/config.ts")).toContain(
       'isLoopbackHost(endpoint.hostname) ? "local" : "unknown"',
     );
-    const text = flat(readme);
+    const text = flat(reference);
     expect(text).toContain('`providerClass: "local"`');
     expect(text).not.toContain("including loopback relays");
   });
@@ -174,12 +176,12 @@ describe("README usage accounting", () => {
 
 describe("README deferred work", () => {
   test("lists only work that is still deferred", () => {
-    const items = deferredItems(readme).join("\n");
+    const items = deferredItems(reference).join("\n");
     expect(items).not.toMatch(/pagination/i);
     expect(items).not.toContain("Plugin initiation");
     expect(items).toContain("Kernel initiation of select, confirm, and input requests");
 
-    const scope = flat(section(readme, "## v1 scope"));
+    const scope = flat(section(reference, "## v1 scope"));
     expect(scope).not.toContain("Heads remain non-interactive");
     expect(scope).not.toContain("do not mean the deferred Kernel paths exist");
     expect(scope).toContain("`POPEYE_SNAPSHOT_PAGE_BYTES`");
@@ -191,7 +193,7 @@ describe("README deferred work", () => {
     expect(pagination).toContain("export const DEFAULT_PAGE_BYTES = 1_048_576;");
     expect(pagination).toContain("if (window.length === 1) {");
 
-    const scope = flat(section(readme, "## v1 scope"));
+    const scope = flat(section(reference, "## v1 scope"));
     expect(scope).not.toMatch(/bounded to 1 MiB/i);
     expect(scope).toContain("1,048,576 bytes by default");
     expect(scope).toContain("A single Entry larger than the page target arrives whole");
@@ -203,7 +205,7 @@ describe("README deferred work", () => {
     expect(entry).toContain("Effect.provide(PluginInteractionsNullLive)");
     expect(entry).toContain("PluginInteractionsRpcLive.pipe(Layer.provide(RpcInteractionsLive))");
 
-    const scope = flat(section(readme, "## v1 scope"));
+    const scope = flat(section(reference, "## v1 scope"));
     expect(scope).toContain("holds the `interaction` Capability");
     expect(scope).toContain("A request without that Capability resolves to its declared fallback");
     expect(scope).toContain("an `attach` frame without `interactive: false`");
@@ -213,17 +215,17 @@ describe("README deferred work", () => {
 
 describe("README default Tools", () => {
   test("states that the headless host ships no filesystem or shell coding Tools", () => {
-    const tools = flat(section(readme, "### Default Tools"));
+    const tools = flat(section(reference, "### Default Tools"));
     expect(tools).toContain("ships no filesystem or shell coding Tools");
     expect(tools).toContain("`manage-goal`");
-    expect(tools).toContain("(docs/plugin-authoring.md#minimal-local-coding-plugin)");
+    expect(tools).toContain("(plugin-authoring.md#minimal-local-coding-plugin)");
   });
 });
 
 describe("README Delegation", () => {
   // Issue #56: the delegate Tool's registration, child shape, and v1 blast radius are documented.
   test("documents when the delegate Tool registers and what a delegated child is", () => {
-    const agents = flat(section(readme, "### Agent definitions"));
+    const agents = flat(section(reference, "### Agent definitions"));
     expect(agents).not.toContain("Discovery happens when `--agent` is used.");
     expect(agents).toContain("Discovery runs at every headless start.");
     expect(agents).toContain("the `delegate` Tool");
@@ -243,7 +245,7 @@ describe("README Delegation", () => {
 describe("README Agent session Turns", () => {
   // Issue #88: Turns the Kernel opens carry the Agent persona and model; the gap note is gone.
   test("states that every Turn of an Agent session carries its persona and model", () => {
-    const agents = flat(section(readme, "### Agent definitions"));
+    const agents = flat(section(reference, "### Agent definitions"));
     expect(agents).not.toContain("run with the process model and no persona");
     expect(agents).not.toContain("Turns the Kernel opens on its own");
     expect(agents).toContain(

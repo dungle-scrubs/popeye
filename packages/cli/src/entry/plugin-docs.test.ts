@@ -195,11 +195,11 @@ const isAlive = (pid: number): boolean => {
   }
 };
 
-describe("README quickstart", () => {
+describe("reference quickstart", () => {
   test("the repository form of popeye runs the CLI package from packages/cli", () => {
-    const readme = flat(readWorkspaceFile("README.md"));
+    const readme = flat(readWorkspaceFile("docs/reference.md"));
     const form = /replace `popeye` with `([^`]+)`/.exec(readme)?.[1];
-    expect(form, "README names no repository form of popeye").toBeDefined();
+    expect(form, "the reference names no repository form of popeye").toBeDefined();
     expect(readme).toContain("That form runs from `packages/cli`");
     const [command = "", ...prefix] = (form ?? "").split(" ");
     expect(command).toBe("pnpm");
@@ -426,14 +426,14 @@ describe("docs/plugin-authoring.md", () => {
 });
 
 describe("default Tools", () => {
-  test("the default first-party Plugins add no filesystem or shell Tool, as the README states", () => {
+  test("the default first-party Plugins add no filesystem or shell Tool, as the reference states", () => {
     const toolNames = firstPartySuite.defaultPlugins
       .flatMap((plugin) => plugin.contributions)
       .filter((contribution) => contribution.kind === "tool")
       .map((contribution) => contribution.name);
     expect(toolNames).toEqual(["manage-goal"]);
 
-    const readme = flat(readWorkspaceFile("README.md"));
+    const readme = flat(readWorkspaceFile("docs/reference.md"));
     expect(readme).toContain("ships no filesystem or shell coding Tools");
     expect(readme).toContain("the only model-visible Tool is `manage-goal`");
   });
