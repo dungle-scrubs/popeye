@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/dungle-scrubs/popeye/compare/popeye-v0.2.0...popeye-v0.2.1) (2026-10-13)
+
+
+### Changed
+
+* rewrite the README around a plugin-only headless harness ([#109](https://github.com/dungle-scrubs/popeye/issues/109)) ([04a3b83](https://github.com/dungle-scrubs/popeye/commit/04a3b838393e56a03b4e349201bf576eb78530ef))
+
 ## [0.2.0](https://github.com/dungle-scrubs/popeye/compare/popeye-v0.1.7...popeye-v0.2.0) (2026-10-05)
 
 
