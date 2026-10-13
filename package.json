@@ -1,5 +1,6 @@
 {
   "name": "popeye",
+  "description": "A headless coding agent that carries only the plugins you give it.",
   "private": true,
   "type": "module",
   "engines": {
